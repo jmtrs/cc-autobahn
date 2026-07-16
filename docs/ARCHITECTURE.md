@@ -82,11 +82,15 @@ Solo **presentación**. No hace I/O de sistema; recibe datos por IPC/eventos.
   ante desconexión momentánea, D23/D28), selector PRND (D7, sin kickdown,
   D29), footer PACE/AUTO alternable (D28, persistido en `localStorage`).
 
-## Flujo de datos (objetivo)
+## Flujo de datos
 
-1. Al arrancar, backend detecta motor. Si falta → evento `engine-missing` →
-   frontend muestra pantalla "CHECK ENGINE". Y ofrece conectar el sensor statusline
-   (D12) si no está instalado.
+1. Al arrancar, backend detecta motor. Si falta → evento `engine-missing`
+   (o el comando `engine_status`, pull, para el primer render sin depender de
+   ganar la carrera contra el evento) → frontend muestra el overlay
+   "CHECK ENGINE" con botón "Instalar motor" (`engine::install_bun`: instala
+   Bun oficial, actualiza el `PATH` del proceso y relanza el motor sin
+   reiniciar la app, D9/Fase 4). Y ofrece conectar el sensor statusline (D12)
+   si no está instalado.
 2. Timer backend **cada 10–30 s** (D13) → `ccusage blocks --active --json` → evento
    `blocks-update` con burn medio, proyección, coste.
 3. Tail JSONL en paralelo → al completarse un turno, evento `burn-tick` con `tok/s`
@@ -109,8 +113,8 @@ Solo **presentación**. No hace I/O de sistema; recibe datos por IPC/eventos.
 
 ## Estado actual
 
-**Fases 0–4.5 hechas; Fase 5 en curso** (ver checklist real en
-[ROADMAP.md](./ROADMAP.md)). Backend arranca oculto tras el icono de bandeja
+**Fases 0–5 hechas** (ver checklist real en [ROADMAP.md](./ROADMAP.md); solo
+queda Fase 6 opcional). Backend arranca oculto tras el icono de bandeja
 (D24) y corre tres sensores en hilos dedicados: `engine` (ccusage `blocks
 --active --json` cada 15 s → coste/proyección), `burn` (tail del JSONL activo
 → `tok/s` por respuesta → `burn-tick`, D17, con tick parcial por mensaje

@@ -125,9 +125,13 @@ Dos cables auto-instalados. El usuario solo da **un consentimiento**.
 1. **`ccusage` global** en PATH → usar directamente.
 2. **Node** presente → `npx -y ccusage@latest blocks --json` (sin instalar nada).
 3. **Bun** presente → `bunx ccusage blocks --json`.
-4. **Sin runtime** → pantalla ámbar "CHECK ENGINE" con botón único
-   **"INSTALAR MOTOR"** que descarga Bun (binario portable) y ejecuta `bunx ccusage`.
-5. **Futuro**: empaquetar Bun como *sidecar* de Tauri → 0 dependencias del usuario.
+4. **Sin runtime** → overlay ámbar "CHECK ENGINE" con botón único
+   **"Instalar motor"** (`engine::install_bun`, Fase 4/D9): corre el instalador
+   oficial de Bun, actualiza el `PATH` del proceso ya arrancado (el instalador
+   solo lo añade al rc del shell) y relanza el motor sin reiniciar la app.
+   macOS/Linux por ahora.
+5. **(Opc., sin empezar)**: empaquetar Bun como *sidecar* de Tauri → 0 red
+   necesaria, a costa de +30-90 MB por plataforma en el binario final.
 
 **Cable B — sensor statusline** (D12): la app escribe la clave `statusLine` en
 `~/.claude/settings.json` (backup + rollback) apuntando a su propio binario, que

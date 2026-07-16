@@ -80,10 +80,17 @@ el **modelo en uso**, con su inicial:
 - `letter-spacing` amplio, mayúsculas en etiquetas.
 - Barra de segmentos: divs `.seg` / `.seg.on`, gap de 2 px (look segmentado).
 
-## Pendiente de afinado
+## Hecho
 
-- **Fuente dot-matrix real** (hoy: monospace del sistema + glow). Candidatas:
+- Curva de easing de la aguja/velocímetro: muelle amortiguado con overshoot
+  (D18), no una interpolación lineal.
+
+## Ideas aparcadas (fuera del roadmap activo, ver `docs/ROADMAP.md`)
+
+- **Fuente dot-matrix real** (hoy: monospace del sistema + glow). Candidata:
   fuente de 5×7 puntos embebida como woff2 local (sin CDN, offline).
-- Curva de easing de la aguja/velocímetro (respuesta con "muelle").
 - Zona roja al final del velocímetro con burn rate alto.
 - Modo compacto (solo velocímetro + autonomía) para barra estrecha.
+
+Se sacaron del checklist de Fase 5 sin decisión documentada (ADR) de por qué
+— si se retoman, registrar el motivo en `docs/DECISIONS.md` antes de picar código.

@@ -540,3 +540,45 @@ sin pasar por el decodificador PNG (el feature `image-png` ya presente solo
 hacía falta para el `.icon(bytes)` estático original).
 **Verificado**: `cargo test` 26/26, `cargo clippy` sin warnings, confirmado
 visualmente por el usuario en `tauri dev` tras el fix del flag template.
+
+## D31 — Fase 4: CHECK ENGINE + "Instalar motor" ejecuta el instalador oficial de Bun
+
+**Decisión**: implementa el resto de D9 (cascada `ccusage global → npx → bunx →
+botón instalar Bun`). Dos comandos nuevos en `engine.rs`:
+- `engine_status()` — `#[tauri::command]` sin argumentos, **pull**: devuelve
+  `detect().is_some()`. Pinta el overlay "CHECK ENGINE" en el primer render
+  del frontend sin depender de ganar la carrera contra el evento
+  `engine-missing` (el hilo de `engine::start` puede emitirlo antes de que el
+  frontend termine de registrar el listener) — mismo patrón que
+  `sensor_status` (D12).
+- `install_bun(app)` — corre el instalador oficial
+  (`curl -fsSL https://bun.sh/install | bash` vía `std::process::Command`,
+  D16; macOS/Linux, en Windows mensaje de instalación manual, proyecto sigue
+  sin probar ahí, D24). El instalador añade `~/.bun/bin` al `PATH` a través
+  del rc del shell (`.zshrc`/`.bashrc`), que el proceso **ya arrancado** de
+  cc-autobahn no vuelve a leer — se antepone a mano con
+  `std::env::set_var("PATH", ...)` tras instalar, para que `detect()` y los
+  `Command` siguientes encuentren `bunx` sin pedir reiniciar la app (D9:
+  cero fricción de verdad). Si el motor aparece, relanza `engine::start`.
+
+**Motivo**: sin esto, "Fase 4 — cero fricción" quedaba a medias: la pantalla
+`engine-missing` ya se emitía desde Fase 1 pero el frontend solo hacía
+`console.warn`, y no había forma de instalar el motor sin salir de la app.
+
+**Bug encontrado y corregido (revisión adversarial + prueba en vivo del
+usuario)**: el texto por defecto del overlay se escribió como contenido
+estático indentado en `index.html`. `.sensor-body` (clase reusada del overlay
+del sensor, D12) tiene `white-space: pre-wrap` — conserva literal la
+indentación/saltos de línea del código fuente HTML, partiendo el párrafo en
+sitios raros. El overlay del sensor nunca lo sufrió porque su texto se pone
+siempre por JS (`setSensorBody`), nunca en el HTML estático. Corregido: el
+`#engine-body` empieza vacío en `index.html`, el texto por defecto
+(`ENGINE_DEFAULT_BODY`) se fija en `main.js` como ya hacía el overlay del
+sensor. Un segundo hallazgo (doble-click concurrente en "Instalar motor"
+disparando dos instaladores en paralelo) se corrigió con un guard explícito
+(`if (btn.disabled) return`) antes de deshabilitar el botón.
+
+**Verificado**: `cargo test` 26/26, `cargo clippy` sin warnings, revisión
+adversarial (subagente en fresco contra el diff) + prueba en vivo del usuario
+en `tauri dev` (PATH sin `npx`/`bunx`, overlay confirmado, texto corregido,
+botón "Instalar motor" funcional).
