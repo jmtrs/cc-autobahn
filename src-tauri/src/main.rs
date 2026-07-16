@@ -48,6 +48,8 @@ fn main() {
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
+            engine::engine_status,
+            engine::install_bun,
             sensor::sensor_status,
             sensor::sensor_preview_install,
             sensor::install_sensor,

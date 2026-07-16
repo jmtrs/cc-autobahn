@@ -8,6 +8,7 @@
 //! serviciable, sin dependencias más allá de serde. El loop nunca hace panic;
 //! cada fallo se transforma en un evento hacia el frontend.
 
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
@@ -95,6 +96,85 @@ fn on_path(bin: &str) -> bool {
         }
     }
     false
+}
+
+/// `#[tauri::command]` ¿hay motor disponible AHORA MISMO? Para pintar la pantalla
+/// "CHECK ENGINE" en el primer render sin depender de ganar la carrera contra el
+/// evento `engine-missing` (el hilo de `start` puede emitirlo antes de que el
+/// frontend termine de registrar el listener). Mismo patrón que `sensor_status`.
+#[tauri::command]
+pub fn engine_status() -> bool {
+    detect().is_some()
+}
+
+/// `#[tauri::command]` Botón "INSTALAR MOTOR" (D9, Fase 4): lanza el instalador
+/// oficial de Bun, actualiza el `PATH` del proceso ya arrancado (el instalador
+/// solo lo añade al rc del shell, que este proceso no vuelve a leer) y reintenta
+/// el motor. `Err` con mensaje legible para pintar en el overlay.
+#[tauri::command]
+pub fn install_bun(app: AppHandle) -> Result<String, String> {
+    if let Some(engine) = detect() {
+        start(app);
+        return Ok(engine.label().to_string());
+    }
+
+    run_bun_installer()?;
+
+    if let Some(dir) = bun_bin_dir() {
+        prepend_path(&dir);
+    }
+
+    match detect() {
+        Some(engine) => {
+            start(app);
+            Ok(engine.label().to_string())
+        }
+        None => Err("Bun se instaló pero bunx no aparece en PATH".to_string()),
+    }
+}
+
+/// `~/.bun/bin`, destino fijo del instalador oficial.
+#[cfg(unix)]
+fn bun_bin_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(PathBuf::from(home).join(".bun").join("bin"))
+}
+
+#[cfg(not(unix))]
+fn bun_bin_dir() -> Option<PathBuf> {
+    None
+}
+
+/// Antepone `dir` al `PATH` del proceso actual (no del shell) para que `on_path`
+/// y los `Command` siguientes encuentren `bunx` sin reiniciar la app.
+fn prepend_path(dir: &Path) {
+    let existing = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![dir.to_path_buf()];
+    paths.extend(std::env::split_paths(&existing));
+    if let Ok(joined) = std::env::join_paths(paths) {
+        std::env::set_var("PATH", joined);
+    }
+}
+
+/// Instalador oficial de Bun (https://bun.sh/install). macOS/Linux only por
+/// ahora — el resto del proyecto tampoco está probado en Windows (D24).
+#[cfg(unix)]
+fn run_bun_installer() -> Result<(), String> {
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg("curl -fsSL https://bun.sh/install | bash")
+        .status()
+        .map_err(|e| format!("no se pudo lanzar el instalador de Bun: {e}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("el instalador de Bun salió con {status}"))
+    }
+}
+
+#[cfg(not(unix))]
+fn run_bun_installer() -> Result<(), String> {
+    Err("Instalación automática solo en macOS/Linux por ahora. Instala Bun a mano desde https://bun.sh y reinicia cc-autobahn.".to_string())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

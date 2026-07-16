@@ -23,7 +23,8 @@ Orden de implementación, una capa cada vez, verificando antes de avanzar.
 - [x] Manejo de errores: motor ausente → `engine-missing`; fallo puntual →
       `engine-error`; sin bloque activo → `blocks-idle`.
 - [x] Frontend escucha eventos (guardado fuera de Tauri); log en Fase 1.
-- [ ] Aplicar CSP restrictiva y verificar HMR en `tauri dev` (D15) — pendiente.
+- [x] ~~Aplicar CSP restrictiva y verificar HMR en `tauri dev` (D15)~~ — hecho
+      en Fase 3 (checkbox duplicado, ver ahí).
 
 ## Fase 2 — tok/s por respuesta ✅
 
@@ -62,10 +63,18 @@ Orden de implementación, una capa cada vez, verificando antes de avanzar.
 
 ## Fase 4 — Cero fricción (auto-cableado, D9)
 
-- [ ] Pantalla "CHECK ENGINE" cuando falta el motor.
-- [ ] Botón "INSTALAR MOTOR" (descarga Bun / `bunx ccusage`).
-- [ ] **Auto-instalar sensor statusline** (D12): escribir `statusLine` en
-      `~/.claude/settings.json` con consentimiento + backup + rollback.
+- [x] Pantalla "CHECK ENGINE" cuando falta el motor (overlay en `index.html`,
+      pintado via `engine_status()` al arrancar + eventos `engine-missing`/
+      `engine-detected`/`blocks-update` en vivo, sin depender de ganar la
+      carrera contra el primer evento).
+- [x] Botón "INSTALAR MOTOR" (`install_bun` en `engine.rs`: instalador oficial
+      de Bun por `std::process::Command`, `PATH` del proceso actualizado a
+      mano tras instalar, reintenta `detect()` y relanza `engine::start`).
+      macOS/Linux; en Windows mensaje de instalación manual (proyecto sigue
+      sin probar en ese SO, D24). Verificado en vivo (overlay + botón + texto
+      corregido de `white-space: pre-wrap` heredado de `.sensor-body`).
+- [x] ~~Auto-instalar sensor statusline~~ — hecho en Fase 3 (D19-D22), no es
+      Fase 4: `install_sensor`/`uninstall_sensor`/`sensor_status` en `sensor.rs`.
 - [ ] (Opc.) Empaquetar Bun como sidecar de Tauri.
 
 ## Fase 4.5 — Tray/menu-bar (D24, adelantada, hecha)
@@ -90,10 +99,6 @@ Orden de implementación, una capa cada vez, verificando antes de avanzar.
 - [x] Bandeja del sistema (show/hide, salir) — ver Fase 4.5 / D24.
 - [x] Footer PACE/AUTO (ritmo reciente vs. medio del bloque; autonomía
       ajustada al ritmo, solo sensor oficial) — sustituye "ÚLT tok/s" (D28).
-- [ ] Recordar posición/tamaño de la ventana.
-- [ ] Fuente dot-matrix real (woff2 local, offline).
-- [ ] Modo compacto (barra estrecha).
-- [ ] Zona roja del velocímetro con burn alto.
 
 ## Fase 6 — Histórico (opcional)
 

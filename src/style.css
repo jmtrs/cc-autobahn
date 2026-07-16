@@ -323,6 +323,12 @@ body {
   display: none;
 }
 
+/* CHECK ENGINE tiene prioridad visual sobre el overlay del sensor: sin motor,
+   no hay datos que pintar, así que gana si ambos coincidieran (raro). */
+.engine-overlay {
+  z-index: 11;
+}
+
 .sensor-card {
   display: flex;
   flex-direction: column;

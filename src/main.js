@@ -399,6 +399,58 @@ function onSensorState(p) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// CHECK ENGINE overlay (D9, Fase 4): sin ccusage/npx/bunx en PATH no hay datos.
+// Mismo patrón que el overlay del sensor: estado inicial via comando (evita la
+// carrera contra el evento) + botón que dispara la instalación.
+// ─────────────────────────────────────────────────────────────────────────────
+
+let engineInvoke = null;
+
+const ENGINE_DEFAULT_BODY =
+  "No se encontró ccusage (ni global, ni npx, ni bunx) en PATH.\n" +
+  "Sin motor no hay datos de consumo.";
+
+function showEngineOverlay(show) {
+  document.getElementById("engine-overlay").hidden = !show;
+  if (show) setEngineBody(ENGINE_DEFAULT_BODY); // reset tras un error previo
+}
+
+function setEngineBody(text) {
+  document.getElementById("engine-body").textContent = text;
+}
+
+async function onInstallEngineClick() {
+  if (!engineInvoke) return;
+  const btn = document.getElementById("engine-install-btn");
+  if (btn.disabled) return; // doble-click: instalador ya en curso
+  btn.disabled = true;
+  setEngineBody(
+    "Instalando Bun (curl -fsSL https://bun.sh/install | bash)…\nEsto tarda unos segundos."
+  );
+  try {
+    const label = await engineInvoke("install_bun");
+    setEngineBody(`Motor detectado (${label}). Arrancando…`);
+    showEngineOverlay(false); // blocks-update/engine-detected lo confirman en breve
+  } catch (e) {
+    setEngineBody(String(e));
+    btn.disabled = false;
+  }
+}
+
+async function wireEngineOverlay() {
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  engineInvoke = invoke;
+  document.getElementById("engine-install-btn").onclick = onInstallEngineClick;
+  try {
+    const present = await engineInvoke("engine_status");
+    showEngineOverlay(!present);
+  } catch (e) {
+    console.error("[engine] engine_status:", e);
+  }
+}
+
 /**
  * Wire the backend engine events (see src-tauri/src/engine.rs + burn.rs).
  * Guarded: under plain `vite` (no Tauri) there is no IPC, so we skip silently.
@@ -407,12 +459,13 @@ async function wireEngine() {
   if (!("__TAURI_INTERNALS__" in window)) return; // running outside Tauri
   const { listen } = await import("@tauri-apps/api/event");
 
-  listen("engine-detected", (e) => console.info("[engine] motor:", e.payload));
-  listen("engine-missing", () => console.warn("[engine] sin motor (CHECK ENGINE)"));
+  listen("engine-detected", () => showEngineOverlay(false));
+  listen("engine-missing", () => showEngineOverlay(true));
   listen("engine-error", (e) => console.error("[engine] error:", e.payload));
   listen("blocks-idle", () => console.info("[engine] sin bloque activo"));
   listen("blocks-update", (e) => {
     console.info("[engine] blocks-update:", e.payload);
+    showEngineOverlay(false);
     onBlocksUpdate(e.payload);
   });
   listen("burn-tick", (e) => {
@@ -546,6 +599,7 @@ function init() {
   buildSegments(0);
   tickClock();
   setInterval(tickClock, 1000);
+  wireEngineOverlay();
   wireEngine();
   wireSensorUi();
   wirePinButton();

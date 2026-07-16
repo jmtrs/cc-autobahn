@@ -59,6 +59,17 @@
             <span class="autonomie" id="autonomie">3h12</span>
           </div>
 
+          <!-- CHECK ENGINE overlay (shown while no ccusage/npx/bunx on PATH, D9/Fase 4) -->
+          <div class="sensor-overlay engine-overlay" id="engine-overlay" hidden>
+            <div class="sensor-card">
+              <div class="sensor-title">CHECK ENGINE</div>
+              <div class="sensor-body" id="engine-body"></div>
+              <div class="sensor-actions">
+                <button class="sensor-btn" id="engine-install-btn">Instalar motor</button>
+              </div>
+            </div>
+          </div>
+
           <!-- Sensor statusLine connect overlay (shown until the sensor is installed) -->
           <div class="sensor-overlay" id="sensor-overlay" hidden>
             <div class="sensor-card">
