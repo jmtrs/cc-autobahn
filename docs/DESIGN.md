@@ -17,7 +17,7 @@ needles — it's text and glowing segment bars. Reference elements:
 
 | W203 Element                | cc-autobahn Metric                               |
 | ---------------------------- | ------------------------------------------------ |
-| Speedometer (Km/h)          | `tok/s` **per response** (`Δoutput / Δt_turno`, D8) |
+| Speedometer (Km/h)          | `tok/s` **per response** (`Δoutput / Δt_turn`, D8) |
 | Fuel consumption (L/100 Km) | Average cost `$/Mtok`                            |
 | Range / fuel tank ⛽        | 5-hour window remaining (segment bar)            |
 | "AFTER START" trip           | Tokens and time since the last reset             |

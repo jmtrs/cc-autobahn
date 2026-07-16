@@ -33,7 +33,7 @@ Implementation order, one layer at a time, verifying before moving forward.
 - [x] `engine::burn` (`burn.rs`) — tail of the most recent JSONL in
       `~/.claude/projects/**/*.jsonl`, EOF-start; `stat`+`read` of the active file
       every 200 ms, re-scan of which file is active every 5 s (D17).
-- [x] `Δoutput / Δt_turno` calculation on turn close (`end_turn`/`stop_sequence`,
+- [x] `Δoutput / Δt_turn` calculation on turn close (`end_turn`/`stop_sequence`,
       dedup by `message.id`) → `burn-tick` event (D17). `cargo test` 25/25
       against real JSONL (case D8 = 55.0 tok/s verified).
 - [x] **Partial** tick per intermediate message (`tool_use`, etc.) on turns with

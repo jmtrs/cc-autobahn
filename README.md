@@ -10,7 +10,7 @@ cc-autobahn **is not a token meter: it's a visual skin**. Log parsing,
 pricing, and billing windows are delegated to
 [`ccusage`](https://ccusage.com) — run as a child process via its
 `--json` output, with no forking or reimplementation. The only calculation
-done in-house is `tok/s` **per response** (`Δoutput / Δt_turno` over the
+done in-house is `tok/s` **per response** (`Δoutput / Δt_turn` over the
 JSONL tail), which no existing tool offers.
 
 ## Status
@@ -40,7 +40,7 @@ statusline data), `cargo clippy` clean.
 
 | W203 Element               | Claude Code Metric                           |
 | --------------------------- | --------------------------------------------- |
-| Speedometer (Km/h)          | `tok/s` per response (`Δoutput / Δt_turno`)   |
+| Speedometer (Km/h)          | `tok/s` per response (`Δoutput / Δt_turn`)   |
 | Fuel consumption (L/100 Km) | Average cost `$/Mtok`                         |
 | Range / fuel tank ⛽        | Remaining 5h window (segment bar)             |
 | Trip "AFTER START"          | Tokens/time since last reset                  |
