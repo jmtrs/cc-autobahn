@@ -225,9 +225,19 @@ pub fn start(app: AppHandle) {
         loop {
             match poll_once(engine) {
                 Ok(Some(block)) => {
+                    // % restante de la ventana de 5h para el anillo del tray —
+                    // mismo criterio que applyEstimated() en main.js.
+                    let pct_remaining = block
+                        .projection
+                        .as_ref()
+                        .map(|p| p.remaining_minutes as f64 / crate::tray_icon::WINDOW_MIN * 100.0)
+                        .unwrap_or(0.0);
+                    crate::tray_icon::set_progress(&app, pct_remaining);
                     let _ = app.emit("blocks-update", &block);
                 }
                 Ok(None) => {
+                    // Sin bloque activo: ventana sin gastar, anillo lleno.
+                    crate::tray_icon::set_progress(&app, 100.0);
                     let _ = app.emit("blocks-idle", ());
                 }
                 Err(message) => {

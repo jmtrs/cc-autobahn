@@ -10,9 +10,19 @@ tauri-build = { version = "2.6", features = [] }
 
 [dependencies]
 # macos-private-api: requerido por `macOSPrivateApi: true` en tauri.conf.json (D14).
-tauri = { version = "2.11", features = ["macos-private-api"] }
+# tray-icon: icono de menu-bar + panel anclado, sustituye la ventana flotante (D24).
+# image-png: decodifica el PNG del icono de tray en runtime (Image::from_bytes).
+tauri = { version = "2.11", features = ["macos-private-api", "tray-icon", "image-png"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+
+# Esquinas nativas redondeadas del panel (D24 addendum): objc2-* ya son deps
+# transitivas de tauri (macos-private-api) — aquí solo se exponen a nuestro
+# propio código para clipear el NSWindow (CALayer.cornerRadius). Sin plugin de
+# terceros ni el stack legacy cocoa/objc (D16 spirit: mínimo, ya compilado).
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSView", "NSResponder"] }
+objc2-quartz-core = { version = "0.3", features = ["CALayer"] }
 
 [profile.release]
 codegen-units = 1

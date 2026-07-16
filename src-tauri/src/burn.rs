@@ -3,12 +3,15 @@
 //! Sigue (tail) el JSONL de la sesión activa en `~/.claude/projects/**/*.jsonl`
 //! y, al cerrarse cada turno, calcula `Δoutput / Δt_turno` y emite `burn-tick`.
 //! Es el dato que ccusage no ofrece — pero **no es instantáneo**: el JSONL solo
-//! estampa `usage` al terminar el mensaje (D8/DATA-ENGINE §Fuente 2). La aguja
-//! del velocímetro salta al completar y decae con muelle; nunca reacciona
-//! mid-generación.
+//! estampa `usage` al terminar el mensaje (D8/DATA-ENGINE §Fuente 2), nunca
+//! mid-generación (esto NO se puede acelerar poll-eando más rápido: el dato
+//! sencillamente no existe en disco hasta ese instante). En turnos con
+//! herramientas (varios mensajes `assistant` antes del cierre) sí se emite un
+//! tick PARCIAL por cada mensaje intermedio, además del agregado final del
+//! turno completo — feedback más temprano sin esperar al cierre (D27).
 //!
 //! Diseño sobrio (sin plugins, sin async framework, sin crates nuevas): un hilo
-//! dedicado que hace `stat` + `read` del fichero cada segundo. No es el derroche
+//! dedicado que hace `stat` + `read` del fichero cada 200 ms. No es el derroche
 //! que D13 prohíbe (eso era spawn de Node por tick); un `stat` es una syscall
 //! trivial. kqueue/inotify exigiría la crate `notify` — rechazada por el principio
 //! W203 de mínimas piezas. El timestamp Zulu se parsea a mano (sin `chrono`):
@@ -25,8 +28,11 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 /// Cadencia del `stat` del JSONL (D13: evento-dirigido en espíritu; el `stat` no
-/// es spawn de proceso). 1 s de latencia es desprecible para turnos de segundos.
-const TAIL_INTERVAL_MS: u64 = 1000;
+/// es spawn de proceso — abrir+stat+leer-si-cambió un solo fichero cada 200 ms
+/// es coste despreciable). Antes 1000 ms: se notaba como lag perceptible entre
+/// el cierre real del turno y la aguja reaccionando; 200 ms lo baja a
+/// imperceptible sin tocar la cadencia (5 s) de qué fichero es el activo.
+const TAIL_INTERVAL_MS: u64 = 200;
 /// Cada cuánto se rebusca el JSONL más reciente (la sesión activa puede rotar).
 const ACTIVE_RESCAN_SECS: u64 = 5;
 
@@ -141,6 +147,9 @@ struct TurnState {
     /// `ts` del primer mensaje acumulado del turno (respaldo de Δt si no hay
     /// cierre anterior — p. ej. al enganchar un fichero a mitad de sesión).
     turn_start_ms: Option<i64>,
+    /// `ts` del último mensaje visto (cualquiera, no solo cierres) — base del
+    /// Δt de los ticks parciales intermedios. `None` al arrancar cada turno.
+    last_msg_ms: Option<i64>,
     /// `message.id` ya contados (descarta reescrituras, que traen el mismo valor).
     seen: HashSet<String>,
 }
@@ -150,8 +159,11 @@ impl TurnState {
         Self::default()
     }
 
-    /// Ingresa un mensaje assistant. Devuelve `Some(BurnCalc)` si este mensaje
-    /// cierra el turno (`end_turn`/`stop_sequence` con Δt > 0).
+    /// Ingresa un mensaje assistant. Devuelve `Some(BurnCalc)` en dos casos:
+    /// (a) este mensaje cierra el turno (`end_turn`/`stop_sequence`, agregado
+    /// de TODO el turno) o (b) es un mensaje intermedio (`tool_use`, etc.) que
+    /// no es el primero del turno — tick PARCIAL con solo sus propios
+    /// tokens/Δt, para no esperar al cierre en turnos largos con herramientas.
     fn ingest(
         &mut self,
         msg_id: &str,
@@ -172,9 +184,32 @@ impl TurnState {
         }
 
         let closes = matches!(stop_reason, Some("end_turn") | Some("stop_sequence"));
+
         if !closes {
-            return None;
+            // Mensaje intermedio: tick parcial solo si es la primera vez que lo
+            // vemos (una reescritura no es trabajo nuevo) y hay Δt real — el
+            // primer mensaje del turno siempre tiene Δt=0 contra sí mismo, así
+            // que no emite (correcto: aún no hay nada que medir).
+            if !first_time || out_tok == 0 {
+                return None;
+            }
+            let start_ms = self.last_msg_ms.or(self.turn_start_ms).unwrap_or(ts_ms);
+            let dt_ms = ts_ms - start_ms;
+            if dt_ms <= 0 {
+                // ts no monótono: NO sellar last_msg_ms (igual que last_end_ms en
+                // el cierre) para no perder la referencia del próximo Δt.
+                return None;
+            }
+            self.last_msg_ms = Some(ts_ms);
+            return Some(BurnCalc {
+                tok_per_s: out_tok as f64 * 1000.0 / dt_ms as f64,
+                turn_output_tokens: out_tok,
+                turn_duration_ms: dt_ms,
+                message_id: msg_id.to_string(),
+                timestamp: timestamp.to_string(),
+            });
         }
+
         // `turn_output == 0` descarta: turnos vacíos (0 tokens) y reescrituras de
         // un cierre ya emitido (que dejarían el acumulado a 0 tras el reset).
         if self.turn_output == 0 {
@@ -201,6 +236,7 @@ impl TurnState {
         self.last_end_ms = Some(ts_ms);
         self.turn_output = 0;
         self.turn_start_ms = None;
+        self.last_msg_ms = None;
         Some(calc)
     }
 }
@@ -316,10 +352,10 @@ impl Tail {
         let Some(path) = self.active.clone() else {
             return ticks;
         };
-        let Ok(mut f) = OpenOptions::new().read(true).open(&path) else {
-            return ticks;
-        };
-        let Ok(meta) = f.metadata() else {
+        // Stat barato ANTES de abrir (D27 addendum): a 200 ms de cadencia, el
+        // caso común (nada nuevo escrito) no debe pagar un `open()`+`fstat` —
+        // un `metadata()` sin abrir el fichero basta para descartar el ciclo.
+        let Ok(meta) = std::fs::metadata(&path) else {
             return ticks;
         };
         let len = meta.len();
@@ -336,6 +372,9 @@ impl Tail {
             return ticks;
         }
 
+        let Ok(mut f) = OpenOptions::new().read(true).open(&path) else {
+            return ticks;
+        };
         if f.seek(SeekFrom::Start(self.pos)).is_err() {
             return ticks;
         }
@@ -394,7 +433,7 @@ fn most_recent_jsonl(projects_dir: &Path) -> Option<(PathBuf, u64)> {
                 continue;
             }
             if let Ok(mtime) = meta.modified() {
-                if best.as_ref().map_or(true, |(_, t, _)| mtime > *t) {
+                if best.as_ref().is_none_or(|(_, t, _)| mtime > *t) {
                     best = Some((path, mtime, meta.len()));
                 }
             }
@@ -423,7 +462,7 @@ pub fn start(app: AppHandle) {
         let mut tick = 0u64;
 
         loop {
-            if tick % scan_every == 0 {
+            if tick.is_multiple_of(scan_every) {
                 tail.rescan(&projects);
             }
             tail.pump(&app);
@@ -497,6 +536,63 @@ mod tests {
         assert_eq!(calc.turn_output_tokens, 500);
         assert_eq!(calc.turn_duration_ms, 25_000);
         assert!((calc.tok_per_s - 20.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn intermediate_tool_use_emits_partial_tick() {
+        // Turno con 2 tool_use antes del cierre: el PRIMERO tiene Δt=0 (inicio
+        // del turno, nada que medir aún) pero el SEGUNDO sí emite un tick
+        // parcial con SOLO sus propios tokens/Δt (no acumulado), sin esperar
+        // al cierre final — feedback temprano en turnos largos con
+        // herramientas (D27).
+        let mut s = TurnState::new();
+        let a1 = assistant("a1", "2026-07-16T08:00:00.000Z", 100, "tool_use");
+        let a2 = assistant("a2", "2026-07-16T08:00:05.000Z", 150, "tool_use");
+        assert!(
+            process_line(&mut s, a1.as_bytes()).is_none(),
+            "primer mensaje del turno, Δt=0 contra sí mismo"
+        );
+        let partial = process_line(&mut s, a2.as_bytes())
+            .expect("segundo mensaje intermedio emite tick parcial");
+        // Δoutput = 150 (SOLO a2, no acumulado con a1), Δt = 5 s → 30 tok/s
+        assert_eq!(partial.turn_output_tokens, 150);
+        assert_eq!(partial.turn_duration_ms, 5_000);
+        assert!((partial.tok_per_s - 30.0).abs() < 1e-6);
+
+        // El cierre final SÍ agrega TODO el turno (100+150+200=450), no solo
+        // lo que quedó desde el último tick parcial.
+        let close = process_line(
+            &mut s,
+            assistant("a3", "2026-07-16T08:00:15.000Z", 200, "end_turn").as_bytes(),
+        )
+        .expect("cierra turno");
+        assert_eq!(close.turn_output_tokens, 450);
+        assert_eq!(close.turn_duration_ms, 15_000); // desde el inicio del turno
+        assert!((close.tok_per_s - 30.0).abs() < 1e-6); // 450 / 15
+    }
+
+    #[test]
+    fn intermediate_dt_non_monotonic_does_not_seal_last_msg() {
+        // Espejo de `dt_non_monotonic_does_not_reset` pero para el tick
+        // PARCIAL: un mensaje intermedio con ts no monótono no debe sellar
+        // `last_msg_ms`, o el siguiente tick parcial calcularía su Δt contra
+        // una referencia incorrecta (bug encontrado en code review, D27).
+        let mut s = TurnState::new();
+        let a1 = assistant("a1", "2026-07-16T08:00:00.000Z", 100, "tool_use");
+        assert!(process_line(&mut s, a1.as_bytes()).is_none(), "Δt=0, inicio del turno");
+
+        // a2 llega con ts ANTERIOR a a1 (reescritura/reloj raro) → Δt<0 → None,
+        // y NO debe sellar last_msg_ms con este ts erróneo.
+        let bad = assistant("a2", "2026-07-16T07:59:00.000Z", 50, "tool_use");
+        assert!(process_line(&mut s, bad.as_bytes()).is_none(), "ts no monótono no emite");
+
+        // a3 llega correctamente 5s después de a1 (NO de a2): si last_msg_ms se
+        // hubiera sellado con el ts de a2, Δt sería absurdamente grande.
+        let a3 = assistant("a3", "2026-07-16T08:00:05.000Z", 150, "tool_use");
+        let partial = process_line(&mut s, a3.as_bytes())
+            .expect("tick parcial usa la referencia correcta (a1, no a2)");
+        assert_eq!(partial.turn_duration_ms, 5_000); // 08:00:05 − 08:00:00, no vs 07:59:00
+        assert!((partial.tok_per_s - 30.0).abs() < 1e-6); // 150 tok / 5 s
     }
 
     #[test]

@@ -1,15 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Base capabilities for the cluster window: drag the frameless window and listen to engine events.",
+  "description": "Base capabilities for the cluster window: listen to engine events. Window show/hide/position is handled entirely in Rust (tray click / blur), never via IPC (D24).",
   "windows": ["cluster"],
-  "permissions": [
-    "core:default",
-    "core:event:default",
-    "core:window:allow-start-dragging",
-    "core:window:allow-set-always-on-top",
-    "core:window:allow-minimize",
-    "core:window:allow-hide",
-    "core:window:allow-show"
-  ]
+  "permissions": ["core:default", "core:event:default"]
 }

@@ -30,20 +30,35 @@ Orden de implementación, una capa cada vez, verificando antes de avanzar.
 - [x] **Validar premisa** (2026-07-16): el JSONL solo reporta `usage` al terminar el
       turno → aguja instantánea imposible; se redefine a **por respuesta** (D8).
 - [x] `engine::burn` (`burn.rs`) — tail del JSONL más reciente en
-      `~/.claude/projects/**/*.jsonl`, EOF-start, re-scan cada 5 s (D17).
+      `~/.claude/projects/**/*.jsonl`, EOF-start; `stat`+`read` del fichero activo
+      cada 200 ms, re-scan de qué fichero es el activo cada 5 s (D17).
 - [x] Cálculo `Δoutput / Δt_turno` al cerrar turno (`end_turn`/`stop_sequence`,
-      dedup por `message.id`) → evento `burn-tick` (D17). `cargo test` 11/11
+      dedup por `message.id`) → evento `burn-tick` (D17). `cargo test` 25/25
       contra JSONL real (caso D8 = 55.0 tok/s verificado).
+- [x] Tick **parcial** por mensaje intermedio (`tool_use`, etc.) en turnos con
+      herramientas, sin esperar al cierre final del turno (D27).
 - [x] Velocímetro en el frontend: spring amortiguado (escalón + overshoot) +
       decaimiento con "muelle" a ralentí; etiqueta honesta, no "instantáneo" (D18).
 
-## Fase 3 — Sensor statusline + cablear display
+## Fase 3 — Sensor statusline + cablear display ✅
 
-- [ ] `engine::sensor` — tail del socket donde el binario statusline vuelca el JSON.
-- [ ] Sustituir placeholders por datos vivos (odómetro, trip, coste).
-- [ ] Barra de segmentos = autonomía **oficial** (`rate_limits.five_hour`, vía sensor).
-- [ ] Selector PRND = `model.id`; kickdown = `effort.level`.
-- [ ] Aguja/valor semanal (`rate_limits.seven_day`).
+- [x] **Pista A — cablear `blocks-update`** (frontend puro): `#odo`, `#session-time`,
+      `#avg`, `#autonomie` (EST), `#segments` (proyección), `.gear` desde `models[]`.
+- [x] `engine::sensor` (`sensor.rs`) — modo dual del binario (`statusline` →
+      early-return, 10 ms; D19), chain del statusLine previo (D21), fichero sensor
+      escrito atómicamente, tail en hilo dedicado cada 2 s → `sensor-update`/
+      `sensor-state`.
+- [x] Sustituir placeholders por datos vivos (odómetro/trip/coste por `blocks`;
+      barra/gear/effort por el sensor).
+- [x] Barra de segmentos = autonomía **oficial** `rate_limits.five_hour`
+      (conmuta sobre la estimada, D23).
+- [x] Selector PRND = `model.id`. Kickdown (`effort.level` como barritas) se
+      implementó y luego se **retiró** por feedback visual — no aportaba (D29).
+- [x] `seven_day` como tinte de borde `.screen` al pasar 80 % (D23, sin DOM nuevo).
+- [x] **Auto-instalación** del sensor: `install_sensor`/`uninstall_sensor`/
+      `sensor_status` (round-trip `Value`, backup+rollback, copia bin estable D20,
+      JSON estricto D22) + UI de consentimiento con preview diff.
+- [x] CSP restrictiva aplicada y verificada (D15).
 
 ## Fase 4 — Cero fricción (auto-cableado, D9)
 
@@ -53,9 +68,28 @@ Orden de implementación, una capa cada vez, verificando antes de avanzar.
       `~/.claude/settings.json` con consentimiento + backup + rollback.
 - [ ] (Opc.) Empaquetar Bun como sidecar de Tauri.
 
+## Fase 4.5 — Tray/menu-bar (D24, adelantada, hecha)
+
+- [x] Icono de menu-bar (`TrayIconBuilder`, feature `tray-icon`, sin plugin nuevo).
+- [x] Icono dinámico: anillo de progreso (% ventana 5h restante) redibujado en
+      runtime desde `engine`/`sensor`, sin deps de dibujo — reemplaza el PNG
+      estático inicial (D30).
+- [x] `ActivationPolicy::Accessory` en macOS — sin Dock ni Cmd+Tab.
+- [x] Click izquierdo muestra/oculta panel anclado bajo el icono (posición desde
+      `TrayIconEvent::rect`, clamp contra bordes de pantalla).
+- [x] Hide-on-blur (`WindowEvent::Focused(false)`) + guard anti-carrera 300 ms
+      (cerrar clicando el icono no lo reabre).
+- [x] Menú contextual (click derecho) con "Salir de cc-autobahn".
+- [x] `data-tauri-drag-region` retirado; capabilities recortadas a
+      `core:default`/`core:event:default`.
+- [ ] (Futuro) Windows/Linux — API es cross-platform salvo `set_activation_policy`
+      (solo macOS), pendiente de probar en esos SO.
+
 ## Fase 5 — Integración y pulido
 
-- [ ] Bandeja del sistema (show/hide, salir).
+- [x] Bandeja del sistema (show/hide, salir) — ver Fase 4.5 / D24.
+- [x] Footer PACE/AUTO (ritmo reciente vs. medio del bloque; autonomía
+      ajustada al ritmo, solo sensor oficial) — sustituye "ÚLT tok/s" (D28).
 - [ ] Recordar posición/tamaño de la ventana.
 - [ ] Fuente dot-matrix real (woff2 local, offline).
 - [ ] Modo compacto (barra estrecha).
