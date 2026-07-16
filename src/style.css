@@ -31,15 +31,15 @@ body {
   display: flex;
   width: 100vw;
   height: 100vh;
-  /* Bisel casi cero (edge-to-edge, feedback D-review): solo el mínimo para
-     que el border-radius nativo (CALayer.cornerRadius en main.rs, D24
-     addendum) no corte contenido de la pantalla. Ya no hay gap ni caja gris
-     separada — .gear vive dentro de .screen (ver abajo). */
+  /* Near-zero bezel (edge-to-edge, D-review feedback): just the minimum so
+     that the native border-radius (CALayer.cornerRadius in main.rs, D24
+     addendum) doesn't clip screen content. There's no longer a gap or a
+     separate gray box — .gear lives inside .screen (see below). */
   padding: 2px;
   background: var(--bezel);
-  /* border-radius clipeado a nivel nativo — el CSS border-radius por sí solo
-     no basta con transparent:true en macOS (bug conocido de Tauri, deja un
-     "pico" cuadrado). Debe coincidir con el radio nativo (12px). */
+  /* border-radius clipped at the native level — CSS border-radius alone
+     isn't enough with transparent:true on macOS (known Tauri bug, leaves a
+     square "peak"). Must match the native radius (12px). */
   border-radius: 12px;
   box-shadow: inset 0 0 0 1px #000, 0 6px 20px rgba(0, 0, 0, 0.6);
   overflow: hidden;
@@ -51,9 +51,9 @@ body {
   background: radial-gradient(120% 140% at 50% 0%, #140d06 0%, var(--bg) 70%);
   border-radius: 10px;
   display: flex;
-  /* .display (readouts) + .gear (selector) comparten este mismo contenedor
-     amber para que el selector deje de verse como caja aparte (feedback
-     D-review) — el fondo, glow y textura de scanline (::after) cubren ambos. */
+  /* .display (readouts) + .gear (selector) share this same amber container
+     so the selector stops looking like a separate box (D-review feedback)
+     — the background, glow, and scanline texture (::after) cover both. */
   flex-direction: row;
   box-shadow: inset 0 0 24px rgba(255, 154, 31, 0.06),
     inset 0 0 0 1px rgba(255, 154, 31, 0.08);
@@ -102,7 +102,7 @@ body {
   opacity: 0.8;
 }
 
-/* Botón PIN: fija el panel abierto (no se oculta al perder foco, D24). */
+/* PIN button: keeps the panel open (doesn't hide on blur, D24). */
 .pin-btn {
   font-family: var(--font);
   font-size: 9px;
@@ -228,7 +228,7 @@ body {
   box-shadow: 0 0 5px rgba(255, 154, 31, 0.7);
 }
 
-/* Tinte de reserva: seven_day > 80% → el display se tiñe de rojo (testigo W203). */
+/* Reserve tint: seven_day > 80% → the display tints red (W203 warning light). */
 .screen.warn {
   box-shadow: inset 0 0 24px rgba(255, 51, 0, 0.22),
     inset 0 0 0 1px rgba(255, 51, 0, 0.4);
@@ -241,9 +241,9 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/* PRND-style model selector — integrado en .screen (mismo fondo/textura que
-   .display, sin caja propia, feedback D-review). Solo un separador fino en
-   vez de gap+fondo distinto. */
+/* PRND-style model selector — integrated into .screen (same background/
+   texture as .display, no box of its own, D-review feedback). Just a thin
+   separator instead of a gap + different background. */
 .gear {
   position: relative;
   display: flex;
@@ -272,9 +272,9 @@ body {
   text-shadow: 0 0 8px rgba(255, 179, 71, 0.9);
 }
 
-/* Pulso de glow en el instante en que una letra se activa (D-review: anima
-   el cambio de marcha en vez de solo cambiar color en seco). Clase
-   transitoria, añadida/quitada por setGear() en main.js. */
+/* Glow pulse the instant a letter activates (D-review: animates the gear
+   change instead of just switching color abruptly). Transient class,
+   added/removed by setGear() in main.js. */
 .gear .g.pulse {
   animation: gearPulse 0.5s ease-out;
 }
@@ -291,16 +291,16 @@ body {
   }
 }
 
-/* Marcador deslizante (testigo PRND real): barra vertical que se mueve hasta
-   la letra activa. Posición vertical seteada por setGear() en main.js
-   (transform translateY en px, medido contra el propio .gear). */
+/* Sliding marker (real PRND indicator): vertical bar that moves to the
+   active letter. Vertical position set by setGear() in main.js
+   (transform translateY in px, measured against .gear itself). */
 .gear-marker {
   position: absolute;
   left: -1px;
   top: 0;
   width: 3px;
   height: 14px;
-  margin-top: -7px; /* centra la barra respecto al punto medio de la letra */
+  margin-top: -7px; /* centers the bar against the letter's vertical midpoint */
   background: var(--amber-glow);
   border-radius: 2px;
   box-shadow: 0 0 6px rgba(255, 154, 31, 0.9), 0 0 12px rgba(255, 154, 31, 0.5);
@@ -323,8 +323,9 @@ body {
   display: none;
 }
 
-/* CHECK ENGINE tiene prioridad visual sobre el overlay del sensor: sin motor,
-   no hay datos que pintar, así que gana si ambos coincidieran (raro). */
+/* CHECK ENGINE has visual priority over the sensor overlay: without the
+   engine there's no data to render, so it wins if both were to coincide
+   (rare). */
 .engine-overlay {
   z-index: 11;
 }

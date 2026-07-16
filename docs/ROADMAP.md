@@ -1,112 +1,112 @@
 # Roadmap
 
-Orden de implementación, una capa cada vez, verificando antes de avanzar.
+Implementation order, one layer at a time, verifying before moving forward.
 
-## Fase 0 — Chasis ✅ (actual)
+## Phase 0 — Chassis ✅ (current)
 
-- [x] Scaffold Tauri v2 (frameless, always-on-top, transparente, arrastrable).
-- [x] `macOSPrivateApi: true` para transparencia real en macOS (D14).
-- [x] Skin ámbar VFD W203 estático (`index.html` + `style.css`).
-- [x] Reloj vivo + barra de segmentos (shell, sin datos de tokens).
-- [x] Permisos v2 (`capabilities/default.json`).
-- [x] Icono ámbar generado (`scripts/make-icon.mjs` → `tauri icon`).
-- [x] Dependencias fijadas a últimas estables.
-- [x] Docs (este directorio).
+- [x] Scaffold Tauri v2 (frameless, always-on-top, transparent, draggable).
+- [x] `macOSPrivateApi: true` for real transparency on macOS (D14).
+- [x] Static amber VFD W203 skin (`index.html` + `style.css`).
+- [x] Live clock + segment bar (shell, no token data).
+- [x] v2 permissions (`capabilities/default.json`).
+- [x] Generated amber icon (`scripts/make-icon.mjs` → `tauri icon`).
+- [x] Dependencies pinned to latest stable versions.
+- [x] Docs (this directory).
 
-## Fase 1 — Motor de datos ✅
+## Phase 1 — Data engine ✅
 
-- [x] Exec con `std::process::Command` desde Rust, sin plugin shell (D16).
-- [x] `engine::detect` — recorre `$PATH`: ccusage global → npx → bunx → ninguno.
-- [x] `engine::poll_once` — `ccusage blocks --active --json`, parseo serde,
-      evento `blocks-update` cada **15 s** (D13). Hilo dedicado, sin panics.
-- [x] Modelos serde contra el JSON real de ccusage v20 (tokens, coste, burn, proy.).
-- [x] Manejo de errores: motor ausente → `engine-missing`; fallo puntual →
-      `engine-error`; sin bloque activo → `blocks-idle`.
-- [x] Frontend escucha eventos (guardado fuera de Tauri); log en Fase 1.
-- [x] ~~Aplicar CSP restrictiva y verificar HMR en `tauri dev` (D15)~~ — hecho
-      en Fase 3 (checkbox duplicado, ver ahí).
+- [x] Exec with `std::process::Command` from Rust, no shell plugin (D16).
+- [x] `engine::detect` — walks `$PATH`: ccusage global → npx → bunx → none.
+- [x] `engine::poll_once` — `ccusage blocks --active --json`, serde parsing,
+      `blocks-update` event every **15 s** (D13). Dedicated thread, no panics.
+- [x] Serde models against real ccusage v20 JSON (tokens, cost, burn, projection).
+- [x] Error handling: missing engine → `engine-missing`; one-off failure →
+      `engine-error`; no active block → `blocks-idle`.
+- [x] Frontend listens to events (saved outside Tauri); logged in Phase 1.
+- [x] ~~Apply restrictive CSP and verify HMR in `tauri dev` (D15)~~ — done
+      in Phase 3 (duplicate checkbox, see there).
 
-## Fase 2 — tok/s por respuesta ✅
+## Phase 2 — tok/s per response ✅
 
-- [x] **Validar premisa** (2026-07-16): el JSONL solo reporta `usage` al terminar el
-      turno → aguja instantánea imposible; se redefine a **por respuesta** (D8).
-- [x] `engine::burn` (`burn.rs`) — tail del JSONL más reciente en
-      `~/.claude/projects/**/*.jsonl`, EOF-start; `stat`+`read` del fichero activo
-      cada 200 ms, re-scan de qué fichero es el activo cada 5 s (D17).
-- [x] Cálculo `Δoutput / Δt_turno` al cerrar turno (`end_turn`/`stop_sequence`,
-      dedup por `message.id`) → evento `burn-tick` (D17). `cargo test` 25/25
-      contra JSONL real (caso D8 = 55.0 tok/s verificado).
-- [x] Tick **parcial** por mensaje intermedio (`tool_use`, etc.) en turnos con
-      herramientas, sin esperar al cierre final del turno (D27).
-- [x] Velocímetro en el frontend: spring amortiguado (escalón + overshoot) +
-      decaimiento con "muelle" a ralentí; etiqueta honesta, no "instantáneo" (D18).
+- [x] **Validate the premise** (2026-07-16): the JSONL only reports `usage` when the
+      turn ends → an instantaneous needle is impossible; redefined to **per response** (D8).
+- [x] `engine::burn` (`burn.rs`) — tail of the most recent JSONL in
+      `~/.claude/projects/**/*.jsonl`, EOF-start; `stat`+`read` of the active file
+      every 200 ms, re-scan of which file is active every 5 s (D17).
+- [x] `Δoutput / Δt_turno` calculation on turn close (`end_turn`/`stop_sequence`,
+      dedup by `message.id`) → `burn-tick` event (D17). `cargo test` 25/25
+      against real JSONL (case D8 = 55.0 tok/s verified).
+- [x] **Partial** tick per intermediate message (`tool_use`, etc.) on turns with
+      tool use, without waiting for the turn's final close (D27).
+- [x] Frontend speedometer: damped spring (step + overshoot) +
+      decay with a "spring" back to idle; honest label, not "instantaneous" (D18).
 
-## Fase 3 — Sensor statusline + cablear display ✅
+## Phase 3 — statusline sensor + wire up display ✅
 
-- [x] **Pista A — cablear `blocks-update`** (frontend puro): `#odo`, `#session-time`,
-      `#avg`, `#autonomie` (EST), `#segments` (proyección), `.gear` desde `models[]`.
-- [x] `engine::sensor` (`sensor.rs`) — modo dual del binario (`statusline` →
-      early-return, 10 ms; D19), chain del statusLine previo (D21), fichero sensor
-      escrito atómicamente, tail en hilo dedicado cada 2 s → `sensor-update`/
+- [x] **Track A — wire up `blocks-update`** (frontend only): `#odo`, `#session-time`,
+      `#avg`, `#autonomie` (EST), `#segments` (projection), `.gear` from `models[]`.
+- [x] `engine::sensor` (`sensor.rs`) — dual binary mode (`statusline` →
+      early-return, 10 ms; D19), chaining the previous statusLine (D21), sensor
+      file written atomically, tail in a dedicated thread every 2 s → `sensor-update`/
       `sensor-state`.
-- [x] Sustituir placeholders por datos vivos (odómetro/trip/coste por `blocks`;
-      barra/gear/effort por el sensor).
-- [x] Barra de segmentos = autonomía **oficial** `rate_limits.five_hour`
-      (conmuta sobre la estimada, D23).
-- [x] Selector PRND = `model.id`. Kickdown (`effort.level` como barritas) se
-      implementó y luego se **retiró** por feedback visual — no aportaba (D29).
-- [x] `seven_day` como tinte de borde `.screen` al pasar 80 % (D23, sin DOM nuevo).
-- [x] **Auto-instalación** del sensor: `install_sensor`/`uninstall_sensor`/
-      `sensor_status` (round-trip `Value`, backup+rollback, copia bin estable D20,
-      JSON estricto D22) + UI de consentimiento con preview diff.
-- [x] CSP restrictiva aplicada y verificada (D15).
+- [x] Replace placeholders with live data (odometer/trip/cost from `blocks`;
+      bar/gear/effort from the sensor).
+- [x] Segment bar = **official** `rate_limits.five_hour` autonomy
+      (switches over the estimated one, D23).
+- [x] PRND selector = `model.id`. Kickdown (`effort.level` as small bars) was
+      implemented and later **removed** due to visual feedback — it added nothing (D29).
+- [x] `seven_day` as `.screen` border tint past 80% (D23, no new DOM).
+- [x] **Auto-installation** of the sensor: `install_sensor`/`uninstall_sensor`/
+      `sensor_status` (round-trip `Value`, backup+rollback, stable binary copy D20,
+      strict JSON D22) + consent UI with diff preview.
+- [x] Restrictive CSP applied and verified (D15).
 
-## Fase 4 — Cero fricción (auto-cableado, D9)
+## Phase 4 — Zero friction (auto-wiring, D9)
 
-- [x] Pantalla "CHECK ENGINE" cuando falta el motor (overlay en `index.html`,
-      pintado via `engine_status()` al arrancar + eventos `engine-missing`/
-      `engine-detected`/`blocks-update` en vivo, sin depender de ganar la
-      carrera contra el primer evento).
-- [x] Botón "INSTALAR MOTOR" (`install_bun` en `engine.rs`: instalador oficial
-      de Bun por `std::process::Command`, `PATH` del proceso actualizado a
-      mano tras instalar, reintenta `detect()` y relanza `engine::start`).
-      macOS/Linux; en Windows mensaje de instalación manual (proyecto sigue
-      sin probar en ese SO, D24). Verificado en vivo (overlay + botón + texto
-      corregido de `white-space: pre-wrap` heredado de `.sensor-body`).
-- [x] ~~Auto-instalar sensor statusline~~ — hecho en Fase 3 (D19-D22), no es
-      Fase 4: `install_sensor`/`uninstall_sensor`/`sensor_status` en `sensor.rs`.
-- [ ] (Opc.) Empaquetar Bun como sidecar de Tauri.
+- [x] "CHECK ENGINE" screen when the engine is missing (overlay in `index.html`,
+      painted via `engine_status()` on startup + live `engine-missing`/
+      `engine-detected`/`blocks-update` events, without depending on winning the
+      race against the first event).
+- [x] "INSTALL ENGINE" button (`install_bun` in `engine.rs`: official Bun
+      installer via `std::process::Command`, process `PATH` manually updated
+      after installing, retries `detect()` and relaunches `engine::start`).
+      macOS/Linux; on Windows a manual-install message (project still
+      untested on that OS, D24). Verified live (overlay + button + text
+      fixed from `white-space: pre-wrap` inherited from `.sensor-body`).
+- [x] ~~Auto-install statusline sensor~~ — done in Phase 3 (D19-D22), not
+      Phase 4: `install_sensor`/`uninstall_sensor`/`sensor_status` in `sensor.rs`.
+- [ ] (Optional) Package Bun as a Tauri sidecar.
 
-## Fase 4.5 — Tray/menu-bar (D24, adelantada, hecha)
+## Phase 4.5 — Tray/menu-bar (D24, brought forward, done)
 
-- [x] Icono de menu-bar (`TrayIconBuilder`, feature `tray-icon`, sin plugin nuevo).
-- [x] Icono dinámico: anillo de progreso (% ventana 5h restante) redibujado en
-      runtime desde `engine`/`sensor`, sin deps de dibujo — reemplaza el PNG
-      estático inicial (D30).
-- [x] `ActivationPolicy::Accessory` en macOS — sin Dock ni Cmd+Tab.
-- [x] Click izquierdo muestra/oculta panel anclado bajo el icono (posición desde
-      `TrayIconEvent::rect`, clamp contra bordes de pantalla).
-- [x] Hide-on-blur (`WindowEvent::Focused(false)`) + guard anti-carrera 300 ms
-      (cerrar clicando el icono no lo reabre).
-- [x] Menú contextual (click derecho) con "Salir de cc-autobahn".
-- [x] `data-tauri-drag-region` retirado; capabilities recortadas a
+- [x] Menu-bar icon (`TrayIconBuilder`, `tray-icon` feature, no new plugin).
+- [x] Dynamic icon: progress ring (% of remaining 5h window) redrawn at
+      runtime from `engine`/`sensor`, no drawing deps — replaces the initial
+      static PNG (D30).
+- [x] `ActivationPolicy::Accessory` on macOS — no Dock or Cmd+Tab.
+- [x] Left click shows/hides the panel anchored under the icon (position from
+      `TrayIconEvent::rect`, clamped against screen edges).
+- [x] Hide-on-blur (`WindowEvent::Focused(false)`) + 300 ms anti-race guard
+      (closing by clicking the icon doesn't reopen it).
+- [x] Context menu (right click) with "Quit cc-autobahn".
+- [x] `data-tauri-drag-region` removed; capabilities trimmed to
       `core:default`/`core:event:default`.
-- [ ] (Futuro) Windows/Linux — API es cross-platform salvo `set_activation_policy`
-      (solo macOS), pendiente de probar en esos SO.
+- [ ] (Future) Windows/Linux — the API is cross-platform except for
+      `set_activation_policy` (macOS only), still to be tested on those OSes.
 
-## Fase 5 — Integración y pulido
+## Phase 5 — Integration and polish
 
-- [x] Bandeja del sistema (show/hide, salir) — ver Fase 4.5 / D24.
-- [x] Footer PACE/AUTO (ritmo reciente vs. medio del bloque; autonomía
-      ajustada al ritmo, solo sensor oficial) — sustituye "ÚLT tok/s" (D28).
+- [x] System tray (show/hide, quit) — see Phase 4.5 / D24.
+- [x] PACE/AUTO footer (recent pace vs. block average; autonomy
+      adjusted to pace, official sensor only) — replaces "LAST tok/s" (D28).
 
-## Fase 6 — Histórico (opcional)
+## Phase 6 — History (optional)
 
-- [ ] Vista semanal/mensual (`ccusage daily|monthly --json`).
-- [ ] (Opc.) Integración OTEL → Prometheus/Grafana para tok/s real y dashboards.
+- [ ] Weekly/monthly view (`ccusage daily|monthly --json`).
+- [ ] (Optional) OTEL integration → Prometheus/Grafana for real tok/s and dashboards.
 
-## Verificación por fase
+## Verification per phase
 
-Tras cada fase: `npm run tauri dev`, comprobar que el cluster arranca y los datos
-nuevos aparecen sin romper lo anterior. Primer `cargo build` es lento (compila
-webview); es normal.
+After each phase: `npm run tauri dev`, check that the cluster starts and the
+new data appears without breaking what came before. The first `cargo build` is slow (it compiles
+the webview); that's normal.

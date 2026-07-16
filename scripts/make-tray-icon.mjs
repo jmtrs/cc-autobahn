@@ -1,14 +1,14 @@
-// Genera el icono de la barra de menú de macOS: un PNG "template" monocromo
-// (silueta negra + alpha, sin color) para que macOS lo tiña según modo
-// claro/oscuro (D24). Escritor de PNG sin dependencias, mismo patrón que
-// make-icon.mjs. Ejecutar:
+// Generates the macOS menu-bar icon: a monochrome "template" PNG
+// (black silhouette + alpha, no color) so macOS tints it according to
+// light/dark mode (D24). Zero-dependency PNG writer, same pattern as
+// make-icon.mjs. Run:
 //   node scripts/make-tray-icon.mjs
 import { deflateSync } from "node:zlib";
 import { writeFileSync } from "node:fs";
 
-const S = 44; // icono de 22pt @2x retina para la barra de menú
+const S = 44; // 22pt @2x retina icon for the menu bar
 
-// RGBA crudo, un byte de filtro (0) por fila
+// Raw RGBA, one filter byte (0) per row
 const raw = Buffer.alloc(S * (1 + S * 4));
 const cx = S / 2;
 const cy = S / 2;
@@ -16,8 +16,8 @@ for (let y = 0; y < S; y++) {
   const rowStart = y * (1 + S * 4);
   raw[rowStart] = 0; // filtro: ninguno
   for (let x = 0; x < S; x++) {
-    // misma silueta de disco (fuel-drop) que el icono de la app, en modo
-    // template: negro opaco donde está "encendido", transparente donde no.
+    // same disc silhouette (fuel-drop) as the app icon, in template
+    // mode: opaque black where it's "on", transparent where it's not.
     const d = Math.hypot(x - cx, y - cy);
     const on = d < S * 0.34;
     const i = rowStart + 1 + x * 4;

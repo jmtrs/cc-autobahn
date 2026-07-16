@@ -1,21 +1,21 @@
-//! burn — sensor de `tok/s` **por respuesta** (D8).
+//! burn — `tok/s` **per response** sensor (D8).
 //!
-//! Sigue (tail) el JSONL de la sesión activa en `~/.claude/projects/**/*.jsonl`
-//! y, al cerrarse cada turno, calcula `Δoutput / Δt_turno` y emite `burn-tick`.
-//! Es el dato que ccusage no ofrece — pero **no es instantáneo**: el JSONL solo
-//! estampa `usage` al terminar el mensaje (D8/DATA-ENGINE §Fuente 2), nunca
-//! mid-generación (esto NO se puede acelerar poll-eando más rápido: el dato
-//! sencillamente no existe en disco hasta ese instante). En turnos con
-//! herramientas (varios mensajes `assistant` antes del cierre) sí se emite un
-//! tick PARCIAL por cada mensaje intermedio, además del agregado final del
-//! turno completo — feedback más temprano sin esperar al cierre (D27).
+//! Tails the JSONL of the active session at `~/.claude/projects/**/*.jsonl`
+//! and, when each turn closes, calculates `Δoutput / Δt_turn` and emits `burn-tick`.
+//! It's the data ccusage doesn't offer — but it's **not instant**: the JSONL only
+//! stamps `usage` when the message finishes (D8/DATA-ENGINE §Source 2), never
+//! mid-generation (this CANNOT be sped up by polling faster: the data
+//! simply doesn't exist on disk until that instant). In turns with
+//! tool use (several `assistant` messages before closing), a PARTIAL
+//! tick IS emitted for each intermediate message, in addition to the final
+//! aggregate of the complete turn — earlier feedback without waiting for closure (D27).
 //!
-//! Diseño sobrio (sin plugins, sin async framework, sin crates nuevas): un hilo
-//! dedicado que hace `stat` + `read` del fichero cada 200 ms. No es el derroche
-//! que D13 prohíbe (eso era spawn de Node por tick); un `stat` es una syscall
-//! trivial. kqueue/inotify exigiría la crate `notify` — rechazada por el principio
-//! W203 de mínimas piezas. El timestamp Zulu se parsea a mano (sin `chrono`):
-//! el formato de Claude Code es siempre `YYYY-MM-DDTHH:MM:SS.mmmZ` (UTC, `Z`).
+//! Sober design (no plugins, no async framework, no new crates): a
+//! dedicated thread that does `stat` + `read` on the file every 200 ms. This isn't the waste
+//! that D13 forbids (that was spawning Node per tick); a `stat` is a trivial
+//! syscall. kqueue/inotify would require the `notify` crate — rejected per the
+//! W203 principle of minimal pieces. The Zulu timestamp is parsed by hand (no `chrono`):
+//! Claude Code's format is always `YYYY-MM-DDTHH:MM:SS.mmmZ` (UTC, `Z`).
 
 use std::collections::HashSet;
 use std::fs::OpenOptions;
@@ -27,21 +27,21 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
-/// Cadencia del `stat` del JSONL (D13: evento-dirigido en espíritu; el `stat` no
-/// es spawn de proceso — abrir+stat+leer-si-cambió un solo fichero cada 200 ms
-/// es coste despreciable). Antes 1000 ms: se notaba como lag perceptible entre
-/// el cierre real del turno y la aguja reaccionando; 200 ms lo baja a
-/// imperceptible sin tocar la cadencia (5 s) de qué fichero es el activo.
+/// Cadence of the JSONL `stat` (D13: event-driven in spirit; `stat` isn't
+/// process spawning — opening+stat+reading-if-changed a single file every 200 ms
+/// is negligible cost). Previously 1000 ms: it showed as perceptible lag between
+/// the turn's actual closure and the needle reacting; 200 ms brings it down to
+/// imperceptible without touching the cadence (5 s) for which file is active.
 const TAIL_INTERVAL_MS: u64 = 200;
-/// Cada cuánto se rebusca el JSONL más reciente (la sesión activa puede rotar).
+/// How often the most recent JSONL is re-searched for (the active session can rotate).
 const ACTIVE_RESCAN_SECS: u64 = 5;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Timestamp Zulu → epoch-millis (sin `chrono`)
-// Formato fijo de Claude Code: "2026-07-16T08:34:42.592Z"
+// Zulu timestamp → epoch-millis (no `chrono`)
+// Claude Code's fixed format: "2026-07-16T08:34:42.592Z"
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Convierte un timestamp Zulu a epoch-millis. `None` si el formato no casa.
+/// Converts a Zulu timestamp to epoch-millis. `None` if the format doesn't match.
 fn parse_zulu_millis(s: &str) -> Option<i64> {
     let b = s.as_bytes();
     if b.len() != 24 || b[23] != b'Z' {
@@ -60,8 +60,8 @@ fn parse_zulu_millis(s: &str) -> Option<i64> {
     let mi = n(14)?;
     let ss = n(17)?;
     let msec: i64 = std::str::from_utf8(&b[20..23]).ok()?.parse().ok()?;
-    // Validación defensiva de rangos (Claude Code escribe valores válidos, pero un
-    // campo fuera de rango produce epoch_ms silenciosamente incorrecto → None).
+    // Defensive range validation (Claude Code writes valid values, but an
+    // out-of-range field would silently produce an incorrect epoch_ms → None).
     if !(1..=12).contains(&mo)
         || !(1..=31).contains(&d)
         || !(0..=23).contains(&hh)
@@ -81,8 +81,8 @@ fn parse_zulu_millis(s: &str) -> Option<i64> {
     )
 }
 
-/// Días desde 1970-01-01 para una fecha civil (algoritmo de Howard Hinnant,
-/// probado y libre de ramas). Proleto gregoriano.
+/// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm,
+/// tested and branch-free). Proleptic Gregorian.
 fn days_from_civil(y: i64, m: u64, d: u64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
@@ -93,7 +93,7 @@ fn days_from_civil(y: i64, m: u64, d: u64) -> i64 {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Modelo serde de una línea del JSONL (solo lo que usamos)
+// Serde model of a JSONL line (only what we use)
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -123,10 +123,10 @@ struct Usage {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Cálculo del turno — LÓGICA PURA (sin Tauri) → testeable
+// Turn calculation — PURE LOGIC (no Tauri) → testable
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Cierre de un turno: listo para emitir como `burn-tick`.
+/// Closure of a turn: ready to emit as `burn-tick`.
 #[derive(Debug, Clone, PartialEq)]
 struct BurnCalc {
     tok_per_s: f64,
@@ -136,21 +136,21 @@ struct BurnCalc {
     timestamp: String,
 }
 
-/// Estado del turno en curso. Acumula `output_tokens` (dedup por `message.id`)
-/// desde el cierre anterior hasta el próximo `end_turn`/`stop_sequence`.
+/// State of the current turn. Accumulates `output_tokens` (deduped by `message.id`)
+/// from the previous closure until the next `end_turn`/`stop_sequence`.
 #[derive(Default)]
 struct TurnState {
-    /// `ts` del cierre del turno anterior (None al arrancar).
+    /// `ts` of the previous turn's closure (None at startup).
     last_end_ms: Option<i64>,
-    /// Σ `output_tokens` deduplicados del turno en curso.
+    /// Σ deduplicated `output_tokens` of the current turn.
     turn_output: u64,
-    /// `ts` del primer mensaje acumulado del turno (respaldo de Δt si no hay
-    /// cierre anterior — p. ej. al enganchar un fichero a mitad de sesión).
+    /// `ts` of the first accumulated message of the turn (Δt fallback if there's no
+    /// previous closure — e.g. when hooking into a file mid-session).
     turn_start_ms: Option<i64>,
-    /// `ts` del último mensaje visto (cualquiera, no solo cierres) — base del
-    /// Δt de los ticks parciales intermedios. `None` al arrancar cada turno.
+    /// `ts` of the last message seen (any, not just closures) — the base for the
+    /// Δt of intermediate partial ticks. `None` when each turn starts.
     last_msg_ms: Option<i64>,
-    /// `message.id` ya contados (descarta reescrituras, que traen el mismo valor).
+    /// `message.id`s already counted (discards rewrites, which carry the same value).
     seen: HashSet<String>,
 }
 
@@ -159,11 +159,11 @@ impl TurnState {
         Self::default()
     }
 
-    /// Ingresa un mensaje assistant. Devuelve `Some(BurnCalc)` en dos casos:
-    /// (a) este mensaje cierra el turno (`end_turn`/`stop_sequence`, agregado
-    /// de TODO el turno) o (b) es un mensaje intermedio (`tool_use`, etc.) que
-    /// no es el primero del turno — tick PARCIAL con solo sus propios
-    /// tokens/Δt, para no esperar al cierre en turnos largos con herramientas.
+    /// Ingests an assistant message. Returns `Some(BurnCalc)` in two cases:
+    /// (a) this message closes the turn (`end_turn`/`stop_sequence`, aggregate
+    /// of the WHOLE turn) or (b) it's an intermediate message (`tool_use`, etc.) that
+    /// isn't the first of the turn — PARTIAL tick with only its own
+    /// tokens/Δt, so as not to wait for closure in long turns with tool use.
     fn ingest(
         &mut self,
         msg_id: &str,
@@ -172,9 +172,9 @@ impl TurnState {
         stop_reason: Option<&str>,
         timestamp: &str,
     ) -> Option<BurnCalc> {
-        // Tokens contados SOLO la primera vez que vemos el id (las reescrituras
-        // traen el mismo valor, D8). El cierre se procesa siempre: si un id visto
-        // como `tool_use` reaparece como `end_turn`, el turno debe cerrar igual.
+        // Tokens counted ONLY the first time we see the id (rewrites
+        // carry the same value, D8). Closure is always processed: if an id seen
+        // as `tool_use` reappears as `end_turn`, the turn must close regardless.
         let first_time = self.seen.insert(msg_id.to_string());
         if first_time {
             if self.turn_start_ms.is_none() {
@@ -186,18 +186,18 @@ impl TurnState {
         let closes = matches!(stop_reason, Some("end_turn") | Some("stop_sequence"));
 
         if !closes {
-            // Mensaje intermedio: tick parcial solo si es la primera vez que lo
-            // vemos (una reescritura no es trabajo nuevo) y hay Δt real — el
-            // primer mensaje del turno siempre tiene Δt=0 contra sí mismo, así
-            // que no emite (correcto: aún no hay nada que medir).
+            // Intermediate message: partial tick only if it's the first time we
+            // see it (a rewrite isn't new work) and there's real Δt — the
+            // turn's first message always has Δt=0 against itself, so
+            // it doesn't emit (correct: there's nothing to measure yet).
             if !first_time || out_tok == 0 {
                 return None;
             }
             let start_ms = self.last_msg_ms.or(self.turn_start_ms).unwrap_or(ts_ms);
             let dt_ms = ts_ms - start_ms;
             if dt_ms <= 0 {
-                // ts no monótono: NO sellar last_msg_ms (igual que last_end_ms en
-                // el cierre) para no perder la referencia del próximo Δt.
+                // ts not monotonic: do NOT seal last_msg_ms (same as last_end_ms on
+                // closure) so as not to lose the reference for the next Δt.
                 return None;
             }
             self.last_msg_ms = Some(ts_ms);
@@ -210,18 +210,18 @@ impl TurnState {
             });
         }
 
-        // `turn_output == 0` descarta: turnos vacíos (0 tokens) y reescrituras de
-        // un cierre ya emitido (que dejarían el acumulado a 0 tras el reset).
+        // `turn_output == 0` discards: empty turns (0 tokens) and rewrites of
+        // an already-emitted closure (which would leave the accumulator at 0 after reset).
         if self.turn_output == 0 {
             return None;
         }
 
-        // Δt = cierre actual − cierre anterior (o, en su defecto, inicio del turno).
+        // Δt = current closure − previous closure (or, failing that, turn start).
         let start_ms = self.last_end_ms.or(self.turn_start_ms).unwrap_or(ts_ms);
         let dt_ms = ts_ms - start_ms;
         if dt_ms <= 0 {
-            // ts no monótono (reescritura/reloj raro): no emitir NI sellar el cierre,
-            // para no perder tokens acumulados ni falsear el próximo Δt.
+            // ts not monotonic (rewrite/clock glitch): don't emit OR seal the closure,
+            // so as not to lose accumulated tokens or skew the next Δt.
             return None;
         }
 
@@ -232,7 +232,7 @@ impl TurnState {
             message_id: msg_id.to_string(),
             timestamp: timestamp.to_string(),
         };
-        // Sellar el cierre SOLO al emitir: el turno siguiente empieza desde aquí.
+        // Seal the closure ONLY when emitting: the next turn starts from here.
         self.last_end_ms = Some(ts_ms);
         self.turn_output = 0;
         self.turn_start_ms = None;
@@ -241,7 +241,7 @@ impl TurnState {
     }
 }
 
-/// Procesa una línea cruda del JSONL. `Some(BurnCalc)` si cierra un turno.
+/// Processes a raw JSONL line. `Some(BurnCalc)` if it closes a turn.
 fn process_line(state: &mut TurnState, line: &[u8]) -> Option<BurnCalc> {
     let parsed: JsonlLine = serde_json::from_slice(line).ok()?;
     if parsed.kind != "assistant" {
@@ -260,9 +260,9 @@ fn process_line(state: &mut TurnState, line: &[u8]) -> Option<BurnCalc> {
     )
 }
 
-/// Acumula `chunk` en `leftover` y devuelve las líneas completas (sin `\n`),
-/// dejando en `leftover` el resto sin `\n` para el próximo ciclo. Así un chunk
-/// que corta una línea a medias se reensambla al llegar la siguiente tanda.
+/// Accumulates `chunk` into `leftover` and returns the complete lines (without `\n`),
+/// leaving the remainder without `\n` in `leftover` for the next cycle. This way a chunk
+/// that cuts a line halfway is reassembled when the next batch arrives.
 fn split_lines(leftover: &mut Vec<u8>, chunk: &[u8]) -> Vec<Vec<u8>> {
     leftover.extend_from_slice(chunk);
     let bytes = std::mem::take(leftover);
@@ -279,7 +279,7 @@ fn split_lines(leftover: &mut Vec<u8>, chunk: &[u8]) -> Vec<Vec<u8>> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Payload del evento al frontend
+// Event payload to the frontend
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Clone, Serialize)]
@@ -305,12 +305,12 @@ impl From<BurnCalc> for BurnTick {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tail del JSONL activo
+// Tail of the active JSONL
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Sigue un único fichero: posición de lectura (`pos`) + resto sin `\n`
-/// (`leftover`) para no perder líneas escritas a medias. `pos` avanza por todos
-/// los bytes leídos; el `leftover` se conserva sin releer (ver `drain`).
+/// Tails a single file: read position (`pos`) + remainder without `\n`
+/// (`leftover`) so as not to lose partially-written lines. `pos` advances through all
+/// bytes read; `leftover` is kept without re-reading (see `drain`).
 struct Tail {
     active: Option<PathBuf>,
     pos: u64,
@@ -328,15 +328,15 @@ impl Tail {
         }
     }
 
-    /// Re-selecciona el JSONL más reciente si la sesión activa rotó. Llamar con
-    /// baja frecuencia (no cada tick): es un `readdir` sobre todos los proyectos.
+    /// Re-selects the most recent JSONL if the active session rotated. Call at
+    /// low frequency (not every tick): it's a `readdir` over all projects.
     fn rescan(&mut self, projects_dir: &Path) {
         if let Some((latest, size)) = most_recent_jsonl(projects_dir) {
             if self.active.as_deref() != Some(latest.as_path()) {
                 self.active = Some(latest);
-                // EOF-start con el size de la MISMA metadata del rescan (evita una
-                // segunda `stat` con race). Cero ruido histórico: la aguja arranca
-                // en ralentí y reacciona solo a turnos que cierren desde ahora (D8).
+                // EOF-start with the size from the SAME rescan metadata (avoids a
+                // second racy `stat`). Zero historical noise: the needle starts
+                // at idle and reacts only to turns that close from now on (D8).
                 self.pos = size;
                 self.leftover.clear();
                 self.state = TurnState::new();
@@ -344,25 +344,25 @@ impl Tail {
         }
     }
 
-    /// Drena los bytes nuevos del fichero activo y devuelve los turnos cerrados
-    /// en este ciclo. NO emite — separa I/O de emisión para poder testear sin
-    /// `AppHandle`. Actualiza `pos`/`leftover`/estado.
+    /// Drains the new bytes from the active file and returns the turns closed
+    /// in this cycle. Does NOT emit — separates I/O from emission so it can be tested without
+    /// `AppHandle`. Updates `pos`/`leftover`/state.
     fn drain(&mut self) -> Vec<BurnCalc> {
         let mut ticks = Vec::new();
         let Some(path) = self.active.clone() else {
             return ticks;
         };
-        // Stat barato ANTES de abrir (D27 addendum): a 200 ms de cadencia, el
-        // caso común (nada nuevo escrito) no debe pagar un `open()`+`fstat` —
-        // un `metadata()` sin abrir el fichero basta para descartar el ciclo.
+        // Cheap stat BEFORE opening (D27 addendum): at 200 ms cadence, the
+        // common case (nothing new written) shouldn't pay for an `open()`+`fstat` —
+        // a `metadata()` without opening the file is enough to skip the cycle.
         let Ok(meta) = std::fs::metadata(&path) else {
             return ticks;
         };
         let len = meta.len();
 
-        // Truncado detectado (el fichero encogió). Saltar al final — NUNCA a 0:
-        // releer desde el inicio reemitiría burn-ticks históricos (ruido). Reset
-        // de estado porque el contexto del fichero cambió.
+        // Truncation detected (the file shrank). Jump to the end — NEVER to 0:
+        // re-reading from the start would re-emit historical burn-ticks (noise). State
+        // reset because the file's context changed.
         if len < self.pos {
             self.pos = len;
             self.leftover.clear();
@@ -384,7 +384,7 @@ impl Tail {
             Err(_) => return ticks,
         };
 
-        // Parte por líneas; conserva el resto sin `\n` para el próximo ciclo.
+        // Splits by lines; keeps the remainder without `\n` for the next cycle.
         for line in split_lines(&mut self.leftover, &chunk[..n]) {
             if line.is_empty() {
                 continue;
@@ -393,15 +393,15 @@ impl Tail {
                 ticks.push(calc);
             }
         }
-        // Avanzamos por TODOS los bytes leídos del fichero (no solo hasta el último
-        // `\n`): el resto sin `\n` ya lo tenemos en `leftover`, no hace falta releerlo.
-        // (Antes avanzábamos solo hasta el último `\n` → el leftover se releía y se
-        // duplicaba, corrompiendo líneas parciales — ver test `drain_partial_line`.)
+        // We advance through ALL bytes read from the file (not just up to the last
+        // `\n`): the remainder without `\n` is already in `leftover`, no need to re-read it.
+        // (Previously we only advanced up to the last `\n` → the leftover got re-read and
+        // duplicated, corrupting partial lines — see test `drain_partial_line`.)
         self.pos += n as u64;
         ticks
     }
 
-    /// Drena y emite `burn-tick` por cada turno cerrado.
+    /// Drains and emits `burn-tick` for each closed turn.
     fn pump(&mut self, app: &AppHandle) {
         for calc in self.drain() {
             let _ = app.emit("burn-tick", BurnTick::from(calc));
@@ -409,10 +409,10 @@ impl Tail {
     }
 }
 
-/// Devuelve el `.jsonl` regular con mayor `mtime` bajo `projects_dir/**/*.jsonl`,
-/// junto con su tamaño (de la misma `metadata`, sin una segunda `stat`). Recorre
-/// a mano — sin `walkdir`. Ignora errores sueltos (nunca aborta). Exige fichero
-/// regular (`is_file`) para no tragarse un directorio llamado `*.jsonl`.
+/// Returns the regular `.jsonl` with the highest `mtime` under `projects_dir/**/*.jsonl`,
+/// along with its size (from the same `metadata`, no second `stat`). Walks
+/// by hand — no `walkdir`. Ignores stray errors (never aborts). Requires a
+/// regular file (`is_file`) so as not to swallow a directory named `*.jsonl`.
 fn most_recent_jsonl(projects_dir: &Path) -> Option<(PathBuf, u64)> {
     let dirs = fs_read_dir(projects_dir)?;
     let mut best: Option<(PathBuf, std::time::SystemTime, u64)> = None;
@@ -446,9 +446,9 @@ fn fs_read_dir(p: &Path) -> Option<std::fs::ReadDir> {
     std::fs::read_dir(p).ok()
 }
 
-/// Arranca el sensor en un hilo dedicado. Busca `~/.claude/projects/` y tailea
-/// el JSONL más reciente, emitiendo `burn-tick` por cada turno cerrado. Nunca
-/// hace panic; cualquier fallo se ignora silenciosamente (se reintentará).
+/// Starts the sensor in a dedicated thread. Looks for `~/.claude/projects/` and tails
+/// the most recent JSONL, emitting `burn-tick` for each closed turn. Never
+/// panics; any failure is silently ignored (it will be retried).
 pub fn start(app: AppHandle) {
     thread::spawn(move || {
         let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
@@ -456,8 +456,8 @@ pub fn start(app: AppHandle) {
         };
         let projects = home.join(".claude").join("projects");
         let mut tail = Tail::new();
-        // Re-scan espaciado: el `readdir` sobre todos los proyectos no necesita
-        // ir cada tick. Drain cada 1 s; re-scan cada N ticks.
+        // Spaced-out re-scan: the `readdir` over all projects doesn't need to
+        // run every tick. Drain every 1 s; re-scan every N ticks.
         let scan_every = (ACTIVE_RESCAN_SECS * 1000 / TAIL_INTERVAL_MS).max(1);
         let mut tick = 0u64;
 
@@ -473,7 +473,7 @@ pub fn start(app: AppHandle) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests — contra casos controlados y contra el JSONL real del proyecto.
+// Tests — against controlled cases and against the project's real JSONL.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -489,7 +489,7 @@ mod tests {
 
     #[test]
     fn zulu_real_delta_matches_d8() {
-        // La diferencia entre el cierre anterior y el de 3008 tok (caso D8):
+        // The difference between the previous closure and the 3008-tok one (D8 case):
         // 1 min + 5 s + 278 ms = 65.278 s.
         let prev = parse_zulu_millis("2026-07-16T08:33:37.314Z").unwrap();
         let curr = parse_zulu_millis("2026-07-16T08:34:42.592Z").unwrap();
@@ -499,10 +499,10 @@ mod tests {
     #[test]
     fn zulu_rejects_garbage() {
         assert_eq!(parse_zulu_millis("nope"), None);
-        assert_eq!(parse_zulu_millis("2026-07-16T08:34:42.592"), None); // sin Z
+        assert_eq!(parse_zulu_millis("2026-07-16T08:34:42.592"), None); // missing Z
     }
 
-    /// Línea assistant mínima válida para el parser.
+    /// Minimal valid assistant line for the parser.
     fn assistant(id: &str, ts: &str, out: u64, stop: &str) -> String {
         format!(
             r#"{{"type":"assistant","timestamp":"{ts}","message":{{"id":"{id}","stop_reason":"{stop}","usage":{{"output_tokens":{out}}}}}}}"#
@@ -511,12 +511,12 @@ mod tests {
 
     #[test]
     fn turn_calc_first_turn_uses_turn_start() {
-        // Primer turno: sin cierre anterior, Δt = desde el primer mensaje.
+        // First turn: no previous closure, Δt = from the first message.
         let mut s = TurnState::new();
         let a = assistant("m1", "2026-07-16T08:00:00.000Z", 200, "tool_use");
         let b = assistant("m2", "2026-07-16T08:00:10.000Z", 300, "end_turn");
-        assert!(process_line(&mut s, a.as_bytes()).is_none()); // tool_use no cierra
-        let calc = process_line(&mut s, b.as_bytes()).expect("cierra turno");
+        assert!(process_line(&mut s, a.as_bytes()).is_none()); // tool_use doesn't close
+        let calc = process_line(&mut s, b.as_bytes()).expect("closes turn");
         // Δoutput=500, Δt=10 s → 50 tok/s
         assert_eq!(calc.turn_output_tokens, 500);
         assert_eq!(calc.turn_duration_ms, 10_000);
@@ -528,10 +528,10 @@ mod tests {
         let mut s = TurnState::new();
         process_line(&mut s, assistant("m1", "2026-07-16T08:00:00.000Z", 200, "tool_use").as_bytes());
         process_line(&mut s, assistant("m2", "2026-07-16T08:00:10.000Z", 300, "end_turn").as_bytes());
-        // Segundo turno: cierre anterior = 08:00:10.
+        // Second turn: previous closure = 08:00:10.
         process_line(&mut s, assistant("m3", "2026-07-16T08:00:15.000Z", 100, "tool_use").as_bytes());
         let calc = process_line(&mut s, assistant("m4", "2026-07-16T08:00:35.000Z", 400, "end_turn").as_bytes())
-            .expect("cierra segundo turno");
+            .expect("closes second turn");
         // Δoutput=500, Δt=08:00:35 − 08:00:10 = 25 s → 20 tok/s
         assert_eq!(calc.turn_output_tokens, 500);
         assert_eq!(calc.turn_duration_ms, 25_000);
@@ -540,103 +540,103 @@ mod tests {
 
     #[test]
     fn intermediate_tool_use_emits_partial_tick() {
-        // Turno con 2 tool_use antes del cierre: el PRIMERO tiene Δt=0 (inicio
-        // del turno, nada que medir aún) pero el SEGUNDO sí emite un tick
-        // parcial con SOLO sus propios tokens/Δt (no acumulado), sin esperar
-        // al cierre final — feedback temprano en turnos largos con
-        // herramientas (D27).
+        // Turn with 2 tool_use before closure: the FIRST has Δt=0 (turn
+        // start, nothing to measure yet) but the SECOND does emit a
+        // partial tick with ONLY its own tokens/Δt (not accumulated), without waiting
+        // for final closure — earlier feedback in long turns with
+        // tool use (D27).
         let mut s = TurnState::new();
         let a1 = assistant("a1", "2026-07-16T08:00:00.000Z", 100, "tool_use");
         let a2 = assistant("a2", "2026-07-16T08:00:05.000Z", 150, "tool_use");
         assert!(
             process_line(&mut s, a1.as_bytes()).is_none(),
-            "primer mensaje del turno, Δt=0 contra sí mismo"
+            "first message of the turn, Δt=0 against itself"
         );
         let partial = process_line(&mut s, a2.as_bytes())
-            .expect("segundo mensaje intermedio emite tick parcial");
-        // Δoutput = 150 (SOLO a2, no acumulado con a1), Δt = 5 s → 30 tok/s
+            .expect("second intermediate message emits partial tick");
+        // Δoutput = 150 (ONLY a2, not accumulated with a1), Δt = 5 s → 30 tok/s
         assert_eq!(partial.turn_output_tokens, 150);
         assert_eq!(partial.turn_duration_ms, 5_000);
         assert!((partial.tok_per_s - 30.0).abs() < 1e-6);
 
-        // El cierre final SÍ agrega TODO el turno (100+150+200=450), no solo
-        // lo que quedó desde el último tick parcial.
+        // The final closure DOES aggregate the WHOLE turn (100+150+200=450), not just
+        // what remained since the last partial tick.
         let close = process_line(
             &mut s,
             assistant("a3", "2026-07-16T08:00:15.000Z", 200, "end_turn").as_bytes(),
         )
-        .expect("cierra turno");
+        .expect("closes turn");
         assert_eq!(close.turn_output_tokens, 450);
-        assert_eq!(close.turn_duration_ms, 15_000); // desde el inicio del turno
+        assert_eq!(close.turn_duration_ms, 15_000); // from the start of the turn
         assert!((close.tok_per_s - 30.0).abs() < 1e-6); // 450 / 15
     }
 
     #[test]
     fn intermediate_dt_non_monotonic_does_not_seal_last_msg() {
-        // Espejo de `dt_non_monotonic_does_not_reset` pero para el tick
-        // PARCIAL: un mensaje intermedio con ts no monótono no debe sellar
-        // `last_msg_ms`, o el siguiente tick parcial calcularía su Δt contra
-        // una referencia incorrecta (bug encontrado en code review, D27).
+        // Mirror of `dt_non_monotonic_does_not_reset` but for the
+        // PARTIAL tick: an intermediate message with non-monotonic ts must not seal
+        // `last_msg_ms`, or the next partial tick would calculate its Δt against
+        // an incorrect reference (bug found in code review, D27).
         let mut s = TurnState::new();
         let a1 = assistant("a1", "2026-07-16T08:00:00.000Z", 100, "tool_use");
-        assert!(process_line(&mut s, a1.as_bytes()).is_none(), "Δt=0, inicio del turno");
+        assert!(process_line(&mut s, a1.as_bytes()).is_none(), "Δt=0, start of the turn");
 
-        // a2 llega con ts ANTERIOR a a1 (reescritura/reloj raro) → Δt<0 → None,
-        // y NO debe sellar last_msg_ms con este ts erróneo.
+        // a2 arrives with ts EARLIER than a1 (rewrite/clock glitch) → Δt<0 → None,
+        // and must NOT seal last_msg_ms with this erroneous ts.
         let bad = assistant("a2", "2026-07-16T07:59:00.000Z", 50, "tool_use");
-        assert!(process_line(&mut s, bad.as_bytes()).is_none(), "ts no monótono no emite");
+        assert!(process_line(&mut s, bad.as_bytes()).is_none(), "non-monotonic ts doesn't emit");
 
-        // a3 llega correctamente 5s después de a1 (NO de a2): si last_msg_ms se
-        // hubiera sellado con el ts de a2, Δt sería absurdamente grande.
+        // a3 arrives correctly 5s after a1 (NOT after a2): if last_msg_ms had
+        // been sealed with a2's ts, Δt would be absurdly large.
         let a3 = assistant("a3", "2026-07-16T08:00:05.000Z", 150, "tool_use");
         let partial = process_line(&mut s, a3.as_bytes())
-            .expect("tick parcial usa la referencia correcta (a1, no a2)");
-        assert_eq!(partial.turn_duration_ms, 5_000); // 08:00:05 − 08:00:00, no vs 07:59:00
+            .expect("partial tick uses the correct reference (a1, not a2)");
+        assert_eq!(partial.turn_duration_ms, 5_000); // 08:00:05 − 08:00:00, not vs 07:59:00
         assert!((partial.tok_per_s - 30.0).abs() < 1e-6); // 150 tok / 5 s
     }
 
     #[test]
     fn dedup_by_message_id() {
-        // Reescritura del mismo message.id → no se cuenta dos veces.
+        // Rewrite of the same message.id → not counted twice.
         let mut s = TurnState::new();
         let first = assistant("m1", "2026-07-16T08:00:00.000Z", 200, "tool_use");
         let rewrite = assistant("m1", "2026-07-16T08:00:01.000Z", 200, "tool_use");
         assert!(process_line(&mut s, first.as_bytes()).is_none());
-        assert!(process_line(&mut s, rewrite.as_bytes()).is_none()); // ignorada
+        assert!(process_line(&mut s, rewrite.as_bytes()).is_none()); // ignored
         let calc = process_line(&mut s, assistant("m2", "2026-07-16T08:00:10.000Z", 300, "end_turn").as_bytes())
             .unwrap();
-        // 200 (una vez) + 300 = 500, no 700.
+        // 200 (once) + 300 = 500, not 700.
         assert_eq!(calc.turn_output_tokens, 500);
     }
 
     #[test]
     fn ignores_non_assistant_and_partial() {
         let mut s = TurnState::new();
-        // user / system / basura → ninguna cierra.
+        // user / system / garbage → none close.
         assert!(process_line(&mut s, br#"{"type":"user","timestamp":"2026-07-16T08:00:00.000Z"}"#).is_none());
-        assert!(process_line(&mut s, b"esto no es json").is_none());
+        assert!(process_line(&mut s, b"this is not json").is_none());
         assert!(process_line(&mut s, b"").is_none());
-        // assistant sin usage → ignorado.
+        // assistant without usage → ignored.
         assert!(process_line(&mut s, br#"{"type":"assistant","timestamp":"2026-07-16T08:00:00.000Z","message":{"id":"x"}}"#).is_none());
     }
 
     #[test]
     fn zulu_rejects_out_of_range() {
-        // hora 24, min 60, etc. → None (no epoch silenciosamente incorrecto).
+        // hour 24, minute 60, etc. → None (no silently incorrect epoch).
         assert_eq!(parse_zulu_millis("2026-07-16T24:00:00.000Z"), None);
         assert_eq!(parse_zulu_millis("2026-07-16T08:60:00.000Z"), None);
         assert_eq!(parse_zulu_millis("2026-07-16T08:00:60.000Z"), None);
-        assert_eq!(parse_zulu_millis("2026-07-16T08:00:00.9999Z"), None); // formato
+        assert_eq!(parse_zulu_millis("2026-07-16T08:00:00.9999Z"), None); // format
     }
 
     #[test]
     fn split_lines_handles_partial_writes() {
         let mut leftover = Vec::new();
-        // chunk 1: "abc\ndef" → "def" queda como leftover (sin \n).
+        // chunk 1: "abc\ndef" → "def" stays as leftover (without \n).
         let l1 = split_lines(&mut leftover, b"abc\ndef");
         assert_eq!(l1, vec![b"abc".to_vec()]);
         assert_eq!(leftover, b"def");
-        // chunk 2: "\nghi" → completa "def" SIN duplicarlo.
+        // chunk 2: "\nghi" → completes "def" WITHOUT duplicating it.
         let l2 = split_lines(&mut leftover, b"\nghi");
         assert_eq!(l2, vec![b"def".to_vec()]);
         assert_eq!(leftover, b"ghi");
@@ -644,47 +644,47 @@ mod tests {
 
     #[test]
     fn dedup_does_not_swallow_closure() {
-        // BUG 2: un id visto como tool_use y reescrito como end_turn NO debe
-        // ignorar el cierre. Los tokens se cuentan la primera vez (100).
+        // BUG 2: an id seen as tool_use and rewritten as end_turn must NOT
+        // ignore the closure. Tokens are counted the first time (100).
         let mut s = TurnState::new();
         process_line(&mut s, assistant("mx", "2026-07-16T08:00:00.000Z", 100, "tool_use").as_bytes());
         let calc = process_line(
             &mut s,
             assistant("mx", "2026-07-16T08:00:10.000Z", 200, "end_turn").as_bytes(),
         )
-        .expect("el cierre no debe tragarse");
-        assert_eq!(calc.turn_output_tokens, 100); // contado una sola vez
+        .expect("the closure must not be swallowed");
+        assert_eq!(calc.turn_output_tokens, 100); // counted only once
     }
 
     #[test]
     fn dt_non_monotonic_does_not_reset() {
-        // RIESGO 6: un cierre con ts no monótono no emite, NO actualiza
-        // last_end_ms (no retrocede) y NO pierde los tokens acumulados.
+        // RISK 6: a closure with non-monotonic ts doesn't emit, does NOT update
+        // last_end_ms (doesn't go backwards), and does NOT lose accumulated tokens.
         let mut s = TurnState::new();
-        // Turno inicial VÁLIDO (con tool_use previo → dt>0) para fijar last_end_ms.
+        // Initial VALID turn (with prior tool_use → dt>0) to fix last_end_ms.
         process_line(&mut s, assistant("a1", "2026-07-16T08:00:00.000Z", 100, "tool_use").as_bytes());
         process_line(&mut s, assistant("a2", "2026-07-16T08:00:10.000Z", 50, "end_turn").as_bytes());
-        // Turno en curso: tool_use acumula 300.
+        // Turn in progress: tool_use accumulates 300.
         process_line(&mut s, assistant("t1", "2026-07-16T08:00:15.000Z", 300, "tool_use").as_bytes());
-        // cierre con ts ANTERIOR al último cierre válido (08:00:10) → dt < 0 → None.
+        // closure with ts EARLIER than the last valid closure (08:00:10) → dt < 0 → None.
         let bad = process_line(
             &mut s,
             assistant("c2", "2026-07-16T07:59:00.000Z", 0, "stop_sequence").as_bytes(),
         );
-        assert!(bad.is_none(), "ts no monótono no emite");
-        // cierre correcto posterior: Δt usa last_end_ms original (08:00:10), no 07:59:00.
+        assert!(bad.is_none(), "non-monotonic ts doesn't emit");
+        // correct later closure: Δt uses the original last_end_ms (08:00:10), not 07:59:00.
         let good = process_line(
             &mut s,
             assistant("c3", "2026-07-16T08:00:30.000Z", 10, "end_turn").as_bytes(),
         )
-        .expect("cierra con tokens conservados");
-        assert_eq!(good.turn_duration_ms, 20_000); // 08:00:30 − 08:00:10, no 90 s
-        assert_eq!(good.turn_output_tokens, 310); // 300 (t1) + 10 (c3); c2 aportó 0
+        .expect("closes with tokens preserved");
+        assert_eq!(good.turn_duration_ms, 20_000); // 08:00:30 − 08:00:10, not 90 s
+        assert_eq!(good.turn_output_tokens, 310); // 300 (t1) + 10 (c3); c2 contributed 0
     }
 
-    /// BUG 1 (regresión del leftover duplicado): una línea escrita a medias en
-    /// un ciclo debe completarse y procesarse UNA sola vez en el siguiente,
-    /// sin corrupción ni replay. Usa un tmpfile real.
+    /// BUG 1 (duplicated leftover regression): a line written halfway in
+    /// one cycle must be completed and processed EXACTLY ONCE in the next,
+    /// with no corruption or replay. Uses a real tmpfile.
     #[test]
     fn drain_partial_line_not_duplicated() {
         use std::io::{Seek, Write};
@@ -696,21 +696,21 @@ mod tests {
         tail.active = Some(path.clone());
         tail.pos = 0;
 
-        // Ciclo 1: tool_use completo + end_turn SIN '\n' final (escritura parcial).
+        // Cycle 1: complete tool_use + end_turn WITHOUT a trailing '\n' (partial write).
         {
             let mut f = std::fs::File::create(&path).unwrap();
             writeln!(f, "{}", assistant("a1", "2026-07-16T08:00:00.000Z", 100, "tool_use")).unwrap();
             write!(f, "{}", assistant("a2", "2026-07-16T08:00:10.000Z", 200, "end_turn")).unwrap();
         }
         let t1 = tail.drain();
-        assert!(t1.is_empty(), "sin '\\n' final → el turno aún no cierra");
-        // La línea parcial (a2, sin '\n') queda retenida en leftover para el ciclo
-        // siguiente; pos ya avanzó al final del fichero.
+        assert!(t1.is_empty(), "without a trailing '\\n' → the turn doesn't close yet");
+        // The partial line (a2, without '\n') stays retained in leftover for the next
+        // cycle; pos has already advanced to the end of the file.
         assert!(tail.leftover.windows(2).any(|w| w == b"a2"),
-            "el leftover retiene la línea parcial: {:?}",
+            "the leftover retains the partial line: {:?}",
             String::from_utf8_lossy(&tail.leftover));
 
-        // Ciclo 2: se añade el '\n' que falta. La línea debe completarse sin duplicar.
+        // Cycle 2: the missing '\n' is added. The line must complete without duplicating.
         {
             use std::fs::OpenOptions;
             let mut f = OpenOptions::new().write(true).open(&path).unwrap();
@@ -718,8 +718,8 @@ mod tests {
             write!(f, "\n").unwrap();
         }
         let t2 = tail.drain();
-        assert_eq!(t2.len(), 1, "cierra exactamente una vez");
-        // Si el leftover se hubiera duplicado, la línea no parsearía → t2 vacío.
+        assert_eq!(t2.len(), 1, "closes exactly once");
+        // If the leftover had been duplicated, the line wouldn't parse → t2 empty.
         assert_eq!(t2[0].turn_output_tokens, 300); // 100 + 200
         assert!((t2[0].tok_per_s - 30.0).abs() < 1e-6); // 300 / 10 s
 
@@ -728,21 +728,21 @@ mod tests {
 
     #[test]
     fn end_to_end_against_real_jsonl() {
-        // Procesa TODOS los `.jsonl` disponibles bajo `~/.claude/projects/`
-        // (reset de TurnState por fichero, igual que el tail real al rotar
-        // sesión) y verifica que el parser cierra turnos reales con tok/s > 0.
-        // No depende de ningún proyecto concreto → portable y sin filtrar rutas.
+        // Processes ALL `.jsonl` files available under `~/.claude/projects/`
+        // (TurnState reset per file, same as the real tail when rotating
+        // sessions) and verifies the parser closes real turns with tok/s > 0.
+        // Doesn't depend on any specific project → portable and without filtering paths.
         let home = std::env::var_os("HOME").map(PathBuf::from);
-        let Some(home) = home else { return }; // skip en máquinas sin HOME
+        let Some(home) = home else { return }; // skip on machines without HOME
         let projects = home.join(".claude/projects");
         let Some(files) = collect_jsonl(&projects) else {
-            return; // sin logs → skip silencioso
+            return; // no logs → silent skip
         };
 
         let mut ticks: Vec<BurnCalc> = Vec::new();
         for path in &files {
             let Ok(data) = std::fs::read_to_string(path) else { continue };
-            let mut s = TurnState::new(); // fresco por sesión, como el tail
+            let mut s = TurnState::new(); // fresh per session, like the tail
             for line in data.lines() {
                 if let Some(c) = process_line(&mut s, line.as_bytes()) {
                     ticks.push(c);
@@ -750,16 +750,16 @@ mod tests {
             }
         }
         if ticks.is_empty() {
-            return; // ninguna sesión con turnos cerrados → skip
+            return; // no session with closed turns → skip
         }
-        // Todo tick emitido tiene tok/s finito y positivo.
+        // Every emitted tick has finite, positive tok/s.
         for c in &ticks {
-            assert!(c.tok_per_s.is_finite() && c.tok_per_s > 0.0, "tok/s inválido");
-            assert!(c.turn_output_tokens > 0, "turno sin output");
+            assert!(c.tok_per_s.is_finite() && c.tok_per_s > 0.0, "invalid tok/s");
+            assert!(c.turn_output_tokens > 0, "turn without output");
         }
     }
 
-    /// Recoge todos los `.jsonl` regulares bajo `projects/*/*.jsonl`, ordenados.
+    /// Collects all regular `.jsonl` files under `projects/*/*.jsonl`, sorted.
     fn collect_jsonl(projects: &Path) -> Option<Vec<PathBuf>> {
         let mut files: Vec<PathBuf> = Vec::new();
         for dir in std::fs::read_dir(projects).ok()?.flatten() {

@@ -1,43 +1,43 @@
-// Icono de bandeja como anillo de progreso (D-review: "el punto blanco no
-// sirve para nada, que sea como el anillo de autonomía").
-// Redibuja el PNG a pixel cada vez que llega un dato nuevo de autonomía
-// (engine::poll o sensor::tail) — mismo criterio "restante" que el gauge de
-// segmentos del panel: 100% = ventana de 5h llena, 0% = agotada. Sin deps de
-// dibujo: mismo patrón a mano que scripts/make-tray-icon.mjs, pero en
-// runtime y con hueco (anillo, no disco) para poder pintar el arco.
+// Tray icon as a progress ring (D-review: "the white dot doesn't serve any
+// purpose, make it like the autonomy ring").
+// Redraws the PNG pixel-by-pixel each time new autonomy data arrives
+// (engine::poll or sensor::tail) — same "remaining" criterion as the panel's
+// segment gauge: 100% = 5h window full, 0% = exhausted. No drawing deps:
+// same hand-rolled pattern as scripts/make-tray-icon.mjs, but at
+// runtime and with a hole (ring, not disc) so the arc can be painted.
 use std::f64::consts::TAU;
 
 use tauri::tray::TrayIcon;
 use tauri::{AppHandle, Manager, Wry};
 
-const S: u32 = 44; // 22pt @2x retina, igual que el icono estático anterior
+const S: u32 = 44; // 22pt @2x retina, same as the previous static icon
 const OUTER_R: f64 = S as f64 * 0.42;
 const INNER_R: f64 = S as f64 * 0.28;
-const TRACK_ALPHA: u8 = 55; // pista tenue, siempre visible (referencia del 100%)
-const ARC_ALPHA: u8 = 255; // arco de progreso, opaco
+const TRACK_ALPHA: u8 = 55; // faint track, always visible (100% reference)
+const ARC_ALPHA: u8 = 255; // progress arc, opaque
 
-/// Ventana de facturación de 5h en minutos — igual que WINDOW_MIN en main.js.
+/// 5h billing window in minutes — same as WINDOW_MIN in main.js.
 pub const WINDOW_MIN: f64 = 300.0;
 
-/// Redibuja el icono de bandeja con el anillo al `pct_remaining` dado
-/// (0–100, se clampa). Si el tray aún no está gestionado (arranque muy
-/// temprano) no hace nada — se reintentará en el siguiente tick.
+/// Redraws the tray icon with the ring at the given `pct_remaining`
+/// (0–100, clamped). If the tray isn't managed yet (very early startup)
+/// this does nothing — it will be retried on the next tick.
 pub fn set_progress(app: &AppHandle, pct_remaining: f64) {
     let Some(tray) = app.try_state::<TrayIcon<Wry>>() else {
         return;
     };
     let pct = pct_remaining.clamp(0.0, 100.0);
     let image = tauri::image::Image::new_owned(render(pct), S, S);
-    // set_icon() por sí solo NO conserva el flag "template" de macOS (el icono
-    // se repinta como imagen normal, negro fijo, sin adaptarse a modo claro/
-    // oscuro — bug hallado en revisión visual). set_icon_with_as_template()
-    // fija ambos atómicamente en cada redibujado.
+    // set_icon() alone does NOT preserve macOS's "template" flag (the icon
+    // gets repainted as a normal image, fixed black, without adapting to
+    // light/dark mode — bug found during visual review). set_icon_with_as_template()
+    // sets both atomically on every redraw.
     let _ = tray.set_icon_with_as_template(Some(image), true);
 }
 
-/// RGBA crudo del anillo: negro opaco en el arco recorrido, negro tenue en
-/// el resto de la pista. En modo template (D24) macOS ignora el RGB y usa
-/// el alpha como máscara — el alpha bajo de la pista se ve como "atenuado".
+/// Raw RGBA of the ring: opaque black on the swept arc, faint black on
+/// the rest of the track. In template mode (D24) macOS ignores RGB and uses
+/// alpha as a mask — the track's low alpha reads as "dimmed".
 fn render(pct: f64) -> Vec<u8> {
     let cx = S as f64 / 2.0;
     let cy = S as f64 / 2.0;
@@ -49,9 +49,9 @@ fn render(pct: f64) -> Vec<u8> {
             let dy = y as f64 + 0.5 - cy;
             let d = (dx * dx + dy * dy).sqrt();
             if !(INNER_R..=OUTER_R).contains(&d) {
-                continue; // fuera del anillo: transparente (buf ya está a 0)
+                continue; // outside the ring: transparent (buf is already 0)
             }
-            // Ángulo desde arriba (12 en punto), horario, en [0, TAU).
+            // Angle from the top (12 o'clock), clockwise, in [0, TAU).
             let mut angle = dx.atan2(-dy);
             if angle < 0.0 {
                 angle += TAU;

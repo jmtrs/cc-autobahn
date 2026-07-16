@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -13,7 +13,7 @@
           <!-- Top band: trip-computer header, like "AFTER START" -->
           <div class="row header">
             <span class="label">AFTER START</span>
-            <button class="pin-btn" id="pin-btn" title="Fijar panel (no cerrar al perder foco)">PIN</button>
+            <button class="pin-btn" id="pin-btn" title="Pin panel (don't close on blur)">PIN</button>
           </div>
 
           <!-- Main readout grid -->
@@ -53,19 +53,19 @@
               <rect class="fuel-window" x="3" y="6.2" width="3" height="2.6" />
               <path class="fuel-hose" d="M7 5.5 C8.5 4.3 10.5 5 10.5 7 C10.5 9 8.7 8.8 8.2 10.3 C7.9 11.2 8.6 11.6 9.3 11.2" />
             </svg>
-            <div class="segments" id="segments" aria-label="autonomia ventana 5h">
+            <div class="segments" id="segments" aria-label="5h window autonomy">
               <!-- segments injected by JS -->
             </div>
             <span class="autonomie" id="autonomie">3h12</span>
           </div>
 
-          <!-- CHECK ENGINE overlay (shown while no ccusage/npx/bunx on PATH, D9/Fase 4) -->
+          <!-- CHECK ENGINE overlay (shown while no ccusage/npx/bunx on PATH, D9/Phase 4) -->
           <div class="sensor-overlay engine-overlay" id="engine-overlay" hidden>
             <div class="sensor-card">
               <div class="sensor-title">CHECK ENGINE</div>
               <div class="sensor-body" id="engine-body"></div>
               <div class="sensor-actions">
-                <button class="sensor-btn" id="engine-install-btn">Instalar motor</button>
+                <button class="sensor-btn" id="engine-install-btn">Install engine</button>
               </div>
             </div>
           </div>
@@ -76,15 +76,15 @@
               <div class="sensor-title">SENSOR STATUSLINE</div>
               <div class="sensor-body" id="sensor-body"></div>
               <div class="sensor-actions">
-                <button class="sensor-btn ghost" id="sensor-cancel" hidden>Cancelar</button>
-                <button class="sensor-btn ghost" id="sensor-disconnect" hidden>Desconectar</button>
-                <button class="sensor-btn" id="sensor-connect">Conectar</button>
+                <button class="sensor-btn ghost" id="sensor-cancel" hidden>Cancel</button>
+                <button class="sensor-btn ghost" id="sensor-disconnect" hidden>Disconnect</button>
+                <button class="sensor-btn" id="sensor-connect">Connect</button>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- PRND-style selector: active model lit, rest dimmed, integrado en la pantalla -->
+        <!-- PRND-style selector: active model lit, rest dimmed, integrated into the screen -->
         <div class="gear" id="gear">
           <span class="gear-marker" id="gear-marker" aria-hidden="true"></span>
           <span class="g active" data-model="opus">O</span>

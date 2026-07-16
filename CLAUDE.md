@@ -2,62 +2,62 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Qué es
+## What it is
 
-cc-autobahn es un **cuadro de instrumentos** (Tauri v2) con estética del display VFD ámbar del Mercedes W203, que muestra el consumo de tokens de Claude Code. Vive como icono en la barra de menú de macOS (D24): click izquierdo muestra/oculta un panel frameless, transparente y always-on-top anclado bajo el icono; sin Dock ni Cmd+Tab. Ya no es una ventana flotante arrastrable (D6, superado).
+cc-autobahn is an **instrument cluster** (Tauri v2) styled after the amber VFD display of the Mercedes W203, showing Claude Code token consumption. It lives as an icon in the macOS menu bar (D24): left click shows/hides a frameless, transparent, always-on-top panel anchored under the icon; no Dock, no Cmd+Tab. It is no longer a draggable floating window (D6, superseded).
 
-**Principio rector: no es un medidor de tokens, es una skin visual.** El parseo de logs, pricing y ventanas de facturación se delegan a [`ccusage`](https://ccusage.com), ejecutado como proceso hijo vía su salida `--json`. No se forkea ni se reimplementa (ver `docs/DECISIONS.md` D1–D3). El único cálculo propio es el `tok/s` **por respuesta** (`Δoutput / Δt_turno` sobre el tail de JSONL), que ccusage no ofrece. **No es instantáneo**: el JSONL solo estampa `usage` al terminar el turno (validado empíricamente, D8) — la aguja salta al completar y decae, no reacciona mid-generación.
+**Guiding principle: it's not a token meter, it's a visual skin.** Log parsing, pricing, and billing windows are delegated to [`ccusage`](https://ccusage.com), run as a child process via its `--json` output. It is not forked or reimplemented (see `docs/DECISIONS.md` D1–D3). The only calculation done in-house is `tok/s` **per response** (`Δoutput / Δt_turn` over the JSONL tail), which ccusage doesn't offer. **It is not instantaneous**: the JSONL only stamps `usage` when the turn ends (empirically validated, D8) — the needle jumps on completion and decays, it does not react mid-generation.
 
-**Estado actual: Fases 0–5 hechas** (checklist real en `docs/ROADMAP.md`, el porqué de cada pieza en `docs/DECISIONS.md` D1–D30). Solo queda Fase 6 (histórico, opcional) y dos ítems opcionales/futuros (sidecar de Bun, Windows/Linux). Los tres sensores (`engine`, `burn`, `sensor`) corren en hilos dedicados y están cableados al display: velocímetro (muelle físico, D18), barra de segmentos (estimada `EST` o dato oficial con prioridad, D23), selector PRND (D7), footer PACE/AUTO (D28), botón PIN (D26). Sin motor detectado, el frontend pinta el overlay "CHECK ENGINE" con un botón que instala Bun solo (`engine::install_bun`, D9) y relanza el motor sin reiniciar la app. El binario dual también es el comando `statusLine` de Claude Code (auto-instalable, D19–D22). El icono de bandeja (D24) es un anillo de progreso redibujado en runtime, no un PNG estático (D30). `cargo test` 26/26, `cargo clippy` limpio.
+**Current state: Phases 0–5 done** (real checklist in `docs/ROADMAP.md`, the rationale for each piece in `docs/DECISIONS.md` D1–D30). Only Phase 6 remains (history, optional) plus two optional/future items (Bun sidecar, Windows/Linux). The three sensors (`engine`, `burn`, `sensor`) run on dedicated threads and are wired into the display: speedometer (physical spring, D18), segment bar (estimated `EST` or official data with priority, D23), PRND selector (D7), PACE/AUTO footer (D28), PIN button (D26). With no engine detected, the frontend paints the "CHECK ENGINE" overlay with a button that installs Bun on its own (`engine::install_bun`, D9) and relaunches the engine without restarting the app. The dual binary is also Claude Code's `statusLine` command (auto-installable, D19–D22). The tray icon (D24) is a progress ring redrawn at runtime, not a static PNG (D30). `cargo test` 26/26, `cargo clippy` clean.
 
-## Comandos
+## Commands
 
 ```bash
 npm install          # Vite + Tauri CLI
-npm run tauri dev    # compila Rust y abre el cluster (dev)
-npm run tauri build  # binario de release
-npm run dev          # solo frontend Vite (puerto 1420, strictPort)
+npm run tauri dev    # builds Rust and opens the cluster (dev)
+npm run tauri build  # release binary
+npm run dev          # frontend only, Vite (port 1420, strictPort)
 ```
 
-Regenerar iconos:
+Regenerate icons:
 
 ```bash
-node scripts/make-icon.mjs                        # icono ámbar zero-dep
-npx @tauri-apps/cli icon scripts/source-icon.png  # deriva todos los tamaños
+node scripts/make-icon.mjs                        # zero-dep amber icon
+npx @tauri-apps/cli icon scripts/source-icon.png  # derives all sizes
 ```
 
-Backend: `cargo test` (26 tests, en `src-tauri/`) + `cargo clippy` limpio. Frontend: sin tests ni linter configurados.
+Backend: `cargo test` (26 tests, in `src-tauri/`) + `cargo clippy` clean. Frontend: no tests or linter configured.
 
-## Arquitectura (dos capas)
+## Architecture (two layers)
 
-- **Backend Rust (`src-tauri/`)** — responsable de **todo el I/O**, nunca bloquea la UI. `engine.rs` (`detect`: ccusage global → npx → bunx; `poll_once`: `ccusage blocks --active --json` a **cadencia lenta 15 s**, D13), `burn.rs` (tail JSONL → `tok/s` por respuesta, D17/D27), `sensor.rs` (binario dual + sensor statusline auto-instalado, ver abajo), `tray_icon.rs` (anillo de progreso del icono de bandeja, D30). `engine::history` (`ccusage daily|monthly`) sigue sin implementar (Fase 6).
-- **Frontend (webview, `index.html` + `src/`)** — solo presentación, sin I/O de sistema; recibe datos por IPC/eventos de Tauri. `src/style.css` = skin ámbar; `src/main.js` = render.
+- **Rust backend (`src-tauri/`)** — responsible for **all I/O**, never blocks the UI. `engine.rs` (`detect`: global ccusage → npx → bunx; `poll_once`: `ccusage blocks --active --json` at **slow cadence 15 s**, D13), `burn.rs` (JSONL tail → `tok/s` per response, D17/D27), `sensor.rs` (dual binary + auto-installed sensor statusline, see below), `tray_icon.rs` (tray icon progress ring, D30). `engine::history` (`ccusage daily|monthly`) is still unimplemented (Phase 6).
+- **Frontend (webview, `index.html` + `src/`)** — presentation only, no system I/O; receives data via Tauri IPC/events. `src/style.css` = amber skin; `src/main.js` = rendering.
 
-**Tres sensores, tres cadencias (D13):** ccusage = poll lento (coste/proyección); tail JSONL = evento por turno (`tok/s`); statusline = push (dato oficial `rate_limits`).
+**Three sensors, three cadences (D13):** ccusage = slow poll (cost/projection); JSONL tail = event per turn (`tok/s`); statusline = push (official `rate_limits` data).
 
-**Sensor statusline (D12) — así llega el dato oficial:** el JSON de statusline es *push* (Claude Code lo pasa por stdin solo a un script configurado); una ventana externa no lo recibe pasiva. cc-autobahn **es** ese script y se auto-instala: escribe `statusLine` en `~/.claude/settings.json` (consentimiento + backup + rollback) apuntando a su binario, que emite la línea normal a stdout **y** vuelca el JSON a un socket que la ventana tailea. Es la única fuente de `rate_limits.five_hour/seven_day` (autonomía **oficial**).
+**Statusline sensor (D12) — how the official data arrives:** the statusline JSON is *push* (Claude Code passes it via stdin only to a configured script); an external window doesn't receive it passively. cc-autobahn **is** that script and self-installs: it writes `statusLine` into `~/.claude/settings.json` (consent + backup + rollback) pointing at its own binary, which emits the normal line to stdout **and** dumps the JSON to a socket that the window tails. It is the only source of `rate_limits.five_hour/seven_day` (**official** range).
 
-Flujo objetivo: backend emite eventos (`blocks-update`, `burn-tick`, `sensor-update`, `engine-missing`) que el frontend escucha y pinta. Detalle en `docs/ARCHITECTURE.md`.
+Target flow: the backend emits events (`blocks-update`, `burn-tick`, `sensor-update`, `engine-missing`) that the frontend listens to and renders. Details in `docs/ARCHITECTURE.md`.
 
-## Mapeo coche → tokens (lenguaje del dominio)
+## Car → tokens mapping (domain language)
 
-| Elemento W203        | Métrica Claude Code                      |
+| W203 Element          | Claude Code Metric                       |
 | -------------------- | ---------------------------------------- |
-| Velocímetro          | `tok/s` por respuesta (cálculo propio)   |
-| Consumo (L/100 Km)   | Coste medio `$/Mtok`                     |
-| Autonomía / depósito | Ventana de 5 h restante (barra segmentos)|
-| Trip "AFTER START"   | Tokens/tiempo desde el último reset      |
-| Odómetro             | Tokens totales acumulados                |
-| Selector PRND        | Modelo activo (O/S/H/F) iluminado        |
+| Speedometer          | `tok/s` per response (in-house calc)     |
+| Consumption (L/100 Km) | Average cost `$/Mtok`                  |
+| Range / fuel tank     | 5 h window remaining (segment bar)      |
+| "AFTER START" trip    | Tokens/time since last reset             |
+| Odometer              | Total accumulated tokens                 |
+| PRND selector         | Active model (O/S/H/F) lit up            |
 
-## Convenciones
+## Conventions
 
-- **Config de ventana en `tauri.conf.json`; permisos en `capabilities/default.json`** (v2). La window tiene `label: "cluster"`, arranca oculta (`visible:false`) — las capabilities se atan a ese label y están recortadas a `core:default`/`core:event:default` (todo el control de tray/ventana ocurre en Rust puro, D24, nunca vía IPC desde JS). `app.macOSPrivateApi: true` es obligatorio para la transparencia en macOS (D14) — no quitarlo.
-- **Tray/menu-bar (D24)**: show/hide/posición/hide-on-blur/menú "Salir" viven en `src-tauri/src/main.rs` (`TrayIconBuilder`, feature `tray-icon` del propio crate `tauri`, sin plugin nuevo). El **icono en sí** es un anillo de progreso redibujado en runtime por `tray_icon.rs` (D30), llamado desde `engine.rs`/`sensor.rs` en cada dato nuevo — no un PNG estático (ese PNG, `icons/tray-icon-template.png`, solo queda como icono inicial antes del primer redibujado). **Usar siempre `TrayIcon::set_icon_with_as_template()`, nunca `set_icon()` a secas** — `set_icon()` no conserva el flag "template" de macOS entre llamadas y el icono se repinta negro fijo sin adaptarse a modo claro/oscuro (bug real, D30). `ActivationPolicy::Accessory` solo en macOS (`#[cfg(target_os = "macos")]`); el resto de la API de tray es cross-platform. Solo macOS probado por ahora.
-- **Exec desde Rust con `std::process::Command`, NO `tauri-plugin-shell`** (D16). El plugin es para exec desde el frontend JS; nuestro I/O es backend confiable. El motor corre en un `std::thread` dedicado (sin async framework). Cero deps nuevas.
-- **`macos-private-api` (feature cargo) va acoplada a `macOSPrivateApi` (conf)**: si tocas una, la otra. El build script de tauri falla si no casan.
-- **CSP ya aplicada (D15)**: la política restrictiva de `security.csp` en `tauri.conf.json` está activa desde que aterrizó el primer comando IPC — verificada contra `sensor_status`/`install_sensor`/`set_pinned` en `tauri dev`. No volver a `null`.
-- **Puerto dev fijo 1420** (`vite.config.js` + `devUrl`); `clearScreen: false` para no perder logs de Rust.
-- **Dependencias fijadas a las últimas estables** por decisión del usuario (D10): no downgradar Vite/Tauri/serde sin motivo.
-- **Precisión honesta** (D11): el coste con suscripción es **estimado**; la ventana `rate_limits` es dato **oficial**. No presentar estimaciones como facturación real.
-- **Documentación y comentarios en español**; los ADR en `docs/DECISIONS.md` registran el porqué de cada decisión — consultarlos antes de cambiar arquitectura, motor de datos o estética.
+- **Window config in `tauri.conf.json`; permissions in `capabilities/default.json`** (v2). The window has `label: "cluster"`, starts hidden (`visible:false`) — the capabilities are tied to that label and are trimmed down to `core:default`/`core:event:default` (all tray/window control happens in pure Rust, D24, never via IPC from JS). `app.macOSPrivateApi: true` is required for transparency on macOS (D14) — do not remove it.
+- **Tray/menu-bar (D24)**: show/hide/position/hide-on-blur/"Quit" menu live in `src-tauri/src/main.rs` (`TrayIconBuilder`, `tray-icon` feature of the `tauri` crate itself, no new plugin). The **icon itself** is a progress ring redrawn at runtime by `tray_icon.rs` (D30), called from `engine.rs`/`sensor.rs` on every new data point — not a static PNG (that PNG, `icons/tray-icon-template.png`, only remains as the initial icon before the first redraw). **Always use `TrayIcon::set_icon_with_as_template()`, never plain `set_icon()`** — `set_icon()` doesn't preserve macOS's "template" flag across calls and the icon gets repainted as fixed black instead of adapting to light/dark mode (real bug, D30). `ActivationPolicy::Accessory` only on macOS (`#[cfg(target_os = "macos")]`); the rest of the tray API is cross-platform. Only macOS tested so far.
+- **Exec from Rust with `std::process::Command`, NOT `tauri-plugin-shell`** (D16). The plugin is for exec from the frontend JS; our I/O is trusted backend code. The engine runs on a dedicated `std::thread` (no async framework). Zero new deps.
+- **`macos-private-api` (cargo feature) is coupled to `macOSPrivateApi` (conf)**: if you touch one, touch the other. Tauri's build script fails if they don't match.
+- **CSP already applied (D15)**: the restrictive `security.csp` policy in `tauri.conf.json` has been active since the first IPC command landed — verified against `sensor_status`/`install_sensor`/`set_pinned` in `tauri dev`. Do not revert to `null`.
+- **Fixed dev port 1420** (`vite.config.js` + `devUrl`); `clearScreen: false` to avoid losing Rust logs.
+- **Dependencies pinned to latest stable** by the user's decision (D10): do not downgrade Vite/Tauri/serde without cause.
+- **Honest precision** (D11): cost under subscription is **estimated**; the `rate_limits` window is **official** data. Do not present estimates as real billing.
+- **Documentation and comments in English**; the ADRs in `docs/DECISIONS.md` record the rationale behind each decision — consult them before changing architecture, the data engine, or the aesthetics.

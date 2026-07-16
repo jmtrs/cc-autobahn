@@ -1,65 +1,65 @@
-# Motor de datos
+# Data engine
 
-cc-autobahn no calcula el uso: lo **lee** de tres fuentes oficiales/estándar.
-Todos los datos brutos existen ya; nosotros los presentamos.
+cc-autobahn does not calculate usage: it **reads** it from three official/standard sources.
+All the raw data already exists; we just present it.
 
-## Fuente 1 — ccusage (motor principal)
+## Source 1 — ccusage (main engine)
 
-[`ccusage`](https://ccusage.com) (ryoppippi) — la herramienta de análisis de uso
-de Claude Code más usada y estable. Lee `~/.claude/projects/**/*.jsonl` y resuelve
-pricing (LiteLLM), deduplicación del bloque de 5 h compartido entre sesiones, y el
-multiplicador de Opus. **No la forkeamos: consumimos su salida `--json`.**
+[`ccusage`](https://ccusage.com) (ryoppippi) — the most widely used and stable
+Claude Code usage analysis tool. It reads `~/.claude/projects/**/*.jsonl` and resolves
+pricing (LiteLLM), deduplication of the 5h block shared across sessions, and the
+Opus multiplier. **We do not fork it: we consume its `--json` output.**
 
-Versión de referencia: **20.0.17**.
+Reference version: **20.0.17**.
 
-### Comandos
+### Commands
 
 ```bash
-ccusage blocks --active --json   # bloque 5h activo: burnRate, projection, start/end
-ccusage daily   --json           # histórico diario
-ccusage monthly --json           # histórico mensual
-ccusage session --json           # por sesión
+ccusage blocks --active --json   # active 5h block: burnRate, projection, start/end
+ccusage daily   --json           # daily history
+ccusage monthly --json           # monthly history
+ccusage session --json           # per session
 ```
 
-### Campos por objeto
+### Fields per object
 
 `inputTokens`, `outputTokens`, `cacheCreationTokens`, `cacheReadTokens`,
-`totalTokens`, `totalCost`. Los `blocks` incluyen además burn rate (tokens/min)
-y proyección al final de la ventana de 5 h.
+`totalTokens`, `totalCost`. `blocks` also include burn rate (tokens/min)
+and a projection for the end of the 5h window.
 
-### Nota importante
+### Important note
 
-`ccusage blocks --live` (dashboard en vivo) fue **eliminado en v18.0.0**. Por eso
-cc-autobahn hace su propio polling de `--json` + tail de JSONL, en vez de depender
-de un modo live que ya no existe.
+`ccusage blocks --live` (live dashboard) was **removed in v18.0.0**. That's why
+cc-autobahn does its own polling of `--json` + JSONL tail, instead of relying
+on a live mode that no longer exists.
 
-## Fuente 2 — Tail de JSONL (tok/s por respuesta)
+## Source 2 — JSONL tail (tok/s per response)
 
-ccusage da burn rate por **minuto** (media suavizada). Nosotros damos `tok/s`
-**por respuesta**, siguiendo el log de la sesión activa en
-`~/.claude/projects/**/*.jsonl`: al completarse un turno, `Δoutput / Δt_turno` →
-`tok/s`. Aguja que **salta al completar** + decae con muelle a ralentí.
+ccusage gives burn rate per **minute** (smoothed average). We give `tok/s`
+**per response**, by following the active session log at
+`~/.claude/projects/**/*.jsonl`: once a turn completes, `Δoutput / Δt_turn` →
+`tok/s`. The needle **jumps on completion** and decays with a spring back to idle.
 
-**Límite físico (validado 2026-07-16).** El campo `usage` del JSONL **no se
-transmite en streaming**: se estampa **idéntico** en todas las líneas de un turno y
-solo aparece **al terminar** el turno (medido: un turno de 3008 tokens de salida
-aterriza de golpe tras 36 s de silencio). El log **no ve el turno en curso**. Por
-eso una aguja "instantánea que reacciona al pisar" es **imposible** desde aquí — lo
-honesto es el promedio por respuesta como escalón. Sigue siendo el diferencial
-(ningún competidor lo muestra), pero con la etiqueta verdadera (ver D8/D11). Streaming
-real → OTEL con streaming, parqueado en Fase 6.
+**Physical limit (validated 2026-07-16).** The JSONL `usage` field is **not
+streamed**: it is stamped **identically** on every line of a turn and
+only appears **when the turn ends** (measured: a turn with 3008 output tokens
+lands all at once after 36 s of silence). The log **never sees the in-progress turn**. That's
+why an "instantaneous, reacts-as-you-type" needle is **impossible** from this source — the
+honest approach is the per-response average as a step function. It's still the differentiator
+(no competitor shows it), but under its true label (see D8/D11). Real
+streaming → OTEL with streaming, parked for Phase 6.
 
-## Fuente 3 — Statusline JSON de Claude Code (sensor auto-instalado)
+## Source 3 — Claude Code statusline JSON (self-installing sensor)
 
-Claude Code pasa por stdin a un **script de statusline configurado** un JSON con
-datos **oficiales** de la cuenta. Es **push**: una ventana externa no lo recibe sola.
+Claude Code passes, via stdin to a **configured statusline script**, a JSON with
+**official** account data. It is **push**: an external window does not receive it on its own.
 
-**Cableado (ver D12).** cc-autobahn **es** ese script y se instala solo: al primer
-arranque escribe la clave `statusLine` en `~/.claude/settings.json` (con un
-consentimiento, backup y rollback). En cada invocación su binario (1) emite a stdout
-la línea de statusline normal (respeta la previa o pone una por defecto) y (2) vuelca
-el JSON completo a un socket/fichero que la ventana tailea. Así el dato oficial llega
-**sin que el usuario edite nada a mano**. Campos relevantes:
+**Wiring (see D12).** cc-autobahn **is** that script and installs itself: on first
+launch it writes the `statusLine` key to `~/.claude/settings.json` (with
+consent, backup, and rollback). On each invocation its binary (1) emits the normal
+statusline line to stdout (preserving the previous one or falling back to a default) and (2) dumps
+the full JSON to a socket/file that the window tails. This way the official data arrives
+**without the user editing anything by hand**. Relevant fields:
 
 ```json
 {
@@ -83,77 +83,77 @@ el JSON completo a un socket/fichero que la ventana tailea. Así el dato oficial
 }
 ```
 
-- `rate_limits.five_hour` → **autonomía** (dato oficial, mejor que la estimación).
-- `rate_limits.seven_day` → **aguja semanal** (ccusage no la enmarca así).
-- `model.id` → selector PRND. `effort.level` → kickdown.
-- `cost.total_cost_usd` → precio de la sesión.
+- `rate_limits.five_hour` → **range/autonomy** (official data, better than the estimate).
+- `rate_limits.seven_day` → **weekly needle** (ccusage doesn't frame it this way).
+- `model.id` → PRND selector. `effort.level` → kickdown.
+- `cost.total_cost_usd` → session price.
 
 Docs: <https://code.claude.com/docs/en/statusline>
 
-## Fuente 4 (opcional) — OpenTelemetry
+## Source 4 (optional) — OpenTelemetry
 
-Para dashboards históricos avanzados, Claude Code emite métricas OTEL:
+For advanced historical dashboards, Claude Code emits OTEL metrics:
 
 ```bash
 export CLAUDE_CODE_ENABLE_TELEMETRY=1
-export OTEL_METRICS_EXPORTER=prometheus   # o otlp / console
+export OTEL_METRICS_EXPORTER=prometheus   # or otlp / console
 ```
 
-- `claude_code.token.usage` — atributos: `type` (`input`/`output`/`cacheRead`/
+- `claude_code.token.usage` — attributes: `type` (`input`/`output`/`cacheRead`/
   `cacheCreation`), `model`, `query_source`, `speed`, `effort`, `agent.name`…
-- `claude_code.cost.usage` — coste en USD.
+- `claude_code.cost.usage` — cost in USD.
 
-Con Prometheus+Grafana, `rate()` sobre `claude_code.token.usage` = tok/s real.
-No es necesario para el MVP; queda como integración futura opcional.
+With Prometheus+Grafana, `rate()` over `claude_code.token.usage` = real tok/s.
+Not required for the MVP; kept as an optional future integration.
 
 Docs: <https://code.claude.com/docs/en/monitoring-usage>
 
-## Cadencias (D13 — no un poll único)
+## Cadences (D13 — not a single poll)
 
-| Sensor | Cadencia | Por qué |
+| Sensor | Cadence | Why |
 | ------ | -------- | ------- |
-| `ccusage blocks` | **10–30 s** (o proceso persistente) | el bloque de 5 h no cambia por segundo; `npx` cada 1–2 s es derroche |
-| Tail JSONL (`tok/s`) | **evento** (al escribirse el log) | no polling |
-| Statusline (`rate_limits`, modelo) | **push** | llega cuando Claude Code renderiza |
+| `ccusage blocks` | **10–30 s** (or a persistent process) | the 5h block doesn't change every second; running `npx` every 1–2 s is wasteful |
+| JSONL tail (`tok/s`) | **event-driven** (when the log is written) | no polling |
+| Statusline (`rate_limits`, model) | **push** | arrives whenever Claude Code renders |
 
-## Estrategia cero fricción (la app se cablea sola, D9)
+## Zero-friction strategy (the app wires itself up, D9)
 
-Dos cables auto-instalados. El usuario solo da **un consentimiento**.
+Two self-installing wires. The user only gives **one consent**.
 
-**Cable A — motor de datos** (`engine::detect`):
+**Wire A — data engine** (`engine::detect`):
 
-1. **`ccusage` global** en PATH → usar directamente.
-2. **Node** presente → `npx -y ccusage@latest blocks --json` (sin instalar nada).
-3. **Bun** presente → `bunx ccusage blocks --json`.
-4. **Sin runtime** → overlay ámbar "CHECK ENGINE" con botón único
-   **"Instalar motor"** (`engine::install_bun`, Fase 4/D9): corre el instalador
-   oficial de Bun, actualiza el `PATH` del proceso ya arrancado (el instalador
-   solo lo añade al rc del shell) y relanza el motor sin reiniciar la app.
-   macOS/Linux por ahora.
-5. **(Opc., sin empezar)**: empaquetar Bun como *sidecar* de Tauri → 0 red
-   necesaria, a costa de +30-90 MB por plataforma en el binario final.
+1. **Global `ccusage`** on PATH → use it directly.
+2. **Node** present → `npx -y ccusage@latest blocks --json` (nothing to install).
+3. **Bun** present → `bunx ccusage blocks --json`.
+4. **No runtime** → amber "CHECK ENGINE" overlay with a single button
+   **"Install engine"** (`engine::install_bun`, Phase 4/D9): runs the
+   official Bun installer, updates the `PATH` of the already-running process (the installer
+   only adds it to the shell rc) and relaunches the engine without restarting the app.
+   macOS/Linux for now.
+5. **(Optional, not started)**: bundle Bun as a Tauri *sidecar* → 0 network
+   required, at the cost of +30-90 MB per platform in the final binary.
 
-**Cable B — sensor statusline** (D12): la app escribe la clave `statusLine` en
-`~/.claude/settings.json` (backup + rollback) apuntando a su propio binario, que
-vuelca el JSON oficial a un socket que la ventana tailea. Sin edición manual.
+**Wire B — statusline sensor** (D12): the app writes the `statusLine` key to
+`~/.claude/settings.json` (backup + rollback) pointing at its own binary, which
+dumps the official JSON to a socket that the window tails. No manual editing.
 
-## Precisión / honestidad
+## Accuracy / honesty
 
-- Con **suscripción** (Pro/Max), el precio USD es **estimado** (ccusage lo calcula
-  por pricing público). La autonomía (`rate_limits`) sí es dato oficial.
-- Con **API**, el coste es exacto. El billing oficial siempre es la Claude Console.
+- With a **subscription** (Pro/Max), the USD price is **estimated** (ccusage calculates it
+  from public pricing). Range/autonomy (`rate_limits`) is genuinely official data.
+- With the **API**, the cost is exact. Official billing is always the Claude Console.
 
-## Comparativa de herramientas existentes (por qué ccusage)
+## Comparison of existing tools (why ccusage)
 
-| Herramienta                    | tok/s inst. | in/out/cache | coste+proy. | 5h+ETA | semanal | histórico | estética coche |
+| Tool                            | inst. tok/s | in/out/cache | cost+proj. | 5h+ETA | weekly | history | car aesthetic |
 | ------------------------------ | :---------: | :----------: | :---------: | :----: | :-----: | :-------: | :------------: |
 | **ccusage**                    |     ❌      |      ✅      |     ✅      |   ✅   |   ❌    |    ✅     |       ❌       |
 | Claude-Code-Usage-Monitor      |  ❌ (/min)  |      ✅      |     ✅      |   ✅   |   ❌    |    ✅     |       ❌       |
 | par-cc-usage                   |  ❌ (/min)  |      ✅      |     ✅      |   ✅   |   ❌    |    ✅     |       ❌       |
 | ccburn / codeburn              |  ❌ (/min)  |      ✅      |     ~       |   ✅   |   ❌    |    ~      |       ❌       |
-| **cc-autobahn** (este)         |   ✅ nuevo  |      ✅      |     ✅      |   ✅   | ✅ nuevo |    ✅     |    ✅ único    |
+| **cc-autobahn** (this project) |   ✅ new    |      ✅      |     ✅      |   ✅   | ✅ new  |    ✅     |    ✅ unique   |
 
-ccusage gana como **motor** (estándar de facto, más estable, JSON limpio).
-cc-autobahn aporta lo que falta: `tok/s` **por respuesta**, aguja semanal y la piel
-W203. (La columna "tok/s inst." de la tabla se lee como "por respuesta": ver D8 — el
-JSONL no permite instantáneo real.)
+ccusage wins as the **engine** (de facto standard, more stable, clean JSON).
+cc-autobahn contributes what's missing: `tok/s` **per response**, a weekly needle, and the
+W203 skin. (The table's "inst. tok/s" column should be read as "per response": see D8 — the
+JSONL doesn't allow true instant readings.)

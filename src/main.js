@@ -1,8 +1,8 @@
 // cc-autobahn — frontend shell.
-// Pinta el cluster W203 y escucha los sensores del backend (engine.rs + burn.rs).
-// Reloj + barra de segmentos en estático; velocímetro = tok/s por respuesta con
-// muelle físico (D8): salta al completar turno y decae a ralentí. NO es
-// instantáneo — el JSONL solo reporta usage al cerrar el turno (ver D8/D11).
+// Paints the W203 cluster and listens to the backend sensors (engine.rs + burn.rs).
+// Clock + segment bar are static; speedometer = tok/s per response with a
+// physical spring (D8): jumps when a turn completes and decays to idle. It is
+// NOT instantaneous — the JSONL only reports usage when the turn closes (see D8/D11).
 
 const SEGMENT_COUNT = 12;
 
@@ -24,30 +24,30 @@ function tickClock() {
   const hh = String(now.getHours()).padStart(2, "0");
   const mm = String(now.getMinutes()).padStart(2, "0");
   el.textContent = `${hh}:${mm}`;
-  // Sigue contando aunque el sensor esté momentáneamente callado — el reset
-  // conocido (fiveHourResetsAtMs) sigue siendo válido igual (ver D-review).
+  // Keeps counting even while the sensor is momentarily silent — the known
+  // reset (fiveHourResetsAtMs) is still valid regardless (see D-review).
   refreshAutonomie();
-  renderFooterMetric(); // poda los buffers PACE/AUTO aunque no llegue evento nuevo
+  renderFooterMetric(); // trims the PACE/AUTO buffers even if no new event arrives
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Velocímetro — muelle físico (D8).
-// La aguja salta al tok/s del turno completado y decae con muelle a ralentí.
-// Es la lectura HONESTA: "tok/s por respuesta", nunca "instantáneo" (D11).
+// Speedometer — physical spring (D8).
+// The needle jumps to the tok/s of the completed turn and decays with a spring to idle.
+// This is the HONEST reading: "tok/s per response", never "instantaneous" (D11).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const burn = {
-  target: 0, // tok/s objetivo (último tick, o decay en ralentí)
-  pos: 0, // valor mostrado (animado por el spring)
-  vel: 0, // velocidad del spring → overshoot mecánico
-  lastTickAt: 0, // performance.now() del último burn-tick
-  SPRING_K: 0.2, // rigidez del muelle
-  SPRING_DAMP: 0.75, // amortiguación (>0 = underdamped, overshoot)
-  IDLE_AFTER_MS: 2000, // sin tick fresco → ralentí
-  IDLE_DECAY: 0.95, // por frame, el target decae hacia 0
+  target: 0, // target tok/s (last tick, or decaying while idle)
+  pos: 0, // displayed value (animated by the spring)
+  vel: 0, // spring velocity → mechanical overshoot
+  lastTickAt: 0, // performance.now() of the last burn-tick
+  SPRING_K: 0.2, // spring stiffness
+  SPRING_DAMP: 0.75, // damping (>0 = underdamped, overshoot)
+  IDLE_AFTER_MS: 2000, // no fresh tick → idle
+  IDLE_DECAY: 0.95, // per frame, the target decays toward 0
 };
 
-/** Formatea tok/s al estilo VFD: "7.2", "55", "1.5k". */
+/** Formats tok/s VFD-style: "7.2", "55", "1.5k". */
 function formatTps(tps) {
   if (tps < 0.5) return "0";
   if (tps < 10) return tps.toFixed(1);
@@ -55,14 +55,14 @@ function formatTps(tps) {
   return (tps / 1000).toFixed(1) + "k";
 }
 
-/** Bucle de animación del muelle. Corre siempre (también para decaer). */
+/** Spring animation loop. Always runs (also to decay). */
 function burnFrame(now) {
-  // Ralentí: sin tick fresco, el target decae hacia 0.
+  // Idle: no fresh tick, the target decays toward 0.
   if (burn.lastTickAt && now - burn.lastTickAt > burn.IDLE_AFTER_MS) {
     burn.target *= burn.IDLE_DECAY;
     if (burn.target < 0.5) burn.target = 0;
   }
-  // Integración del spring: force → vel (amortiguada) → posición.
+  // Spring integration: force → velocity (damped) → position.
   const force = (burn.target - burn.pos) * burn.SPRING_K;
   burn.vel = (burn.vel + force) * burn.SPRING_DAMP;
   burn.pos += burn.vel;
@@ -72,13 +72,13 @@ function burnFrame(now) {
   requestAnimationFrame(burnFrame);
 }
 
-/** Maneja un burn-tick del backend (turno cerrado o mensaje intermedio, D27). */
+/** Handles a burn-tick from the backend (closed turn or intermediate message, D27). */
 function onBurnTick(payload) {
   // payload = { tokPerS, turnOutputTokens, turnDurationMs, messageId, timestamp }
   const tps = Number(payload?.tokPerS) || 0;
   burn.target = tps;
   burn.lastTickAt = performance.now();
-  // Buffer deslizante para la métrica PACE del footer (ver renderFooterMetric).
+  // Sliding buffer for the footer's PACE metric (see renderFooterMetric).
   const tokens = Number(payload?.turnOutputTokens) || 0;
   if (tokens > 0) {
     recentTicks.push({ recvAt: Date.now(), tokens });
@@ -87,15 +87,15 @@ function onBurnTick(payload) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Trip-computer readouts — datos del bloque activo de ccusage (blocks-update).
-// Cableado Fase 3 Pista A. La autonomía aquí es ESTIMADA (proyección de tokens
-// de ccusage): el sensor statusline (Pista B) la sobreescribe con la oficial
-// rate_limits.five_hour cuando llega. Marca "EST" obligatoria mientras tanto.
+// Trip-computer readouts — data from ccusage's active block (blocks-update).
+// Wired in Phase 3 Track A. The autonomy here is ESTIMATED (ccusage's token
+// projection): the statusline sensor (Track B) overwrites it with the official
+// rate_limits.five_hour once it arrives. The "EST" mark is mandatory until then.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const WINDOW_MIN = 300; // ventana de facturación de 5 h, en minutos
+const WINDOW_MIN = 300; // 5h billing window, in minutes
 
-/** Formatea tokens al estilo VFD: "999", "1.5k", "850k", "1.24M", "2.1G". */
+/** Formats tokens VFD-style: "999", "1.5k", "850k", "1.24M", "2.1G". */
 function formatTokens(n) {
   if (!(n >= 1)) return "0";
   if (n < 1e3) return String(Math.round(n));
@@ -104,19 +104,19 @@ function formatTokens(n) {
   return (n / 1e9).toFixed(2) + "G";
 }
 
-/** Minutos restantes → "3h12" (autonomía de la ventana). */
+/** Remaining minutes → "3h12" (window autonomy). */
 function formatHMin(minutes) {
   if (!(minutes >= 0)) return "—";
-  // Redondear UNA vez a minuto entero antes de partir en h/m: redondear cada
-  // parte por separado puede dar m=60 (ej. 119.5 → h=1, round(59.5)=60 →
-  // "1h60" en vez de "2h00"; bug encontrado en revisión de fórmulas).
+  // Round ONCE to a whole minute before splitting into h/m: rounding each
+  // part separately can produce m=60 (e.g. 119.5 → h=1, round(59.5)=60 →
+  // "1h60" instead of "2h00"; bug found while reviewing the formulas).
   const total = Math.round(minutes);
   const h = Math.floor(total / 60);
   const m = total % 60;
   return `${h}h${String(m).padStart(2, "0")}`;
 }
 
-/** ms de duración → "H:MM" (tiempo desde el inicio del bloque). */
+/** duration in ms → "H:MM" (time elapsed since the block started). */
 function formatDurationMs(ms) {
   if (!(ms > 0)) return "0:00";
   const totalMin = Math.floor(ms / 60000);
@@ -124,53 +124,53 @@ function formatDurationMs(ms) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Estado del sensor oficial. Cuando el statusLine está conectado, sus datos
-// (rate_limits, model.id, effort) tienen PRIORIDAD sobre la proyección del bloque
-// (D11: lo oficial nunca se estima). Al desconectarse, se vuelve a la proyección
-// con marca "EST".
+// Official sensor state. When the statusLine is connected, its data
+// (rate_limits, model.id, effort) takes PRIORITY over the block's projection
+// (D11: official data is never estimated). On disconnect, it falls back to
+// the projection with the "EST" mark.
 // ─────────────────────────────────────────────────────────────────────────────
 
-let lastBlock = null; // último blocks-update, para re-aplicar estimación al desconectar
-// `sensorConnected` = ¿está el sensor pusheando FRESCO ahora mismo? (D-review:
-// una pausa normal sin renderizado de Claude Code lo pone en false unos
-// segundos, sin ser un "nunca conectado" real). `everSensorConnected` es
-// pegajoso — una vez true, ya no se vuelve a caer a la proyección de ccusage
-// (sistema de ventana de 5h independiente, el salto entre ambos se veía
-// absurdo: "0h17" oficial → "EST 4h31" de ccusage).
-let sensorConnected = false; // ¿llega dato oficial del statusLine?
-let everSensorConnected = false; // ¿llegó alguna vez? (pegajoso, ver arriba)
-let fiveHourResetsAtMs = 0; // epoch-ms del reset de 5h (cuenta atrás, refresca el reloj)
+let lastBlock = null; // last blocks-update, to re-apply the estimate on disconnect
+// `sensorConnected` = is the sensor pushing FRESH data right now? (D-review:
+// a normal pause with no Claude Code rendering sets it to false for a few
+// seconds, without being a real "never connected"). `everSensorConnected` is
+// sticky — once true, it never falls back to ccusage's projection again
+// (independent 5h window system; the jump between the two looked
+// absurd: official "0h17" → ccusage's "EST 4h31").
+let sensorConnected = false; // is official data arriving from the statusLine?
+let everSensorConnected = false; // did it ever connect? (sticky, see above)
+let fiveHourResetsAtMs = 0; // epoch-ms of the 5h reset (countdown, refreshed by the clock)
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Footer: PACE (ritmo reciente vs. medio del bloque) / AUTO (autonomía
-// ajustada al ritmo reciente, solo sensor oficial). Sustituye al antiguo
-// "ÚLT tok/s" (D27 lo volvió ambiguo: turno completo vs. mensaje intermedio).
-// Verificado contra el código fuente real de ccusage (D28): burnRate.tokensPerMinute
-// = totalTokens/minutos del bloque (mismo cálculo que haríamos nosotros, se
-// reusa); projection.remainingMinutes es puro reloj, no depende del ritmo —
-// por eso AUTO solo tiene sentido con el sensor oficial (rate_limits sí mide
-// consumo real de cupo).
+// Footer: PACE (recent pace vs. block average) / AUTO (autonomy adjusted to
+// the recent pace, official sensor only). Replaces the old "LAST tok/s"
+// (D27 made it ambiguous: full turn vs. intermediate message).
+// Verified against ccusage's actual source code (D28): burnRate.tokensPerMinute
+// = block's totalTokens/minutes (the same calculation we would do, so it's
+// reused); projection.remainingMinutes is pure clock, it doesn't depend on
+// pace — that's why AUTO only makes sense with the official sensor
+// (rate_limits does measure real quota consumption).
 // ─────────────────────────────────────────────────────────────────────────────
 
-const PACE_WINDOW_MS = 5 * 60 * 1000; // ventana reciente para PACE
-const PACE_MIN_BLOCK_ELAPSED_MIN = 1; // mínimo del bloque antes de fiarse de blockAvg
-const PACE_MIN_SPAN_MIN = 0.5; // mínimo span de ticks antes de fiarse de recentRate
-const AUTONOMY_WINDOW_MS = 10 * 60 * 1000; // ventana reciente para AUTO
-const AUTONOMY_MIN_SPAN_MIN = 2; // mínimo span real antes de fiarse del ritmo
+const PACE_WINDOW_MS = 5 * 60 * 1000; // recent window for PACE
+const PACE_MIN_BLOCK_ELAPSED_MIN = 1; // minimum block elapsed before trusting blockAvg
+const PACE_MIN_SPAN_MIN = 0.5; // minimum tick span before trusting recentRate
+const AUTONOMY_WINDOW_MS = 10 * 60 * 1000; // recent window for AUTO
+const AUTONOMY_MIN_SPAN_MIN = 2; // minimum real span before trusting the pace
 
-let recentTicks = []; // { recvAt, tokens } — alimentado por onBurnTick
-let recentPct = []; // { recvAt, pct } — alimentado por onSensorUpdate
+let recentTicks = []; // { recvAt, tokens } — fed by onBurnTick
+let recentPct = []; // { recvAt, pct } — fed by onSensorUpdate
 let footerMetric =
   localStorage.getItem("cc-autobahn.footerMetric") === "autonomy"
     ? "autonomy"
     : "pace";
 
-let lastGearHit = null; // último modelo activo pintado, para saber si "cambió de marcha"
+let lastGearHit = null; // last active model painted, to know if the "gear changed"
 
-/** Ilumina la marcha del selector PRND según el modelo activo (O/S/H/F).
- *  Desliza el marcador hasta la letra activa y, si cambió de marcha respecto
- *  a la anterior, dispara un pulso de glow (D-review: animar el cambio en
- *  vez de solo cambiar color en seco). */
+/** Lights up the PRND selector gear according to the active model (O/S/H/F).
+ *  Slides the marker to the active letter and, if it changed gear relative
+ *  to the previous one, triggers a glow pulse (D-review: animate the change
+ *  instead of just switching color abruptly). */
 function setGear(models) {
   if (!Array.isArray(models) || models.length === 0) return;
   const order = ["opus", "sonnet", "haiku", "fable"];
@@ -189,15 +189,15 @@ function setGear(models) {
   const gearEl = document.getElementById("gear");
   const marker = document.getElementById("gear-marker");
   if (activeEl && gearEl && marker) {
-    // translateY relativo al propio .gear — robusto ante cambios de tamaño
-    // de fuente/gap, no depende de asumir una altura de fila fija.
+    // translateY relative to .gear itself — robust against font-size/gap
+    // changes, doesn't depend on assuming a fixed row height.
     const targetY = activeEl.offsetTop + activeEl.offsetHeight / 2;
     marker.style.transform = `translateY(${targetY}px)`;
   }
 
   if (hit !== lastGearHit && lastGearHit !== null && activeEl) {
     activeEl.classList.remove("pulse");
-    // Forzar reflow para poder re-disparar la animación si vuelve a la misma letra.
+    // Force reflow so the animation can re-trigger if it returns to the same letter.
     void activeEl.offsetWidth;
     activeEl.classList.add("pulse");
     activeEl.addEventListener(
@@ -209,7 +209,7 @@ function setGear(models) {
   lastGearHit = hit;
 }
 
-/** Barra de autonomía + texto + gear desde la PROYECCIÓN de ccusage (estimado). */
+/** Autonomy bar + text + gear from ccusage's PROJECTION (estimated). */
 function applyEstimated(block) {
   const remaining = Number(block?.projection?.remainingMinutes);
   document.getElementById("autonomie").textContent = `EST ${formatHMin(remaining)}`;
@@ -223,9 +223,9 @@ function applyEstimated(block) {
   setGear(block?.models);
 }
 
-/** Actualiza la cuenta atrás de autonomía hasta el reset oficial de 5h. Sigue
- *  contando aunque `sensorConnected` sea false momentáneamente — el reset
- *  conocido no deja de ser válido solo porque el sensor calle un rato. */
+/** Updates the autonomy countdown to the official 5h reset. Keeps counting
+ *  even while `sensorConnected` is momentarily false — the known reset
+ *  doesn't stop being valid just because the sensor is quiet for a while. */
 function refreshAutonomie() {
   if (fiveHourResetsAtMs <= 0) return;
   const remainMin = (fiveHourResetsAtMs - Date.now()) / 60000;
@@ -233,13 +233,14 @@ function refreshAutonomie() {
     remainMin > 0 ? formatHMin(remainMin) : "—";
 }
 
-/** Pinta los datos del bloque activo de ccusage. odo/trip/avg siempre; los
- *  derivados (segments/autonomie/gear) solo si NO hay sensor oficial conectado. */
+/** Paints the ccusage active block's data. odo/trip/avg always; the
+ *  derived ones (segments/autonomie/gear) only if there is NO official sensor connected. */
 function onBlocksUpdate(block) {
-  // block = Block camelCase de engine.rs (totalTokens, costUsd, projection, models, startTime).
-  // Si rota el bloque de 5h (id nuevo), el buffer PACE del bloque anterior ya
-  // no es comparable — limpiarlo evita mezclar "reciente" de un bloque con la
-  // media de otro (hallado en revisión: info engañosa aunque rara, D28).
+  // block = camelCase Block from engine.rs (totalTokens, costUsd, projection, models, startTime).
+  // If the 5h block rotates (new id), the previous block's PACE buffer is no
+  // longer comparable — clearing it avoids mixing "recent" data from one
+  // block with another's average (found in review: misleading info even if
+  // rare, D28).
   if (lastBlock && block?.id && lastBlock.id !== block.id) {
     recentTicks = [];
   }
@@ -258,41 +259,41 @@ function onBlocksUpdate(block) {
   const perMtok = tokens > 0 ? (costUsd / tokens) * 1e6 : 0;
   document.getElementById("avg").textContent = `$${perMtok.toFixed(2)}`;
 
-  // Solo si NUNCA hubo sensor oficial — una vez que lo hubo, una pausa
-  // momentánea no debe hacer que ccusage pise el dato oficial (D-review).
+  // Only if there was NEVER an official sensor — once there was one, a
+  // momentary pause shouldn't let ccusage override the official data (D-review).
   if (!everSensorConnected) applyEstimated(block);
 }
 
-/** Dato OFICIAL del statusLine: sobreescribe segments/autonomie/gear/warn. */
+/** OFFICIAL data from the statusLine: overwrites segments/autonomie/gear/warn. */
 function onSensorUpdate(p) {
   sensorConnected = true;
   everSensorConnected = true;
   const pct = Number.isFinite(p?.fiveHourPct) ? Math.max(0, Math.min(100, p.fiveHourPct)) : 0;
-  // Segmentos = autonomía RESTANTE, no gastada (depósito que se vacía, no que
-  // se llena) — coherente con applyEstimated() y con el icono de surtidor.
+  // Segments = REMAINING autonomy, not spent (a tank that empties, not one
+  // that fills) — consistent with applyEstimated() and the fuel-pump icon.
   buildSegments(Math.round((SEGMENT_COUNT * (100 - pct)) / 100));
   fiveHourResetsAtMs = p?.fiveHourResetsAt ? Number(p.fiveHourResetsAt) * 1000 : 0;
   refreshAutonomie();
   if (p?.modelId) setGear([p.modelId]);
-  // Tinte de reserva: seven_day > 80% → borde rojo (testigo W203).
+  // Reserve tint: seven_day > 80% → red border (W203 warning light).
   document
     .querySelector(".screen")
     .classList.toggle("warn", (Number(p?.sevenDayPct) || 0) > 80);
-  // Buffer deslizante para la métrica AUTO del footer (ver renderFooterMetric).
+  // Sliding buffer for the footer's AUTO metric (see renderFooterMetric).
   if (Number.isFinite(pct)) {
     recentPct.push({ recvAt: Date.now(), pct });
   }
   renderFooterMetric();
 }
 
-/** PACE: % de diferencia entre el ritmo reciente (5 min, SOLO output tokens,
- *  de `burn-tick`) y la media de output del bloque. NO usa
- *  `burnRate.tokensPerMinute` de ccusage (D28 lo probó en vivo y falló: ese
- *  campo suma input+output+caché — `cache_read_tokens` puede ser enorme en
- *  sesiones largas por el reuso de contexto, dejando SIEMPRE el reciente
- *  (output puro) por debajo, cerca de -100% sin importar la actividad real).
- *  Se calcula la media del bloque a mano con `tokenCounts.outputTokens`, la
- *  MISMA magnitud que `burn-tick` — comparación de peras con peras. */
+/** PACE: % difference between the recent pace (5 min, output tokens ONLY,
+ *  from `burn-tick`) and the block's output average. Does NOT use ccusage's
+ *  `burnRate.tokensPerMinute` (D28 tested it live and it failed: that
+ *  field sums input+output+cache — `cache_read_tokens` can be huge in
+ *  long sessions due to context reuse, ALWAYS leaving the recent value
+ *  (output only) below it, close to -100% regardless of actual activity).
+ *  The block average is computed by hand from `tokenCounts.outputTokens`, the
+ *  SAME magnitude as `burn-tick` — comparing apples to apples. */
 function computePace() {
   const now = Date.now();
   recentTicks = recentTicks.filter((t) => now - t.recvAt <= PACE_WINDOW_MS);
@@ -305,8 +306,8 @@ function computePace() {
   ) {
     return null;
   }
-  // Bloque recién empezado: dividir por un elapsed casi cero infla blockAvg
-  // artificialmente (mismo tipo de ruido que ya se evita en AUTO).
+  // Block just started: dividing by an elapsed time close to zero inflates
+  // blockAvg artificially (same kind of noise already avoided in AUTO).
   const elapsedMin = (now - startedAt) / 60000;
   if (elapsedMin < PACE_MIN_BLOCK_ELAPSED_MIN) return null;
   const blockAvg = outputTokens / elapsedMin;
@@ -314,22 +315,22 @@ function computePace() {
 
   const totalTokens = recentTicks.reduce((sum, t) => sum + t.tokens, 0);
   const spanMin = (now - recentTicks[0].recvAt) / 60000;
-  // Un solo tick muy reciente infla recentRate igual de artificialmente.
+  // A single very recent tick inflates recentRate just as artificially.
   if (spanMin < PACE_MIN_SPAN_MIN) return null;
   const recentRate = totalTokens / spanMin;
   return ((recentRate - blockAvg) / blockAvg) * 100;
 }
 
-/** AUTO: minutos restantes reproyectando la TENDENCIA reciente del %oficial
- *  (rate_limits.five_hour), no la proyección lineal de ccusage (que es solo
- *  reloj, D28). `null` sin sensor, sin muestras suficientes, ritmo <= 0 (no
- *  tiene sentido "tiempo hasta agotar" si no estás consumiendo), o ventana ya
- *  debería haber reseteado (fiveHourResetsAtMs stale).
- *  TECHO DURO (D-review, hallado con datos reales: 85% usado, reset en 16 min
- *  reales): la reproyección por ritmo NUNCA puede superar el tiempo real hasta
- *  `fiveHourResetsAtMs` — ese reset ocurre igual, uses o no el 100% de cupo.
- *  Sin este cap, un ritmo lento mostraría más autonomía de la que existe de
- *  verdad (info engañosa). */
+/** AUTO: minutes remaining by reprojecting the recent TREND of the official
+ *  % (rate_limits.five_hour), not ccusage's linear projection (which is just
+ *  clock-based, D28). `null` with no sensor, not enough samples, pace <= 0
+ *  (no point in "time until exhausted" if you're not consuming), or the
+ *  window should already have reset (fiveHourResetsAtMs stale).
+ *  HARD CAP (D-review, found with real data: 85% used, reset in 16 real
+ *  minutes): the pace-based reprojection can NEVER exceed the actual time
+ *  remaining until `fiveHourResetsAtMs` — that reset happens regardless of
+ *  whether you use 100% of the quota or not. Without this cap, a slow pace
+ *  would show more autonomy than actually exists (misleading info). */
 function computeAdjustedAutonomy() {
   if (!sensorConnected) return null;
   const now = Date.now();
@@ -345,13 +346,13 @@ function computeAdjustedAutonomy() {
 
   if (fiveHourResetsAtMs > 0) {
     const wallClockRemainingMin = (fiveHourResetsAtMs - now) / 60000;
-    if (wallClockRemainingMin <= 0) return null; // reset ya debería haber pasado
+    if (wallClockRemainingMin <= 0) return null; // reset should already have happened
     minutesLeft = Math.min(minutesLeft, wallClockRemainingMin);
   }
   return minutesLeft;
 }
 
-/** Repinta el footer según la métrica activa (PACE/AUTO, ver footerMetric). */
+/** Repaints the footer based on the active metric (PACE/AUTO, see footerMetric). */
 function renderFooterMetric() {
   const label = document.getElementById("footer-metric-label");
   const value = document.getElementById("footer-metric-value");
@@ -372,7 +373,7 @@ function renderFooterMetric() {
   }
 }
 
-/** Click en el footer alterna PACE/AUTO, persistido en localStorage. */
+/** Clicking the footer toggles PACE/AUTO, persisted to localStorage. */
 function wireFooterToggle() {
   document.getElementById("footer-metric").onclick = () => {
     footerMetric = footerMetric === "pace" ? "autonomy" : "pace";
@@ -381,16 +382,16 @@ function wireFooterToggle() {
   };
 }
 
-/** Conexión del sensor. Si NUNCA hubo dato oficial, cae a la proyección
- *  "EST". Si ya lo hubo, una desconexión momentánea (idle normal, sin
- *  renderizado de Claude Code) se CONGELA tal cual — saltar a la proyección
- *  de ccusage aquí es un sistema de ventana de 5h independiente y el salto
- *  se veía como un número absurdo (ej. oficial "0h17" → "EST 4h31" de
- *  ccusage, hallado en revisión). */
+/** Sensor connection. If official data NEVER arrived, falls back to the
+ *  "EST" projection. If it already did, a momentary disconnection (normal
+ *  idle, no Claude Code rendering) FREEZES as-is — jumping to ccusage's
+ *  projection here is an independent 5h window system and the jump
+ *  looked like an absurd number (e.g. official "0h17" → ccusage's
+ *  "EST 4h31", found in review). */
 function onSensorState(p) {
   sensorConnected = !!p?.connected;
   if (sensorConnected) return;
-  if (everSensorConnected) return; // congelado: no tocar nada
+  if (everSensorConnected) return; // frozen: don't touch anything
   document.querySelector(".screen").classList.remove("warn");
   if (lastBlock) applyEstimated(lastBlock);
   else {
@@ -400,20 +401,20 @@ function onSensorState(p) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CHECK ENGINE overlay (D9, Fase 4): sin ccusage/npx/bunx en PATH no hay datos.
-// Mismo patrón que el overlay del sensor: estado inicial via comando (evita la
-// carrera contra el evento) + botón que dispara la instalación.
+// CHECK ENGINE overlay (D9, Phase 4): without ccusage/npx/bunx in PATH there's
+// no data. Same pattern as the sensor overlay: initial state via command
+// (avoids racing against the event) + a button that triggers the install.
 // ─────────────────────────────────────────────────────────────────────────────
 
 let engineInvoke = null;
 
 const ENGINE_DEFAULT_BODY =
-  "No se encontró ccusage (ni global, ni npx, ni bunx) en PATH.\n" +
-  "Sin motor no hay datos de consumo.";
+  "ccusage was not found (neither global, npx, nor bunx) in PATH.\n" +
+  "Without an engine there is no usage data.";
 
 function showEngineOverlay(show) {
   document.getElementById("engine-overlay").hidden = !show;
-  if (show) setEngineBody(ENGINE_DEFAULT_BODY); // reset tras un error previo
+  if (show) setEngineBody(ENGINE_DEFAULT_BODY); // reset after a previous error
 }
 
 function setEngineBody(text) {
@@ -423,15 +424,15 @@ function setEngineBody(text) {
 async function onInstallEngineClick() {
   if (!engineInvoke) return;
   const btn = document.getElementById("engine-install-btn");
-  if (btn.disabled) return; // doble-click: instalador ya en curso
+  if (btn.disabled) return; // double-click: installer already in progress
   btn.disabled = true;
   setEngineBody(
-    "Instalando Bun (curl -fsSL https://bun.sh/install | bash)…\nEsto tarda unos segundos."
+    "Installing Bun (curl -fsSL https://bun.sh/install | bash)…\nThis takes a few seconds."
   );
   try {
     const label = await engineInvoke("install_bun");
-    setEngineBody(`Motor detectado (${label}). Arrancando…`);
-    showEngineOverlay(false); // blocks-update/engine-detected lo confirman en breve
+    setEngineBody(`Engine detected (${label}). Starting…`);
+    showEngineOverlay(false); // blocks-update/engine-detected will confirm it shortly
   } catch (e) {
     setEngineBody(String(e));
     btn.disabled = false;
@@ -462,18 +463,18 @@ async function wireEngine() {
   listen("engine-detected", () => showEngineOverlay(false));
   listen("engine-missing", () => showEngineOverlay(true));
   listen("engine-error", (e) => console.error("[engine] error:", e.payload));
-  listen("blocks-idle", () => console.info("[engine] sin bloque activo"));
+  listen("blocks-idle", () => console.info("[engine] no active block"));
   listen("blocks-update", (e) => {
     console.info("[engine] blocks-update:", e.payload);
     showEngineOverlay(false);
     onBlocksUpdate(e.payload);
   });
   listen("burn-tick", (e) => {
-    console.info("[burn] tok/s por respuesta:", e.payload);
+    console.info("[burn] tok/s per response:", e.payload);
     onBurnTick(e.payload);
   });
   listen("sensor-update", (e) => {
-    console.info("[sensor] oficial:", e.payload);
+    console.info("[sensor] official:", e.payload);
     onSensorUpdate(e.payload);
   });
   listen("sensor-state", (e) => {
@@ -483,16 +484,16 @@ async function wireEngine() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// UI de consentimiento del sensor (D12): conectar/desconectar el statusLine.
-// Muta ~/.claude/settings.json desde el backend; el overlay pide confirmación
-// con la vista previa (backup + chain) antes de escribir.
+// Sensor consent UI (D12): connect/disconnect the statusLine. Mutates
+// ~/.claude/settings.json from the backend; the overlay asks for confirmation
+// with a preview (backup + chain) before writing.
 // ─────────────────────────────────────────────────────────────────────────────
 
 let sensorInvoke = null;
 let sensorInstalled = false;
 
 async function wireSensorUi() {
-  if (!("__TAURI_INTERNALS__" in window)) return; // fuera de Tauri, nada que hacer
+  if (!("__TAURI_INTERNALS__" in window)) return; // outside Tauri, nothing to do
   const { invoke } = await import("@tauri-apps/api/core");
   sensorInvoke = invoke;
 
@@ -519,12 +520,12 @@ function showSensorOverlay(show) {
   document.getElementById("sensor-overlay").hidden = !show;
   if (!show) return;
   setSensorBody(
-    "Conecta el sensor para los rate_limits oficiales (ventana 5 h / 7 d).\n" +
-      "Modifica ~/.claude/settings.json con backup y rollback.\n" +
-      "Tu statusLine actual se conserva (chain)."
+    "Connect the sensor for the official rate_limits (5h / 7d window).\n" +
+      "Modifies ~/.claude/settings.json with backup and rollback.\n" +
+      "Your current statusLine is preserved (chain)."
   );
   const connect = document.getElementById("sensor-connect");
-  connect.textContent = "Conectar";
+  connect.textContent = "Connect";
   connect.onclick = onConnectClick;
   document.getElementById("sensor-cancel").hidden = true;
 }
@@ -538,18 +539,18 @@ async function onConnectClick() {
   try {
     const p = await sensorInvoke("sensor_preview_install");
     const prev = p.prevStatusLine
-      ? "Tu statusLine actual se conserva y seguirá pintándose (chain)."
-      : "No tienes statusLine previo; el sensor usará una línea por defecto.";
+      ? "Your current statusLine is preserved and will keep rendering (chain)."
+      : "You have no previous statusLine; the sensor will use a default line.";
     setSensorBody(
-      `Se escribirá statusLine en settings.json.\n${prev}\nBackup: ${p.backupPath}\n\n` +
-        "Si algo falla: borra statusLine o restaura el backup."
+      `statusLine will be written to settings.json.\n${prev}\nBackup: ${p.backupPath}\n\n` +
+        "If something goes wrong: delete statusLine or restore the backup."
     );
     const connect = document.getElementById("sensor-connect");
-    connect.textContent = "Confirmar";
+    connect.textContent = "Confirm";
     connect.onclick = doInstall;
     document.getElementById("sensor-cancel").hidden = false;
   } catch (e) {
-    setSensorBody("No se pudo generar la vista previa: " + e);
+    setSensorBody("Could not generate the preview: " + e);
   }
 }
 
@@ -558,7 +559,7 @@ async function doInstall() {
     await sensorInvoke("install_sensor");
     refreshSensorStatus();
   } catch (e) {
-    setSensorBody("Error al instalar: " + e + "\n(settings intacto — rollback automático)");
+    setSensorBody("Install error: " + e + "\n(settings untouched — automatic rollback)");
   }
 }
 
@@ -571,13 +572,13 @@ async function onDisconnectClick() {
     await sensorInvoke("uninstall_sensor");
     refreshSensorStatus();
   } catch (e) {
-    setSensorBody("Error al desconectar: " + e);
+    setSensorBody("Disconnect error: " + e);
   }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Botón PIN (D24): fija el panel abierto pese a perder el foco. El hide-on-blur
-// vive en Rust (main.rs); aquí solo se avisa del estado con `set_pinned`.
+// PIN button (D24): pins the panel open despite losing focus. The hide-on-blur
+// logic lives in Rust (main.rs); here we just report the state via `set_pinned`.
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function wirePinButton() {
@@ -595,7 +596,7 @@ async function wirePinButton() {
 }
 
 function init() {
-  // Barra de autonomía vacía hasta el primer blocks-update (sin datos aún).
+  // Autonomy bar empty until the first blocks-update (no data yet).
   buildSegments(0);
   tickClock();
   setInterval(tickClock, 1000);
@@ -605,8 +606,8 @@ function init() {
   wirePinButton();
   wireFooterToggle();
   renderFooterMetric();
-  setGear(["opus"]); // posiciona el marcador contra la marcha por defecto del HTML
-  requestAnimationFrame(burnFrame); // arranca en ralentí (pos=0), fiel al coche
+  setGear(["opus"]); // positions the marker against the HTML's default gear
+  requestAnimationFrame(burnFrame); // starts idle (pos=0), true to the car
 }
 
 window.addEventListener("DOMContentLoaded", init);

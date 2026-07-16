@@ -1,12 +1,12 @@
-//! engine — motor de datos: detección de ccusage + polling de `blocks`.
+//! engine — data engine: ccusage detection + `blocks` polling.
 //!
-//! Todo el I/O vive aquí (nunca en la UI). No forkeamos ccusage: lo ejecutamos
-//! como proceso hijo y parseamos su `--json` (ver docs/ARCHITECTURE.md, D1–D3).
+//! All I/O lives here (never in the UI). We don't fork ccusage: we run it
+//! as a child process and parse its `--json` output (see docs/ARCHITECTURE.md, D1–D3).
 //!
-//! Diseño deliberadamente sobrio (sin plugins, sin async framework): un hilo
-//! dedicado con `std::process::Command` + `std::thread::sleep`. Robusto,
-//! serviciable, sin dependencias más allá de serde. El loop nunca hace panic;
-//! cada fallo se transforma en un evento hacia el frontend.
+//! Deliberately sober design (no plugins, no async framework): a dedicated
+//! thread with `std::process::Command` + `std::thread::sleep`. Robust,
+//! serviceable, no dependencies beyond serde. The loop never panics;
+//! every failure is turned into an event towards the frontend.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,27 +16,27 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
-/// Cadencia de `ccusage blocks` (D13: 10–30 s). El bloque de 5 h cambia lento;
-/// pollear cada segundo sería derroche de spawn de proceso.
+/// Cadence for `ccusage blocks` (D13: 10–30 s). The 5 h block changes slowly;
+/// polling every second would be a wasteful process spawn.
 const POLL_INTERVAL_SECS: u64 = 15;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Detección del motor (cascada D9: global → npx → bunx → ninguno)
+// Engine detection (cascade D9: global → npx → bunx → none)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Forma en que se invoca ccusage, resuelta una sola vez al arrancar.
+/// How ccusage is invoked, resolved once at startup.
 #[derive(Debug, Clone, Copy)]
 enum Engine {
-    /// `ccusage` en el PATH (instalación global).
+    /// `ccusage` on the PATH (global install).
     Global,
-    /// `npx -y ccusage@latest` (Node presente, sin instalar nada).
+    /// `npx -y ccusage@latest` (Node present, nothing installed).
     Npx,
-    /// `bunx ccusage` (Bun presente).
+    /// `bunx ccusage` (Bun present).
     Bunx,
 }
 
 impl Engine {
-    /// Comando base; el llamante añade `blocks --active --json`.
+    /// Base command; the caller appends `blocks --active --json`.
     fn base_command(self) -> Command {
         match self {
             Engine::Global => Command::new("ccusage"),
@@ -53,7 +53,7 @@ impl Engine {
         }
     }
 
-    /// Etiqueta corta para el evento `engine-detected`.
+    /// Short label for the `engine-detected` event.
     fn label(self) -> &'static str {
         match self {
             Engine::Global => "ccusage",
@@ -63,7 +63,7 @@ impl Engine {
     }
 }
 
-/// Prueba el PATH una vez y devuelve el primer motor disponible (D9).
+/// Checks the PATH once and returns the first available engine (D9).
 fn detect() -> Option<Engine> {
     if on_path("ccusage") {
         Some(Engine::Global)
@@ -76,8 +76,8 @@ fn detect() -> Option<Engine> {
     }
 }
 
-/// `true` si `bin` resuelve en el PATH. Recorre `$PATH` a mano — sin crate extra,
-/// portable. En Windows contempla las extensiones ejecutables habituales.
+/// `true` if `bin` resolves on the PATH. Walks `$PATH` by hand — no extra crate,
+/// portable. On Windows it accounts for the usual executable extensions.
 fn on_path(bin: &str) -> bool {
     let Some(path) = std::env::var_os("PATH") else {
         return false;
@@ -98,19 +98,19 @@ fn on_path(bin: &str) -> bool {
     false
 }
 
-/// `#[tauri::command]` ¿hay motor disponible AHORA MISMO? Para pintar la pantalla
-/// "CHECK ENGINE" en el primer render sin depender de ganar la carrera contra el
-/// evento `engine-missing` (el hilo de `start` puede emitirlo antes de que el
-/// frontend termine de registrar el listener). Mismo patrón que `sensor_status`.
+/// `#[tauri::command]` Is an engine available RIGHT NOW? Used to render the
+/// "CHECK ENGINE" screen on the first render without depending on winning the
+/// race against the `engine-missing` event (the `start` thread may emit it
+/// before the frontend finishes registering the listener). Same pattern as `sensor_status`.
 #[tauri::command]
 pub fn engine_status() -> bool {
     detect().is_some()
 }
 
-/// `#[tauri::command]` Botón "INSTALAR MOTOR" (D9, Fase 4): lanza el instalador
-/// oficial de Bun, actualiza el `PATH` del proceso ya arrancado (el instalador
-/// solo lo añade al rc del shell, que este proceso no vuelve a leer) y reintenta
-/// el motor. `Err` con mensaje legible para pintar en el overlay.
+/// `#[tauri::command]` "INSTALL ENGINE" button (D9, Phase 4): runs Bun's
+/// official installer, updates the `PATH` of the already-running process (the
+/// installer only appends it to the shell rc, which this process never
+/// re-reads) and retries the engine. `Err` with a readable message to render in the overlay.
 #[tauri::command]
 pub fn install_bun(app: AppHandle) -> Result<String, String> {
     if let Some(engine) = detect() {
@@ -129,11 +129,11 @@ pub fn install_bun(app: AppHandle) -> Result<String, String> {
             start(app);
             Ok(engine.label().to_string())
         }
-        None => Err("Bun se instaló pero bunx no aparece en PATH".to_string()),
+        None => Err("Bun was installed but bunx isn't on PATH".to_string()),
     }
 }
 
-/// `~/.bun/bin`, destino fijo del instalador oficial.
+/// `~/.bun/bin`, the fixed destination of the official installer.
 #[cfg(unix)]
 fn bun_bin_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
@@ -145,8 +145,8 @@ fn bun_bin_dir() -> Option<PathBuf> {
     None
 }
 
-/// Antepone `dir` al `PATH` del proceso actual (no del shell) para que `on_path`
-/// y los `Command` siguientes encuentren `bunx` sin reiniciar la app.
+/// Prepends `dir` to the current process's `PATH` (not the shell's) so that
+/// `on_path` and subsequent `Command`s find `bunx` without restarting the app.
 fn prepend_path(dir: &Path) {
     let existing = std::env::var_os("PATH").unwrap_or_default();
     let mut paths = vec![dir.to_path_buf()];
@@ -156,31 +156,31 @@ fn prepend_path(dir: &Path) {
     }
 }
 
-/// Instalador oficial de Bun (https://bun.sh/install). macOS/Linux only por
-/// ahora — el resto del proyecto tampoco está probado en Windows (D24).
+/// Official Bun installer (https://bun.sh/install). macOS/Linux only for
+/// now — the rest of the project isn't tested on Windows either (D24).
 #[cfg(unix)]
 fn run_bun_installer() -> Result<(), String> {
     let status = Command::new("sh")
         .arg("-c")
         .arg("curl -fsSL https://bun.sh/install | bash")
         .status()
-        .map_err(|e| format!("no se pudo lanzar el instalador de Bun: {e}"))?;
+        .map_err(|e| format!("could not launch the Bun installer: {e}"))?;
     if status.success() {
         Ok(())
     } else {
-        Err(format!("el instalador de Bun salió con {status}"))
+        Err(format!("the Bun installer exited with {status}"))
     }
 }
 
 #[cfg(not(unix))]
 fn run_bun_installer() -> Result<(), String> {
-    Err("Instalación automática solo en macOS/Linux por ahora. Instala Bun a mano desde https://bun.sh y reinicia cc-autobahn.".to_string())
+    Err("Automatic installation is only available on macOS/Linux for now. Install Bun manually from https://bun.sh and restart cc-autobahn.".to_string())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Modelo serde del JSON de `ccusage blocks --active --json`
-// Estructurado contra la salida real (ccusage v20; capturada 2026-07-16).
-// Campos opcionales/`default` porque los bloques de tipo "gap" omiten varios.
+// serde model for the `ccusage blocks --active --json` JSON
+// Structured against the real output (ccusage v20; captured 2026-07-16).
+// Optional/`default` fields because "gap" blocks omit several of them.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -189,7 +189,7 @@ struct BlocksEnvelope {
     blocks: Vec<Block>,
 }
 
-/// Un bloque de facturación de 5 h. Reenviado tal cual al frontend.
+/// A 5 h billing block. Forwarded as-is to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Block {
@@ -240,8 +240,8 @@ struct BurnRate {
     cost_per_hour: f64,
     #[serde(default)]
     tokens_per_minute: f64,
-    /// Media suavizada de ccusage. NO es nuestro `tok/s` por respuesta (D8):
-    /// ese lo calcula el tail de JSONL en Fase 2.
+    /// Smoothed average from ccusage. NOT our per-response `tok/s` (D8):
+    /// that one is computed by the JSONL tail in Phase 2.
     #[serde(default)]
     tokens_per_minute_for_indicator: f64,
 }
@@ -261,36 +261,36 @@ struct Projection {
 // Polling
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ejecuta ccusage una vez y devuelve el bloque activo (si lo hay).
-/// `Err` con mensaje legible ante cualquier fallo de spawn / exit / parseo.
+/// Runs ccusage once and returns the active block (if any).
+/// `Err` with a readable message on any spawn / exit / parse failure.
 fn poll_once(engine: Engine) -> Result<Option<Block>, String> {
     let output = engine
         .base_command()
         .args(["blocks", "--active", "--json"])
         .output()
-        .map_err(|e| format!("no se pudo lanzar {}: {e}", engine.label()))?;
+        .map_err(|e| format!("could not launch {}: {e}", engine.label()))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
-            "ccusage salió con {}: {}",
+            "ccusage exited with {}: {}",
             output.status,
             stderr.trim()
         ));
     }
 
     let envelope: BlocksEnvelope = serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("JSON de ccusage no parseable: {e}"))?;
+        .map_err(|e| format!("unparseable ccusage JSON: {e}"))?;
 
     Ok(envelope.blocks.into_iter().find(|b| b.is_active && !b.is_gap))
 }
 
-/// Arranca el motor en un hilo dedicado. Detecta una vez; si no hay motor emite
-/// `engine-missing` y termina. Si lo hay, poll en bucle emitiendo:
-///   · `blocks-update`  → bloque activo (payload = Block)
-///   · `blocks-idle`    → no hay bloque activo ahora mismo
-///   · `engine-error`   → fallo puntual de este ciclo (payload = mensaje)
-///   · `engine-detected`→ una vez, con la etiqueta del motor
+/// Starts the engine on a dedicated thread. Detects once; if there's no engine
+/// it emits `engine-missing` and returns. If there is one, polls in a loop emitting:
+///   · `blocks-update`  → active block (payload = Block)
+///   · `blocks-idle`    → no active block right now
+///   · `engine-error`   → one-off failure of this cycle (payload = message)
+///   · `engine-detected`→ once, with the engine's label
 pub fn start(app: AppHandle) {
     thread::spawn(move || {
         let engine = match detect() {
@@ -305,8 +305,8 @@ pub fn start(app: AppHandle) {
         loop {
             match poll_once(engine) {
                 Ok(Some(block)) => {
-                    // % restante de la ventana de 5h para el anillo del tray —
-                    // mismo criterio que applyEstimated() en main.js.
+                    // % remaining of the 5h window for the tray ring —
+                    // same criterion as applyEstimated() in main.js.
                     let pct_remaining = block
                         .projection
                         .as_ref()
@@ -316,7 +316,7 @@ pub fn start(app: AppHandle) {
                     let _ = app.emit("blocks-update", &block);
                 }
                 Ok(None) => {
-                    // Sin bloque activo: ventana sin gastar, anillo lleno.
+                    // No active block: window not being spent, ring full.
                     crate::tray_icon::set_progress(&app, 100.0);
                     let _ = app.emit("blocks-idle", ());
                 }
@@ -333,8 +333,8 @@ pub fn start(app: AppHandle) {
 mod tests {
     use super::*;
 
-    /// Salida real de `ccusage v20 blocks --active --json` (capturada 2026-07-16).
-    /// Bloquea el contrato del modelo serde contra el JSON verdadero.
+    /// Real output of `ccusage v20 blocks --active --json` (captured 2026-07-16).
+    /// Locks the serde model's contract against the real JSON.
     const REAL_SAMPLE: &str = r#"{
       "blocks": [{
         "actualEndTime": "2026-07-16T08:54:57.757Z",
@@ -355,33 +355,33 @@ mod tests {
 
     #[test]
     fn parses_real_active_block() {
-        let env: BlocksEnvelope = serde_json::from_str(REAL_SAMPLE).expect("debe parsear");
+        let env: BlocksEnvelope = serde_json::from_str(REAL_SAMPLE).expect("must parse");
         let block = env
             .blocks
             .into_iter()
             .find(|b| b.is_active && !b.is_gap)
-            .expect("hay bloque activo");
+            .expect("there's an active block");
         assert_eq!(block.total_tokens, 27_769_638);
         assert_eq!(block.token_counts.output_tokens, 227_752);
         assert_eq!(block.projection.unwrap().remaining_minutes, 185);
         assert!(block.burn_rate.unwrap().cost_per_hour > 0.0);
     }
 
-    /// Un bloque "gap" omite burnRate/projection: no debe romper el parseo.
+    /// A "gap" block omits burnRate/projection: it must not break parsing.
     #[test]
     fn tolerates_gap_block_missing_fields() {
         let json = r#"{"blocks":[{"id":"x","isGap":true,"isActive":false}]}"#;
-        let env: BlocksEnvelope = serde_json::from_str(json).expect("gap parsea");
+        let env: BlocksEnvelope = serde_json::from_str(json).expect("gap parses");
         let b = &env.blocks[0];
         assert!(b.is_gap);
         assert!(b.burn_rate.is_none());
         assert!(b.projection.is_none());
     }
 
-    /// JSON vacío / sin bloques: envelope válido, cero bloques.
+    /// Empty JSON / no blocks: valid envelope, zero blocks.
     #[test]
     fn tolerates_empty() {
-        let env: BlocksEnvelope = serde_json::from_str("{}").expect("vacío parsea");
+        let env: BlocksEnvelope = serde_json::from_str("{}").expect("empty parses");
         assert!(env.blocks.is_empty());
     }
 }

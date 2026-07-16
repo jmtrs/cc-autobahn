@@ -1,15 +1,15 @@
-//! sensor — dato OFICIAL vía statusLine de Claude Code (D12).
+//! sensor — OFFICIAL data via Claude Code's statusLine (D12).
 //!
-//! cc-autobahn es, además de la ventana, el comando `statusLine` que Claude Code
-//! invoca pasándole el JSON de sesión por stdin — la ÚNICA fuente de `rate_limits`
-//! oficial (ventana de 5 h / 7 d). El mismo binario funciona en dos modos:
-//!   · `cc-autobahn statusline` → lee stdin, reemite la línea previa del usuario
-//!     (chain, D-new-3) y vuelca el JSON a un fichero que la ventana tailea.
-//!   · sin args → modo GUI (lo decide `main` antes de construir la webview).
+//! cc-autobahn is, in addition to the window, the `statusLine` command that Claude Code
+//! invokes, passing it the session JSON via stdin — the ONLY source of official
+//! `rate_limits` (5h / 7d window). The same binary works in two modes:
+//!   · `cc-autobahn statusline` → reads stdin, re-emits the user's previous line
+//!     (chain, D-new-3) and dumps the JSON to a file that the window tails.
+//!   · no args → GUI mode (decided by `main` before building the webview).
 //!
-//! Diseño sobrio como `burn`/`engine`: cero crates nuevas, hilo dedicado con
-//! `stat` + `read` cada 2 s (D13). Ojo: `resets_at` del JSON es epoch en SEGUNDOS,
-//! no Zulu ms — se conserva crudo (NO reutiliza `burn::parse_zulu_millis`).
+//! Sober design like `burn`/`engine`: zero new crates, dedicated thread with
+//! `stat` + `read` every 2s (D13). Careful: `resets_at` in the JSON is epoch in SECONDS,
+//! not Zulu ms — kept raw (does NOT reuse `burn::parse_zulu_millis`).
 
 use std::fs;
 use std::io::{Read, Write};
@@ -21,17 +21,17 @@ use std::time::{Duration, SystemTime};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
-/// Cadencia del `stat` del fichero sensor. No es spawn de proceso (D13).
+/// Cadence of the sensor file `stat`. Not a process spawn (D13).
 const TAIL_INTERVAL_MS: u64 = 2000;
-/// Si el fichero sensor lleva más de esto sin refresco → sensor "desconectado".
+/// If the sensor file hasn't refreshed in longer than this → sensor "disconnected".
 const STALE_SECS: u64 = 60;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Directorio de configuración de Claude Code (CLAUDE_CONFIG_DIR o ~/.claude)
+// Claude Code config directory (CLAUDE_CONFIG_DIR or ~/.claude)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Resuelve `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`. Única fuente de verdad: la usa
-/// el modo statusline (escritura), el tail (lectura) y el install.
+/// Resolves `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`. Single source of truth: used
+/// by statusline mode (write), the tail (read), and install.
 fn claude_config_dir() -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
         return Some(PathBuf::from(dir));
@@ -40,22 +40,22 @@ fn claude_config_dir() -> Option<PathBuf> {
     Some(home.join(".claude"))
 }
 
-/// `~/.claude/cc-autobahn-status.json` — volcado por el modo statusline, taileado
-/// por [`start`].
+/// `~/.claude/cc-autobahn-status.json` — dumped by statusline mode, tailed
+/// by [`start`].
 fn status_file() -> Option<PathBuf> {
     Some(claude_config_dir()?.join("cc-autobahn-status.json"))
 }
 
-/// `~/.claude/cc-autobahn/prev-statusline` — comando statusLine previo del usuario,
-/// para el chain (D-new-3) y para el uninstall.
+/// `~/.claude/cc-autobahn/prev-statusline` — the user's previous statusLine command,
+/// for the chain (D-new-3) and for uninstall.
 fn prev_statusline_file() -> Option<PathBuf> {
     Some(claude_config_dir()?.join("cc-autobahn").join("prev-statusline"))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Modelo serde del JSON de statusLine (snake_case, todo condicional)
-// Estructurado contra la doc oficial + Wangnov/claude-code-statusline-pro.
-// `resets_at` = epoch en SEGUNDOS (i64).
+// Serde model of the statusLine JSON (snake_case, everything optional)
+// Structured against the official docs + Wangnov/claude-code-statusline-pro.
+// `resets_at` = epoch in SECONDS (i64).
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -101,7 +101,7 @@ struct RateLimitWindow {
     #[serde(default)]
     used_percentage: Option<f64>,
     #[serde(default)]
-    resets_at: Option<i64>, // segundos epoch
+    resets_at: Option<i64>, // seconds epoch
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -111,15 +111,15 @@ struct EffortInfo {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Payload del evento `sensor-update` al frontend
+// Payload of the `sensor-update` event to the frontend
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Datos oficiales derivados del JSON de statusLine, listos para pintar.
+/// Official data derived from the statusLine JSON, ready to render.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SensorUpdate {
     five_hour_pct: Option<f64>,
-    five_hour_resets_at: Option<i64>, // segundos epoch
+    five_hour_resets_at: Option<i64>, // seconds epoch
     seven_day_pct: Option<f64>,
     seven_day_resets_at: Option<i64>,
     model_id: Option<String>,
@@ -155,20 +155,20 @@ impl SensorUpdate {
     }
 }
 
-/// Payload del evento `sensor-state` {connected} al frontend.
+/// Payload of the `sensor-state` {connected} event to the frontend.
 #[derive(Clone, Serialize)]
 struct StatePayload {
     connected: bool,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Modo statusline — CLI: stdin → (chain previo a stdout) + fichero sensor
+// statusline mode — CLI: stdin → (previous chain to stdout) + sensor file
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Punto de entrada del modo `statusline` (`argv[1] == "statusline"`). Lee el
-/// JSON de sesión de stdin, reemite el statusLine previo del usuario (chain,
-/// D12/D-new-3) o una línea por defecto, y vuelca el JSON al fichero sensor.
-/// Sale siempre con éxito (un statusline que falla ensucia el terminal).
+/// Entry point of `statusline` mode (`argv[1] == "statusline"`). Reads the
+/// session JSON from stdin, re-emits the user's previous statusLine (chain,
+/// D12/D-new-3) or a default line, and dumps the JSON to the sensor file.
+/// Always exits successfully (a failing statusline messes up the terminal).
 pub fn run_statusline() {
     let mut buf = Vec::new();
     let _ = std::io::stdin().read_to_end(&mut buf);
@@ -180,9 +180,9 @@ pub fn run_statusline() {
     let _ = std::io::stdout().flush();
 }
 
-/// Reejecuta el statusLine previo (guardado en `cc-autobahn/prev-statusline`) con
-/// `buf` como stdin y reemite su stdout. `true` si emitió algo. macOS-first: usa
-/// `/bin/sh`; en Windows el spawn falla y se cae a la línea por defecto.
+/// Re-runs the previous statusLine (saved in `cc-autobahn/prev-statusline`) with
+/// `buf` as stdin and re-emits its stdout. `true` if it emitted something. macOS-first: uses
+/// `/bin/sh`; on Windows the spawn fails and it falls back to the default line.
 fn chain_prev_statusline(buf: &[u8]) -> bool {
     let Some(cmd_path) = prev_statusline_file() else {
         return false;
@@ -204,8 +204,8 @@ fn chain_prev_statusline(buf: &[u8]) -> bool {
     else {
         return false;
     };
-    // El JSON de sesión cabe holgadamente en el pipe del kernel; el statusLine
-    // previo lo lee o lo ignora. Si lo ignora, write_all termina igual.
+    // The session JSON comfortably fits the kernel pipe; the previous statusLine
+    // either reads it or ignores it. If it ignores it, write_all still finishes.
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(buf);
     }
@@ -219,7 +219,7 @@ fn chain_prev_statusline(buf: &[u8]) -> bool {
     true
 }
 
-/// Línea por defecto cuando no hay statusLine previo o el chain falló.
+/// Default line when there's no previous statusLine or the chain failed.
 fn print_default_line(buf: &[u8]) {
     let parsed: StatusInput = serde_json::from_slice(buf).unwrap_or_default();
     let model = parsed
@@ -236,8 +236,8 @@ fn print_default_line(buf: &[u8]) {
     println!("cc-autobahn · {model}{cost}");
 }
 
-/// Escribe `buf` al fichero sensor con write tmp + rename atómico (mode 0600).
-/// Descarta entradas que no sean JSON válido (no corromper el tail).
+/// Writes `buf` to the sensor file via tmp write + atomic rename (mode 0600).
+/// Discards entries that aren't valid JSON (avoid corrupting the tail).
 fn write_status_file(buf: &[u8]) {
     let Some(path) = status_file() else {
         return;
@@ -274,12 +274,12 @@ fn write_private(path: &std::path::Path, buf: &[u8]) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tail del fichero sensor (hilo dedicado)
+// Sensor file tail (dedicated thread)
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Arranca el tail del fichero sensor en un hilo dedicado. Emite `sensor-update`
-/// cuando el fichero cambia y `sensor-state` {connected} según su frescura.
-/// Nunca hace panic; cualquier fallo se ignora (se reintenta).
+/// Starts the sensor file tail in a dedicated thread. Emits `sensor-update`
+/// when the file changes and `sensor-state` {connected} based on its freshness.
+/// Never panics; any failure is ignored (retried).
 pub fn start(app: AppHandle) {
     thread::spawn(move || {
         let mut last_mtime: Option<SystemTime> = None;
@@ -289,14 +289,14 @@ pub fn start(app: AppHandle) {
 
             if let Some(input) = read_if_changed(&mut last_mtime) {
                 let update = SensorUpdate::from_input(&input);
-                // Dato OFICIAL: % restante para el anillo del tray = 100 - % gastado.
+                // OFFICIAL data: % remaining for the tray ring = 100 - % used.
                 if let Some(used_pct) = update.five_hour_pct {
                     crate::tray_icon::set_progress(&app, 100.0 - used_pct);
                 }
                 let _ = app.emit("sensor-update", update);
             }
 
-            // Estado de conexión: el fichero existe y es fresco (< STALE_SECS).
+            // Connection state: the file exists and is fresh (< STALE_SECS).
             let connected = is_connected(now);
             if last_connected != Some(connected) {
                 let _ = app.emit("sensor-state", StatePayload { connected });
@@ -308,7 +308,7 @@ pub fn start(app: AppHandle) {
     });
 }
 
-/// Lee y parsea el fichero sensor solo si su mtime avanzó desde la última lectura.
+/// Reads and parses the sensor file only if its mtime advanced since the last read.
 fn read_if_changed(last_mtime: &mut Option<SystemTime>) -> Option<StatusInput> {
     let path = status_file()?;
     let meta = fs::metadata(&path).ok()?;
@@ -322,7 +322,7 @@ fn read_if_changed(last_mtime: &mut Option<SystemTime>) -> Option<StatusInput> {
     Some(input)
 }
 
-/// `true` si el fichero sensor existe y se escribió hace menos de `STALE_SECS`.
+/// `true` if the sensor file exists and was written less than `STALE_SECS` ago.
 fn is_connected(now: SystemTime) -> bool {
     let Some(path) = status_file() else {
         return false;
@@ -339,15 +339,16 @@ fn is_connected(now: SystemTime) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Auto-instalación como statusLine (D12) — consent + backup + rollback.
+// Auto-install as statusLine (D12) — consent + backup + rollback.
 //
-// Muta `${cfg}/settings.json`, que es Zod-estricto en Claude Code: un campo mal
-// deja al usuario sin config. Por eso el round-trip es con `serde_json::Value`
-// (NUNCA struct tipado — no dropear campos desconocidos), con backup 0600 sin
-// pisar, escritura tmp+rename atómica y re-validación post-escritura + rollback.
-// El binario se COPIA a `${cfg}/cc-autobahn/cc-autobahn-statusline` (path estable)
-// en vez de escribir `current_exe()`, que bajo translocación de Gatekeeper sería
-// efímero (D-new-2).
+// Mutates `${cfg}/settings.json`, which is Zod-strict in Claude Code: one bad
+// field leaves the user without config. That's why the round-trip uses
+// `serde_json::Value` (NEVER a typed struct — don't drop unknown fields), with
+// a non-overwriting 0600 backup, atomic tmp+rename write, and post-write
+// re-validation + rollback. The binary is COPIED to
+// `${cfg}/cc-autobahn/cc-autobahn-statusline` (stable path) instead of writing
+// `current_exe()`, which would be ephemeral under Gatekeeper translocation
+// (D-new-2).
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STATUSLINE_BIN: &str = "cc-autobahn-statusline";
@@ -355,15 +356,15 @@ const BAK_SUFFIX: &str = ".cc-autobahn.bak";
 const APP_KEY: &str = "cc-autobahn"; // settings["cc-autobahn"]
 const PREV_KEY: &str = "prevStatusLine"; // settings["cc-autobahn"]["prevStatusLine"]
 
-/// Estado de instalación informado al frontend.
+/// Installation state reported to the frontend.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SensorStatus {
-    installed: bool, // statusLine apunta a nuestro bin
-    has_prev: bool, // hay un statusLine previo guardado (para rollback)
+    installed: bool, // statusLine points to our binary
+    has_prev: bool, // there's a previous statusLine saved (for rollback)
 }
 
-/// Vista previa de la instalación (para el modal de consentimiento).
+/// Installation preview (for the consent modal).
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallPreview {
@@ -376,24 +377,24 @@ fn settings_path() -> Option<PathBuf> {
     Some(claude_config_dir()?.join("settings.json"))
 }
 
-/// Lee y parsea settings.json como `Value`. `None` si no existe o no parsea.
+/// Reads and parses settings.json as a `Value`. `None` if it doesn't exist or fails to parse.
 fn read_settings() -> Option<serde_json::Value> {
     let path = settings_path()?;
     let data = fs::read_to_string(&path).ok()?;
     serde_json::from_str(&data).ok()
 }
 
-/// Path estable de la copia del binario (resuelve la translocación, D-new-2).
+/// Stable path for the binary copy (resolves translocation, D-new-2).
 fn stable_bin_path(cfg: &Path) -> PathBuf {
     cfg.join("cc-autobahn").join(STATUSLINE_BIN)
 }
 
-/// El comando `statusLine` que escribiremos en settings.json.
+/// The `statusLine` command we'll write to settings.json.
 fn statusline_command(cfg: &Path) -> String {
     format!("\"{}\" statusline", stable_bin_path(cfg).display())
 }
 
-/// `#[tauri::command]` ¿está instalado y apunta a nosotros?
+/// `#[tauri::command]` Is it installed and pointing to us?
 #[tauri::command]
 pub fn sensor_status() -> SensorStatus {
     let Some(v) = read_settings() else {
@@ -412,10 +413,10 @@ pub fn sensor_status() -> SensorStatus {
     SensorStatus { installed, has_prev }
 }
 
-/// `#[tauri::command]` Calcula la vista previa sin tocar nada (para confirmar).
+/// `#[tauri::command]` Computes the preview without touching anything (for confirmation).
 #[tauri::command]
 pub fn sensor_preview_install() -> Result<InstallPreview, String> {
-    let cfg = claude_config_dir().ok_or("no se pudo resolver CLAUDE_CONFIG_DIR")?;
+    let cfg = claude_config_dir().ok_or("could not resolve CLAUDE_CONFIG_DIR")?;
     let prev = read_settings()
         .as_ref()
         .and_then(|v| v.as_object())
@@ -431,11 +432,11 @@ pub fn sensor_preview_install() -> Result<InstallPreview, String> {
     })
 }
 
-/// Transforma `settings` (Value) aplicando la instalación. Devuelve el
-/// `statusLine` previo (para escribir `prev-statusline` del chain). PURA → testeable.
+/// Transforms `settings` (Value) applying the install. Returns the previous
+/// `statusLine` (to write the chain's `prev-statusline`). PURE → testable.
 ///
-/// Idempotente: si el `statusLine` actual YA apunta a nosotros, NO nos capturamos
-/// a nosotros mismos como `prev` (causaría un chain recursivo infinito en runtime).
+/// Idempotent: if the current `statusLine` ALREADY points to us, we do NOT
+/// capture ourselves as `prev` (that would cause an infinite recursive chain at runtime).
 fn apply_install(
     settings: &mut serde_json::Value,
     command: &str,
@@ -459,7 +460,7 @@ fn apply_install(
     prev
 }
 
-/// Transforma `settings` (Value) deshaciendo la instalación. PURA → testeable.
+/// Transforms `settings` (Value) undoing the install. PURE → testable.
 fn apply_uninstall(settings: &mut serde_json::Value) {
     let Some(obj) = settings.as_object_mut() else {
         return;
@@ -476,31 +477,31 @@ fn apply_uninstall(settings: &mut serde_json::Value) {
     obj.remove(APP_KEY);
 }
 
-/// `#[tauri::command]` Instala: backup → copia bin → reescribe settings → valida.
+/// `#[tauri::command]` Installs: backup → copy binary → rewrite settings → validate.
 #[tauri::command]
 pub fn install_sensor() -> Result<(), String> {
-    let cfg = claude_config_dir().ok_or("no se pudo resolver CLAUDE_CONFIG_DIR")?;
+    let cfg = claude_config_dir().ok_or("could not resolve CLAUDE_CONFIG_DIR")?;
     let settings_path = cfg.join("settings.json");
     let backup_path = cfg.join(format!("settings.json{BAK_SUFFIX}"));
 
-    // 1. settings actuales ({} si no existe). Error si existe pero no parsea.
+    // 1. Current settings ({} if it doesn't exist). Error if it exists but fails to parse.
     let mut settings: serde_json::Value = if settings_path.exists() {
         let data = fs::read_to_string(&settings_path)
-            .map_err(|e| format!("no se pudo leer settings.json: {e}"))?;
+            .map_err(|e| format!("could not read settings.json: {e}"))?;
         serde_json::from_str(&data).map_err(|_| {
-            "settings.json no es JSON estricto (¿tiene comentarios?). Configura el statusline a mano.".to_string()
+            "settings.json is not strict JSON (does it have comments?). Configure the statusline manually.".to_string()
         })?
     } else {
         serde_json::json!({})
     };
 
-    // 2. backup 0600, SIN pisar uno preexistente (patrón caveman).
+    // 2. 0600 backup, WITHOUT overwriting a pre-existing one (caveman pattern).
     if settings_path.exists() && !backup_path.exists() {
         copy_private(&settings_path, &backup_path)
-            .map_err(|e| format!("backup falló: {e}"))?;
+            .map_err(|e| format!("backup failed: {e}"))?;
     }
 
-    // 3. copiar el binario a path estable (D-new-2).
+    // 3. copy the binary to a stable path (D-new-2).
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let bin_dir = cfg.join("cc-autobahn");
     fs::create_dir_all(&bin_dir).map_err(|e| format!("create_dir: {e}"))?;
@@ -508,7 +509,7 @@ pub fn install_sensor() -> Result<(), String> {
     fs::copy(&exe, &bin_path).map_err(|e| format!("copy bin: {e}"))?;
     chmod_755(&bin_path);
 
-    // 4. transformar settings (apply_install pura) y escribir el prev-statusline.
+    // 4. transform settings (pure apply_install) and write the prev-statusline.
     let prev = apply_install(&mut settings, &statusline_command(&cfg));
     let prev_file = bin_dir.join("prev-statusline");
     match prev.as_ref().and_then(|v| v.get("command")).and_then(|c| c.as_str()) {
@@ -516,11 +517,11 @@ pub fn install_sensor() -> Result<(), String> {
             let _ = fs::write(&prev_file, cmd);
         }
         None => {
-            let _ = fs::remove_file(&prev_file); // sin prev → chain usa default line
+            let _ = fs::remove_file(&prev_file); // no prev → chain uses default line
         }
     }
 
-    // 5. escritura atómica (tmp+rename, 0600) + re-validación + rollback.
+    // 5. atomic write (tmp+rename, 0600) + re-validation + rollback.
     write_settings_atomic(&settings_path, &settings.to_string())?;
     let valid = fs::read_to_string(&settings_path)
         .ok()
@@ -532,28 +533,28 @@ pub fn install_sensor() -> Result<(), String> {
         if backup_path.exists() {
             let _ = fs::rename(&backup_path, &settings_path);
         }
-        Err("settings inválido tras escribir; se ha restaurado el backup".to_string())
+        Err("settings invalid after writing; backup has been restored".to_string())
     }
 }
 
-/// `#[tauri::command]` Desinstala: restaura el prevStatusLine (o lo elimina).
+/// `#[tauri::command]` Uninstalls: restores prevStatusLine (or removes it).
 #[tauri::command]
 pub fn uninstall_sensor() -> Result<(), String> {
-    let cfg = claude_config_dir().ok_or("no se pudo resolver CLAUDE_CONFIG_DIR")?;
+    let cfg = claude_config_dir().ok_or("could not resolve CLAUDE_CONFIG_DIR")?;
     let settings_path = cfg.join("settings.json");
     let Some(mut settings) = read_settings() else {
-        return Ok(()); // nada que deshacer
+        return Ok(()); // nothing to undo
     };
     apply_uninstall(&mut settings);
     write_settings_atomic(&settings_path, &settings.to_string())?;
     Ok(())
 }
 
-/// Escribe `bytes` en `path` vía tmp+rename atómico con modo 0600.
+/// Writes `bytes` to `path` via atomic tmp+rename with mode 0600.
 fn write_settings_atomic(path: &Path, bytes: &str) -> Result<(), String> {
     let tmp = path.with_extension("json.tmp");
     if !write_private(&tmp, bytes.as_bytes()) {
-        return Err("no se pudo escribir settings.json".to_string());
+        return Err("could not write settings.json".to_string());
     }
     fs::rename(&tmp, path).map_err(|e| format!("rename settings: {e}"))
 }
@@ -588,14 +589,14 @@ fn copy_private(src: &Path, dst: &Path) -> std::io::Result<()> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tests — contra el JSON real de statusLine (rate_limits oficial, segundos).
+// Tests — against the real statusLine JSON (official rate_limits, seconds).
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Sample con rate_limits completo (suscriptor Pro/Max), effort y coste.
+    /// Sample with full rate_limits (Pro/Max subscriber), effort, and cost.
     const SAMPLE: &str = r#"{
       "session_id": "abc-123",
       "model": { "id": "claude-opus-4-8", "display_name": "Opus" },
@@ -609,28 +610,28 @@ mod tests {
 
     #[test]
     fn parses_status_input_full() {
-        let i: StatusInput = serde_json::from_str(SAMPLE).expect("debe parsear");
+        let i: StatusInput = serde_json::from_str(SAMPLE).expect("must parse");
         let u = SensorUpdate::from_input(&i);
         assert_eq!(u.model_id.as_deref(), Some("claude-opus-4-8"));
         assert_eq!(u.effort_level.as_deref(), Some("high"));
         assert!((u.five_hour_pct.unwrap() - 23.5).abs() < 1e-6);
-        assert_eq!(u.five_hour_resets_at, Some(1_738_425_600)); // segundos, NO ms
+        assert_eq!(u.five_hour_resets_at, Some(1_738_425_600)); // seconds, NOT ms
         assert!((u.seven_day_pct.unwrap() - 41.2).abs() < 1e-6);
         assert!((u.cost_usd.unwrap() - 0.01234).abs() < 1e-9);
     }
 
-    /// No suscriptor Pro/Max → rate_limits ausente. No debe romper.
+    /// Non Pro/Max subscriber → rate_limits absent. Must not break.
     #[test]
     fn tolerates_missing_rate_limits() {
         let json = r#"{ "model": { "id": "claude-sonnet-5" } }"#;
-        let i: StatusInput = serde_json::from_str(json).expect("parsea sin rate_limits");
+        let i: StatusInput = serde_json::from_str(json).expect("parses without rate_limits");
         let u = SensorUpdate::from_input(&i);
         assert_eq!(u.five_hour_pct, None);
         assert_eq!(u.seven_day_resets_at, None);
         assert_eq!(u.model_id.as_deref(), Some("claude-sonnet-5"));
     }
 
-    /// Solo five_hour, sin seven_day (o viceversa).
+    /// Only five_hour, without seven_day (or vice versa).
     #[test]
     fn tolerates_partial_rate_limits() {
         let json = r#"{ "rate_limits": { "five_hour": { "used_percentage": 8 } } }"#;
@@ -649,23 +650,23 @@ mod tests {
         assert!(u.five_hour_pct.is_none());
     }
 
-    /// `resets_at` llega como entero de 10 dígitos (segundos) y se conserva como
-    /// i64 — trampa A1: tratarlo como ms sería 1970-01-19.
+    /// `resets_at` arrives as a 10-digit integer (seconds) and is kept as
+    /// i64 — pitfall A1: treating it as ms would give 1970-01-19.
     #[test]
     fn resets_at_kept_as_seconds() {
         let json = r#"{ "rate_limits": { "seven_day": { "used_percentage": 90, "resets_at": 1738857600 } } }"#;
         let i: StatusInput = serde_json::from_str(json).unwrap();
         let u = SensorUpdate::from_input(&i);
         let secs = u.seven_day_resets_at.unwrap();
-        assert_eq!(secs.to_string().len(), 10, "epoch en segundos = 10 dígitos");
-        assert!(secs > 1_700_000_000); // plausible para 2024+
+        assert_eq!(secs.to_string().len(), 10, "epoch in seconds = 10 digits");
+        assert!(secs > 1_700_000_000); // plausible for 2024+
     }
 
-    // ── Auto-instalación: transformación PURA de settings.json (D12) ──
+    // ── Auto-install: PURE transformation of settings.json (D12) ──
 
     #[test]
     fn install_then_uninstall_roundtrip_with_caveman() {
-        // settings con un statusLine previo (caveman) + un campo ajeno.
+        // settings with a previous statusLine (caveman) + an unrelated field.
         let mut s: serde_json::Value = serde_json::json!({
             "statusLine": { "type": "command", "command": "bash /Users/x/caveman-statusline.sh" },
             "permissions": { "allow": ["ed:x"] }
@@ -673,18 +674,18 @@ mod tests {
         let original = s.clone();
 
         apply_install(&mut s, "\"/p/cc-autobahn-statusline\" statusline");
-        // statusLine ahora apunta a nuestro bin.
+        // statusLine now points to our binary.
         assert!(s["statusLine"]["command"]
             .as_str()
             .unwrap()
             .contains("cc-autobahn-statusline"));
-        // El previo queda guardado para el rollback/chain.
+        // The previous one is saved for rollback/chain.
         assert_eq!(s["cc-autobahn"]["prevStatusLine"]["command"], original["statusLine"]["command"]);
-        // Campo ajeno PRESERVADO (round-trip con Value, no struct tipado).
+        // Unrelated field PRESERVED (round-trip with Value, not a typed struct).
         assert_eq!(s["permissions"]["allow"][0], "ed:x");
 
         apply_uninstall(&mut s);
-        // uninstall restaura el statusLine original y elimina nuestra clave.
+        // uninstall restores the original statusLine and removes our key.
         assert_eq!(s["statusLine"], original["statusLine"]);
         assert!(s.get("cc-autobahn").is_none());
         assert_eq!(s["permissions"]["allow"][0], "ed:x");
@@ -698,24 +699,24 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("cc-autobahn-statusline"));
-        // Sin statusLine previo → prevStatusLine es null.
+        // No previous statusLine → prevStatusLine is null.
         assert!(s["cc-autobahn"]["prevStatusLine"].is_null());
         apply_uninstall(&mut s);
-        // No había prev → uninstall elimina statusLine (no deja basura).
+        // No prev existed → uninstall removes statusLine (no leftover junk).
         assert!(s.get("statusLine").is_none());
         assert!(s.get("cc-autobahn").is_none());
     }
 
     #[test]
     fn reinstall_keeps_original_prev_no_loop() {
-        // Ya instalado con un prev real (caveman). Reinstalar NO debe capturarse a
-        // sí mismo como prev → evitaría un chain recursivo infinito en runtime.
+        // Already installed with a real prev (caveman). Reinstalling must NOT capture
+        // itself as prev → this avoids an infinite recursive chain at runtime.
         let mut s = serde_json::json!({
             "statusLine": { "type": "command", "command": "\"/p/cc-autobahn-statusline\" statusline" },
             "cc-autobahn": { "prevStatusLine": { "type": "command", "command": "bash prev.sh" } }
         });
         apply_install(&mut s, "\"/p/cc-autobahn-statusline\" statusline");
-        // El prev conservado sigue siendo el original, NO nuestro propio command.
+        // The preserved prev is still the original one, NOT our own command.
         assert_eq!(
             s["cc-autobahn"]["prevStatusLine"]["command"],
             serde_json::json!("bash prev.sh")

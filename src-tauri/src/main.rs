@@ -1,12 +1,12 @@
 // cc-autobahn — Tauri shell entrypoint.
 //
-// Binario dual:
-//   · `cc-autobahn statusline` → modo statusLine de Claude Code (D12): lee el
-//     JSON de sesión por stdin, reemite la línea previa del usuario (chain) y
-//     vuelca el JSON a un fichero que tailea la ventana. Se resuelve ANTES de
-//     construir la webview → sin GUI, salida rápida.
-//   · sin args → modo GUI: icono de menu-bar (D24) + panel anclado + tres
-//     sensores en hilos dedicados.
+// Dual binary:
+//   · `cc-autobahn statusline` → Claude Code statusLine mode (D12): reads the
+//     session JSON from stdin, re-emits the user's previous line (chain), and
+//     dumps the JSON to a file that the window tails. Resolved BEFORE
+//     building the webview → no GUI, fast exit.
+//   · no args → GUI mode: menu-bar icon (D24) + anchored panel + three
+//     sensors on dedicated threads.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod burn;
@@ -23,23 +23,23 @@ use tauri::{Manager, PhysicalPosition, Rect, WebviewWindow, WindowEvent};
 
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon-template.png");
 const PANEL_GAP: f64 = 4.0;
-// Clicar el icono para *cerrar* el panel dispara primero el blur (que oculta)
-// y después el evento de click del tray (que reabriría). Si el click llega
-// justo tras un hide-por-blur, se ignora (D24).
+// Clicking the icon to *close* the panel first triggers the blur (which
+// hides it) and then the tray click event (which would reopen it). If the
+// click arrives right after a hide-by-blur, it's ignored (D24).
 const REOPEN_GUARD: Duration = Duration::from_millis(300);
 
-/// Estado del botón PIN (frontend): si está activo, el hide-on-blur no oculta
-/// el panel al perder el foco.
+/// PIN button state (frontend): if active, hide-on-blur doesn't hide
+/// the panel when it loses focus.
 type PinnedState = Arc<Mutex<bool>>;
 
-/// `#[tauri::command]` El botón PIN del frontend fija/libera el panel.
+/// `#[tauri::command]` The frontend's PIN button pins/releases the panel.
 #[tauri::command]
 fn set_pinned(state: tauri::State<'_, PinnedState>, value: bool) {
     *state.lock().unwrap() = value;
 }
 
 fn main() {
-    // Modo statusline: se decide antes de tocar Tauri (sin webview, sin ventana).
+    // Statusline mode: decided before touching Tauri (no webview, no window).
     let mut args = std::env::args().skip(1);
     if args.next().as_deref() == Some("statusline") {
         sensor::run_statusline();
@@ -63,19 +63,19 @@ fn main() {
             burn::start(handle.clone());
             sensor::start(handle);
 
-            // Sin icono en Dock/Cmd+Tab (D24): vive solo en la barra de menú.
+            // No icon in Dock/Cmd+Tab (D24): lives only in the menu bar.
             #[cfg(target_os = "macos")]
             app.handle()
                 .set_activation_policy(tauri::ActivationPolicy::Accessory)?;
 
             let window = app
                 .get_webview_window("cluster")
-                .expect("cc-autobahn: falta la ventana 'cluster' declarada en tauri.conf.json");
+                .expect("cc-autobahn: missing the 'cluster' window declared in tauri.conf.json");
 
-            // Esquinas nativas redondeadas (D24 addendum): con transparent:true,
-            // Tauri/WebKit no clipea bien el CSS border-radius al alpha de la
-            // ventana (bug conocido, deja un "pico" cuadrado en las 4 esquinas).
-            // Se clipea el NSWindow a nivel de CALayer, que sí antialiasea bien.
+            // Native rounded corners (D24 addendum): with transparent:true,
+            // Tauri/WebKit doesn't clip the CSS border-radius to the window's
+            // alpha well (known bug, leaves a square "corner" on all 4 corners).
+            // The NSWindow is clipped at the CALayer level, which antialiases correctly.
             #[cfg(target_os = "macos")]
             {
                 let ns_window: &objc2_app_kit::NSWindow =
@@ -97,14 +97,14 @@ fn main() {
             window.on_window_event(move |event| {
                 if let WindowEvent::Focused(false) = event {
                     if *pinned_for_blur.lock().unwrap() {
-                        return; // PIN activo (D24): no ocultar al perder el foco.
+                        return; // PIN active (D24): don't hide on losing focus.
                     }
                     *blur_flag.lock().unwrap() = Some(Instant::now());
                     let _ = hide_window.hide();
                 }
             });
 
-            let quit_item = MenuItemBuilder::with_id("quit", "Salir de cc-autobahn").build(app)?;
+            let quit_item = MenuItemBuilder::with_id("quit", "Quit cc-autobahn").build(app)?;
             let tray_menu = MenuBuilder::new(app).item(&quit_item).build()?;
             let tray_icon = tauri::image::Image::from_bytes(TRAY_ICON_BYTES)?;
 
@@ -152,9 +152,9 @@ fn main() {
                 })
                 .build(app)?;
 
-            // Estado inicial: anillo lleno (100%) hasta el primer dato real de
-            // engine::poll o sensor::tail (D-review: icono de bandeja como
-            // anillo de progreso en vez de disco estático sin información).
+            // Initial state: full ring (100%) until the first real data from
+            // engine::poll or sensor::tail (D-review: tray icon as a
+            // progress ring instead of a static disc with no information).
             app.manage(tray);
             tray_icon::set_progress(&app.handle().clone(), 100.0);
 
@@ -164,18 +164,18 @@ fn main() {
         .expect("cc-autobahn: error while running the cluster");
 }
 
-/// Ancla el panel justo debajo del icono de tray, centrado horizontalmente y
-/// acotado al monitor que contiene el icono para no salirse de pantalla.
+/// Anchors the panel right below the tray icon, centered horizontally and
+/// clamped to the monitor that contains the icon so it doesn't go off-screen.
 fn position_under_tray(window: &WebviewWindow, tray_rect: &Rect) {
     let Ok(win_size) = window.outer_size() else {
         return;
     };
     let monitors = window.available_monitors().unwrap_or_default();
 
-    // Encuentra el monitor que contiene el centro del icono, convirtiendo el
-    // rect con una escala dada (closure para poder reintentar con la escala
-    // correcta abajo — D-review: la escala de LA VENTANA no es fiable si el
-    // tray vive en un monitor con DPI distinto en setups multi-monitor).
+    // Finds the monitor that contains the icon's center, converting the
+    // rect with a given scale (closure so it can be retried with the
+    // correct scale below — D-review: the WINDOW's scale isn't reliable if
+    // the tray lives on a monitor with a different DPI in multi-monitor setups).
     let find_host = |scale: f64| {
         let pos = tray_rect.position.to_physical::<f64>(scale);
         let size = tray_rect.size.to_physical::<f64>(scale);
@@ -190,11 +190,11 @@ fn position_under_tray(window: &WebviewWindow, tray_rect: &Rect) {
             .cloned()
     };
 
-    // Primera pasada: escala de la ventana, solo para UBICAR el monitor.
+    // First pass: window's scale, only to LOCATE the monitor.
     let guess_scale = window.scale_factor().unwrap_or(1.0);
-    // Segunda pasada: si el monitor tiene su propia escala, se usa esa para
-    // el cálculo definitivo (coincide con la de la ventana en el caso común
-    // de un solo monitor o DPI uniforme).
+    // Second pass: if the monitor has its own scale, that one is used for
+    // the final calculation (matches the window's in the common case of
+    // a single monitor or uniform DPI).
     let scale = find_host(guess_scale)
         .map(|m| m.scale_factor())
         .unwrap_or(guess_scale);

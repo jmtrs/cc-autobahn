@@ -1,143 +1,145 @@
 # cc-autobahn
 
-> Un **cuadro de instrumentos Mercedes W203** para el consumo de tokens de
-> Claude Code. Vive como icono en la barra de menú de macOS: click izquierdo
-> muestra/oculta un panel frameless, transparente y *always-on-top* anclado
-> bajo el icono, con el display VFD ámbar de matriz de puntos: `tok/s` por
-> respuesta, autonomía de la ventana de 5 h, coste y modelo activo.
+> A **Mercedes W203 instrument cluster** for Claude Code's token consumption.
+> It lives as a menu-bar icon on macOS: left click shows/hides a frameless,
+> transparent, *always-on-top* panel anchored under the icon, with the amber
+> dot-matrix VFD display: `tok/s` per response, remaining 5h window autonomy,
+> cost, and active model.
 
-cc-autobahn **no es un medidor de tokens: es una skin visual**. El parseo de
-logs, el pricing y las ventanas de facturación se delegan a
-[`ccusage`](https://ccusage.com) — ejecutado como proceso hijo vía su salida
-`--json`, sin fork ni reimplementación. El único cálculo propio es el `tok/s`
-**por respuesta** (`Δoutput / Δt_turno` sobre el tail del JSONL), que ninguna
-herramienta existente ofrece.
+cc-autobahn **is not a token meter: it's a visual skin**. Log parsing,
+pricing, and billing windows are delegated to
+[`ccusage`](https://ccusage.com) — run as a child process via its
+`--json` output, with no forking or reimplementation. The only calculation
+done in-house is `tok/s` **per response** (`Δoutput / Δt_turno` over the
+JSONL tail), which no existing tool offers.
 
-## Estado
+## Status
 
-**Fases 0–5 hechas** (solo queda Fase 6, histórico, opcional — ver
-[roadmap](./docs/ROADMAP.md) para el checklist real). El backend corre tres
-sensores en hilos dedicados:
+**Phases 0–5 done** (only Phase 6 remains, history, optional — see the
+[roadmap](./docs/ROADMAP.md) for the actual checklist). The backend runs
+three sensors on dedicated threads:
 
-- `engine` — detecta ccusage (global → npx → bunx → botón "Instalar motor" que
-  instala Bun solo, D9) y pollea `blocks --active --json` cada 15 s → coste,
-  proyección y autonomía estimada.
-- `burn` — hace tail del JSONL de la sesión activa → `tok/s` por respuesta →
-  evento `burn-tick`. El velocímetro salta al completar turno y decae con
-  muelle físico (D8/D18).
-- `sensor` — el mismo binario se auto-instala como comando `statusLine` de
-  Claude Code (consentimiento + backup + rollback, D12) y tailea el JSON
-  oficial (`rate_limits.five_hour/seven_day`) que sustituye a la proyección
-  estimada en cuanto llega.
+- `engine` — detects ccusage (global → npx → bunx → an "Install engine"
+  button that installs Bun on its own, D9) and polls `blocks --active --json`
+  every 15 s → cost, projection, and estimated autonomy.
+- `burn` — tails the JSONL of the active session → `tok/s` per response →
+  `burn-tick` event. The speedometer jumps on turn completion and decays
+  with a physical spring (D8/D18).
+- `sensor` — the same binary auto-installs itself as Claude Code's
+  `statusLine` command (consent + backup + rollback, D12) and tails the
+  official JSON (`rate_limits.five_hour/seven_day`), which replaces the
+  estimated projection as soon as it arrives.
 
-Sin motor detectado, el panel muestra el overlay "CHECK ENGINE" en vez de
-datos. Icono de bandeja (menu-bar, sin Dock ni Cmd+Tab) con anillo de
-progreso redibujado en runtime; panel con botón PIN y footer PACE/AUTO
-alternable. `cargo test` 26/26 (incluye verificación contra JSONL y
-statusline reales), `cargo clippy` limpio.
+With no engine detected, the panel shows the "CHECK ENGINE" overlay instead
+of data. Tray icon (menu-bar, no Dock or Cmd+Tab) with a progress ring
+redrawn at runtime; panel with a PIN button and a toggleable PACE/AUTO
+footer. `cargo test` 26/26 (includes verification against real JSONL and
+statusline data), `cargo clippy` clean.
 
-## Diseño (mapeo coche → tokens)
+## Design (car → tokens mapping)
 
-| Elemento W203            | Métrica Claude Code                        |
-| ------------------------ | ------------------------------------------ |
-| Velocímetro (Km/h)       | `tok/s` por respuesta (`Δoutput / Δt_turno`) |
-| Consumo (L/100 Km)       | Coste medio `$/Mtok`                        |
-| Autonomía / depósito ⛽  | Ventana de 5 h restante (barra segmentos)  |
-| Trip "AFTER START"       | Tokens/tiempo desde el último reset         |
-| Odómetro                 | Tokens totales acumulados                   |
-| Selector PRND            | Modelo activo (O/S/H/F) iluminado + effort |
-| Reloj                    | Hora real                                   |
+| W203 Element               | Claude Code Metric                           |
+| --------------------------- | --------------------------------------------- |
+| Speedometer (Km/h)          | `tok/s` per response (`Δoutput / Δt_turno`)   |
+| Fuel consumption (L/100 Km) | Average cost `$/Mtok`                         |
+| Range / fuel tank ⛽        | Remaining 5h window (segment bar)             |
+| Trip "AFTER START"          | Tokens/time since last reset                  |
+| Odometer                    | Total accumulated tokens                      |
+| PRND selector               | Active model (O/S/H/F) lit up + effort        |
+| Clock                       | Real time                                     |
 
-## Filosofía
+## Philosophy
 
-- **No reinventar el motor.** Los datos vienen de
-  [`ccusage`](https://ccusage.com) (estándar de facto), como proceso hijo.
-- **cc-autobahn = cuadro de instrumentos.** Aportamos la capa visual (skin W203)
-  y el `tok/s` por respuesta.
-- **Cero fricción.** La app se cablea sola (motor + sensor statusline) con un
-  único consentimiento (D9/D12).
-- **Precisión honesta.** El coste con suscripción es *estimado*; la autonomía
-  (`rate_limits`) es dato *oficial*; el billing real es la Claude Console (D11).
+- **Don't reinvent the engine.** Data comes from
+  [`ccusage`](https://ccusage.com) (the de facto standard), as a child process.
+- **cc-autobahn = instrument cluster.** We provide the visual layer (W203
+  skin) and the `tok/s` per response calculation.
+- **Zero friction.** The app wires itself up (engine + statusline sensor)
+  with a single consent prompt (D9/D12).
+- **Honest precision.** Cost under a subscription is *estimated*; the
+  autonomy (`rate_limits`) is *official* data; actual billing is the Claude
+  Console (D11).
 
-## Fuentes y cadencias
+## Sources and cadences
 
-| Sensor | Cadencia | Qué da |
+| Sensor | Cadence | What it provides |
 | ------ | -------- | ------ |
-| `ccusage blocks --active --json` | 10–30 s | burn medio, proyección, coste |
-| Tail de `~/.claude/projects/**/*.jsonl` | por turno (evento) | `tok/s` por respuesta |
-| Statusline JSON (sensor auto-instalado) | push | `rate_limits.five_hour`/`seven_day` oficial |
+| `ccusage blocks --active --json` | 10–30 s | average burn, projection, cost |
+| Tail of `~/.claude/projects/**/*.jsonl` | per turn (event) | `tok/s` per response |
+| Statusline JSON (auto-installed sensor) | push | official `rate_limits.five_hour`/`seven_day` |
 
-> **No es instantáneo.** El JSONL solo estampa `usage` al cerrar el turno (validado
-> empíricamente, D8): la aguja salta al completar y decae, no reacciona
-> mid-generación.
+> **It's not instantaneous.** The JSONL only stamps `usage` when the turn
+> closes (empirically validated, D8): the needle jumps on completion and
+> decays, it doesn't react mid-generation.
 
-## Desarrollo
+## Development
 
-Requisitos: [Node.js](https://nodejs.org/), [Rust](https://rustup.rs/) y las
-[dependencias de Tauri v2](https://v2.tauri.app/start/prerequisites/).
+Requirements: [Node.js](https://nodejs.org/), [Rust](https://rustup.rs/), and
+the [Tauri v2 dependencies](https://v2.tauri.app/start/prerequisites/).
 
 ```bash
 npm install          # Vite + Tauri CLI
-npm run tauri dev    # compila Rust y abre el cluster (dev, puerto 1420)
-npm run tauri build  # binario de release
+npm run tauri dev    # builds Rust and opens the cluster (dev, port 1420)
+npm run tauri build  # release binary
 ```
 
-Tests del backend (Rust):
+Backend tests (Rust):
 
 ```bash
 cd src-tauri && cargo test
 ```
 
-Regenerar iconos desde otro logo:
+Regenerate icons from another logo:
 
 ```bash
 node scripts/make-icon.mjs
 npx @tauri-apps/cli icon scripts/source-icon.png
 ```
 
-## Estructura
+## Structure
 
 ```
 cc-autobahn/
-├── index.html            # carcasa del cluster (display, selector PRND, overlays)
+├── index.html            # cluster shell (display, PRND selector, overlays)
 ├── src/
-│   ├── style.css         # skin ámbar VFD W203
-│   └── main.js           # render: reloj, segmentos, velocímetro con muelle,
-│                          # overlays CHECK ENGINE / sensor, PIN, footer PACE/AUTO
+│   ├── style.css         # amber VFD W203 skin
+│   └── main.js           # rendering: clock, segments, speedometer with spring,
+│                          # CHECK ENGINE / sensor overlays, PIN, PACE/AUTO footer
 ├── scripts/
-│   └── make-icon.mjs      # generador de icono ámbar (zero-dep PNG)
+│   └── make-icon.mjs      # amber icon generator (zero-dep PNG)
 ├── src-tauri/
 │   ├── Cargo.toml
-│   ├── tauri.conf.json    # ventana frameless, always-on-top, transparente
-│   ├── capabilities/      # permisos v2 (core:default + core:event:default)
-│   ├── icons/             # iconos de la app + tray-icon-template.png
+│   ├── tauri.conf.json    # frameless, always-on-top, transparent window
+│   ├── capabilities/      # v2 permissions (core:default + core:event:default)
+│   ├── icons/             # app icons + tray-icon-template.png
 │   └── src/
-│       ├── main.rs        # entrypoint dual (GUI / modo statusline) + tray/menu-bar
-│       ├── engine.rs      # sensor ccusage (detect + poll blocks + install_bun)
-│       ├── burn.rs        # sensor tok/s: tail JSONL → burn-tick
-│       ├── sensor.rs      # sensor statusline oficial (auto-instalación + tail)
-│       └── tray_icon.rs   # anillo de progreso del icono de bandeja
-├── docs/                  # arquitectura, diseño, decisiones (ADR), roadmap
+│       ├── main.rs        # dual entrypoint (GUI / statusline mode) + tray/menu-bar
+│       ├── engine.rs      # ccusage sensor (detect + poll blocks + install_bun)
+│       ├── burn.rs        # tok/s sensor: tail JSONL → burn-tick
+│       ├── sensor.rs      # official statusline sensor (auto-install + tail)
+│       └── tray_icon.rs   # tray icon progress ring
+├── docs/                  # architecture, design, decisions (ADR), roadmap
 ├── vite.config.js
 └── package.json
 ```
 
-## Documentación
+## Documentation
 
-- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — capas, flujo de datos, por qué Tauri.
-- [docs/DESIGN.md](./docs/DESIGN.md) — lenguaje visual W203, paleta.
-- [docs/DATA-ENGINE.md](./docs/DATA-ENGINE.md) — ccusage, statusline, OTEL, comparativa.
-- [docs/DECISIONS.md](./docs/DECISIONS.md) — registro de decisiones (ADR) y motivos.
-- [docs/ROADMAP.md](./docs/ROADMAP.md) — fases de implementación.
+- [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) — layers, data flow, why Tauri.
+- [docs/DESIGN.md](./docs/DESIGN.md) — W203 visual language, palette.
+- [docs/DATA-ENGINE.md](./docs/DATA-ENGINE.md) — ccusage, statusline, OTEL, comparison.
+- [docs/DECISIONS.md](./docs/DECISIONS.md) — decision log (ADR) and rationale.
+- [docs/ROADMAP.md](./docs/ROADMAP.md) — implementation phases.
 
 ## Roadmap
 
-Fases 0–5 hechas (chasis, motor de datos, `tok/s` por respuesta, sensor
-statusline oficial, cero fricción, tray/menu-bar, pulido). Checklist real y
-actualizado en [docs/ROADMAP.md](./docs/ROADMAP.md) — no lo dupliques aquí,
-que se desalinea. Solo queda **Fase 6** (histórico, opcional): vista
-semanal/mensual (`ccusage daily|monthly`) e integración OTEL.
+Phases 0–5 done (chassis, data engine, `tok/s` per response, official
+statusline sensor, zero friction, tray/menu-bar, polish). The real,
+up-to-date checklist lives in [docs/ROADMAP.md](./docs/ROADMAP.md) — don't
+duplicate it here, it gets out of sync. Only **Phase 6** remains (history,
+optional): weekly/monthly view (`ccusage daily|monthly`) and OTEL
+integration.
 
-## Licencia
+## License
 
 [MIT](./LICENSE).

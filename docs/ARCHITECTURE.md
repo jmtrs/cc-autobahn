@@ -1,13 +1,13 @@
-# Arquitectura
+# Architecture
 
-## Principio rector
+## Guiding principle
 
-**cc-autobahn NO es un medidor de tokens: es un cuadro de instrumentos.**
-El cálculo de consumo, pricing y ventanas de facturación es un problema resuelto
-por [`ccusage`](https://ccusage.com). Nosotros no lo reimplementamos ni lo forkeamos
-— lo consumimos como fuente de datos. Todo el valor de este proyecto está en la
-**capa visual** (skin Mercedes W203) y en el cálculo del `tok/s` **por respuesta**
-(D8), que ninguna herramienta existente ofrece.
+**cc-autobahn is NOT a token meter: it's an instrument cluster.**
+Computing consumption, pricing, and billing windows is a problem already solved
+by [`ccusage`](https://ccusage.com). We don't reimplement it or fork it
+— we consume it as a data source. All the value of this project is in the
+**visual layer** (Mercedes W203 skin) and the **per-response** `tok/s` calculation
+(D8), which no existing tool offers.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -17,10 +17,10 @@ por [`ccusage`](https://ccusage.com). Nosotros no lo reimplementamos ni lo forke
 │  │  Frontend  │ <──────────────────────> │  Backend Rust  │  │
 │  │  (webview) │                          │  (src-tauri)   │  │
 │  │            │                          │                │  │
-│  │  · skin    │                          │  · exec ccusage│  │
-│  │    ámbar   │                          │  · tail JSONL  │  │
-│  │  · agujas/ │                          │  · detect eng. │  │
-│  │    barras  │                          │  · timers      │  │
+│  │  · amber   │                          │  · exec ccusage│  │
+│  │    skin    │                          │  · tail JSONL  │  │
+│  │  · needles/│                          │  · detect eng. │  │
+│  │    bars    │                          │  · timers      │  │
 │  └────────────┘                          └───────┬────────┘  │
 └──────────────────────────────────────────────────┼──────────┘
                                                     │
@@ -29,105 +29,105 @@ por [`ccusage`](https://ccusage.com). Nosotros no lo reimplementamos ni lo forke
                  ┌──────▼──────┐          ┌─────────▼────────┐  ┌───▼──────────┐
                  │   ccusage    │          │ ~/.claude/**.jsonl│  │ statusline   │
                  │  --json      │          │  (tail → tok/s)   │  │ JSON (rate_  │
-                 │ (motor datos)│          │                   │  │ limits)      │
+                 │ (data engine)│          │                   │  │ limits)      │
                  └──────────────┘          └───────────────────┘  └──────────────┘
 ```
 
-## Capas
+## Layers
 
-### 1. Backend Rust (`src-tauri/`)
-Responsable de **todo el I/O**. Nunca bloquea la UI.
+### 1. Rust backend (`src-tauri/`)
+Responsible for **all I/O**. Never blocks the UI.
 
-- **Ejecución de subprocesos**: `std::process::Command` desde Rust (D16). Sin
-  `tauri-plugin-shell` — ese plugin es para exec desde el frontend JS; nuestro I/O es
-  backend confiable. El motor corre en un `std::thread` dedicado (sin async framework).
-- **Detección de motor** (`engine::detect`): recorre el `$PATH` buscando `ccusage`
-  global → `npx` → `bunx` → ninguno. Ver [DATA-ENGINE.md](./DATA-ENGINE.md).
-- **Poll de ccusage** (`engine::poll_once`): ejecuta `ccusage blocks --active --json`
-  cada **15 s** (D13, ventana 10–30 s), parsea con `serde_json`, emite `blocks-update`
-  / `blocks-idle` / `engine-error` al frontend.
-- **Tail de JSONL** (`engine::burn`): sigue el log de sesión activo, calcula `tok/s`
-  **por respuesta** (`Δoutput / Δt_turno`) al completarse cada turno. Es el dato que
-  ccusage no da — pero **no es instantáneo**: el JSONL solo reporta al terminar el
-  turno (ver D8/DATA-ENGINE §Fuente 2).
-- **Sensor statusline** (`engine::sensor`): instala cc-autobahn como comando
-  `statusLine` en `~/.claude/settings.json` (consentimiento + backup + rollback, D12)
-  y tailea el socket donde su binario vuelca el JSON oficial (`rate_limits`, modelo,
-  effort, coste).
-- **Histórico** (`engine::history`): `ccusage daily|monthly --json` bajo demanda.
-- **Ventana / tray**: icono en la barra de menú de macOS (`TrayIconBuilder`, sin
-  plugin nuevo, D24), sin Dock ni Cmd+Tab (`ActivationPolicy::Accessory`). El
-  icono en sí **no es un PNG estático**: es un anillo de progreso (% de la
-  ventana de 5h restante) redibujado en runtime pixel a pixel por
-  `tray_icon.rs`, actualizado desde `engine::poll` y `sensor::tail` en cada
-  dato nuevo (D30). Click izquierdo muestra/oculta el panel, anclado justo
-  bajo el icono (posición calculada desde `TrayIconEvent::rect`); click fuera
-  lo oculta (hide-on-blur vía `WindowEvent::Focused(false)`, con guard
-  anti-carrera de 300 ms, salvo con el botón PIN activo, D26); click derecho
-  abre menú con "Salir". La ventana en sí sigue frameless, transparente
-  (requiere `macOSPrivateApi`, D14), `alwaysOnTop` y con esquinas nativas
-  redondeadas vía `CALayer` (D25). Ya no es arrastrable (sustituye D6). Config
-  en `tauri.conf.json`; permisos en `capabilities/default.json` (recortados a
-  solo `core:default` + `core:event:default` — el control de ventana ocurre
-  100% en Rust, no vía IPC).
+- **Subprocess execution**: `std::process::Command` from Rust (D16). No
+  `tauri-plugin-shell` — that plugin is for exec from the frontend JS; our I/O is
+  trusted backend code. The engine runs on a dedicated `std::thread` (no async framework).
+- **Engine detection** (`engine::detect`): walks the `$PATH` looking for `ccusage`
+  global → `npx` → `bunx` → none. See [DATA-ENGINE.md](./DATA-ENGINE.md).
+- **ccusage poll** (`engine::poll_once`): runs `ccusage blocks --active --json`
+  every **15 s** (D13, 10–30 s window), parses with `serde_json`, emits `blocks-update`
+  / `blocks-idle` / `engine-error` to the frontend.
+- **JSONL tail** (`engine::burn`): follows the active session log, computes `tok/s`
+  **per response** (`Δoutput / Δt_turn`) when each turn completes. This is the data
+  ccusage doesn't provide — but it's **not instantaneous**: the JSONL only reports when the
+  turn finishes (see D8/DATA-ENGINE §Source 2).
+- **Statusline sensor** (`engine::sensor`): installs cc-autobahn as the
+  `statusLine` command in `~/.claude/settings.json` (consent + backup + rollback, D12)
+  and tails the socket where its binary dumps the official JSON (`rate_limits`, model,
+  effort, cost).
+- **History** (`engine::history`): `ccusage daily|monthly --json` on demand.
+- **Window / tray**: icon in the macOS menu bar (`TrayIconBuilder`, no
+  new plugin, D24), no Dock or Cmd+Tab (`ActivationPolicy::Accessory`). The
+  icon itself **is not a static PNG**: it's a progress ring (% of the
+  remaining 5h window) redrawn at runtime pixel by pixel by
+  `tray_icon.rs`, updated from `engine::poll` and `sensor::tail` on each
+  new data point (D30). Left click shows/hides the panel, anchored right
+  below the icon (position computed from `TrayIconEvent::rect`); clicking
+  outside hides it (hide-on-blur via `WindowEvent::Focused(false)`, with a
+  300 ms anti-race guard, except when the PIN button is active, D26); right click
+  opens a menu with "Quit". The window itself remains frameless, transparent
+  (requires `macOSPrivateApi`, D14), `alwaysOnTop`, with native rounded
+  corners via `CALayer` (D25). No longer draggable (supersedes D6). Config
+  in `tauri.conf.json`; permissions in `capabilities/default.json` (trimmed to
+  just `core:default` + `core:event:default` — window control happens
+  100% in Rust, not via IPC).
 
 ### 2. Frontend (webview, `index.html` + `src/`)
-Solo **presentación**. No hace I/O de sistema; recibe datos por IPC/eventos.
+**Presentation only**. No system I/O; receives data via IPC/events.
 
-- `index.html`: estructura del cluster (display + selector PRND + botón PIN,
-  D26 + overlay de consentimiento del sensor).
-- `src/style.css`: skin ámbar VFD W203 (ver [DESIGN.md](./DESIGN.md)).
-- `src/main.js`: render — velocímetro con muelle físico (D18), barra de
-  segmentos/autonomía (estimada `EST` o oficial con prioridad y congelado
-  ante desconexión momentánea, D23/D28), selector PRND (D7, sin kickdown,
-  D29), footer PACE/AUTO alternable (D28, persistido en `localStorage`).
+- `index.html`: cluster structure (display + PRND selector + PIN button,
+  D26 + sensor consent overlay).
+- `src/style.css`: amber VFD W203 skin (see [DESIGN.md](./DESIGN.md)).
+- `src/main.js`: rendering — speedometer with physical spring (D18), segment
+  bar/autonomy (estimated `EST` or official with priority, frozen on
+  momentary disconnection, D23/D28), PRND selector (D7, no kickdown,
+  D29), toggleable PACE/AUTO footer (D28, persisted in `localStorage`).
 
-## Flujo de datos
+## Data flow
 
-1. Al arrancar, backend detecta motor. Si falta → evento `engine-missing`
-   (o el comando `engine_status`, pull, para el primer render sin depender de
-   ganar la carrera contra el evento) → frontend muestra el overlay
-   "CHECK ENGINE" con botón "Instalar motor" (`engine::install_bun`: instala
-   Bun oficial, actualiza el `PATH` del proceso y relanza el motor sin
-   reiniciar la app, D9/Fase 4). Y ofrece conectar el sensor statusline (D12)
-   si no está instalado.
-2. Timer backend **cada 10–30 s** (D13) → `ccusage blocks --active --json` → evento
-   `blocks-update` con burn medio, proyección, coste.
-3. Tail JSONL en paralelo → al completarse un turno, evento `burn-tick` con `tok/s`
-   **por respuesta** → aguja que salta + decae (no instantánea, D8).
-4. Sensor statusline (push) → evento `sensor-update` con `rate_limits.five_hour`
-   (autonomía **oficial**), `seven_day` (tinte de borde al 80%), `model.id`
-   (selector PRND), coste. `effort.level` llega en el payload pero ya no se
-   pinta (kickdown retirado, D29).
-5. Frontend pinta: velocímetro, barra segmentos, trip, selector modelo, footer
-   PACE/AUTO. En paralelo, el icono de bandeja recibe el mismo % de autonomía
-   restante y redibuja su anillo de progreso (D30) — no pasa por el frontend,
-   se calcula directo en Rust en el punto de emisión de cada evento.
+1. On startup, the backend detects the engine. If missing → `engine-missing`
+   event (or the `engine_status` command, pull, for the first render without
+   depending on winning the race against the event) → frontend shows the
+   "CHECK ENGINE" overlay with an "Install engine" button (`engine::install_bun`:
+   installs official Bun, updates the process `PATH`, and relaunches the engine
+   without restarting the app, D9/Phase 4). It also offers to connect the
+   statusline sensor (D12) if not installed.
+2. Backend timer **every 10–30 s** (D13) → `ccusage blocks --active --json` → `blocks-update`
+   event with average burn, projection, cost.
+3. JSONL tail in parallel → when a turn completes, `burn-tick` event with `tok/s`
+   **per response** → needle that jumps and decays (not instantaneous, D8).
+4. Statusline sensor (push) → `sensor-update` event with `rate_limits.five_hour`
+   (**official** autonomy), `seven_day` (border tint at 80%), `model.id`
+   (PRND selector), cost. `effort.level` arrives in the payload but is no longer
+   rendered (kickdown removed, D29).
+5. Frontend renders: speedometer, segment bar, trip, model selector, PACE/AUTO
+   footer. In parallel, the tray icon receives the same remaining-autonomy %
+   and redraws its progress ring (D30) — this doesn't go through the frontend,
+   it's computed directly in Rust at the point where each event is emitted.
 
-## Por qué Tauri (no Electron)
+## Why Tauri (not Electron)
 
-- Webview del SO → binario ~5 MB vs ~150 MB de Electron.
-- Backend Rust nativo para exec/tail sin overhead.
-- `always-on-top` + frameless + transparente + tray/menu-bar nativos (D24).
-- Cross-OS real (macOS / Windows / Linux).
+- OS webview → ~5 MB binary vs ~150 MB for Electron.
+- Native Rust backend for exec/tail with no overhead.
+- `always-on-top` + frameless + transparent + native tray/menu-bar (D24).
+- Real cross-OS support (macOS / Windows / Linux).
 
-## Estado actual
+## Current status
 
-**Fases 0–5 hechas** (ver checklist real en [ROADMAP.md](./ROADMAP.md); solo
-queda Fase 6 opcional). Backend arranca oculto tras el icono de bandeja
-(D24) y corre tres sensores en hilos dedicados: `engine` (ccusage `blocks
---active --json` cada 15 s → coste/proyección), `burn` (tail del JSONL activo
-→ `tok/s` por respuesta → `burn-tick`, D17, con tick parcial por mensaje
-intermedio y cadencia de 200 ms, D27) y `sensor` (tail del fichero que vuelca
-el statusline → dato **oficial** `rate_limits` → `sensor-update`, D12). El
-frontend pinta velocímetro con muelle físico (D18), barra de segmentos
-(`blocks` estimado con marca "EST", o `sensor` oficial con prioridad y
-congelado ante desconexión momentánea, D23/D28), selector PRND (D7) y footer
-PACE/AUTO alternable (D28). El mismo binario es el comando `statusLine` (modo
-dual, early-return, D19) con chain del statusLine previo (D21) y
-auto-instalación con consent/backup/rollback (D20/D22). La ventana flotante
-siempre visible se sustituyó por un icono de menu-bar con panel bajo demanda
-(D24, solo macOS por ahora), con esquinas nativas redondeadas (D25) y botón
-PIN para fijarlo (D26). Ese icono de bandeja es ahora un anillo de progreso
-redibujado en runtime, no un PNG estático (D30). El kickdown (indicador de
-effort) se implementó y se retiró después por no aportar valor visual (D29).
+**Phases 0–5 done** (see the actual checklist in [ROADMAP.md](./ROADMAP.md); only
+the optional Phase 6 remains). The backend starts hidden behind the tray icon
+(D24) and runs three sensors on dedicated threads: `engine` (ccusage `blocks
+--active --json` every 15 s → cost/projection), `burn` (tail of the active JSONL
+→ `tok/s` per response → `burn-tick`, D17, with a partial tick per intermediate
+message and a 200 ms cadence, D27), and `sensor` (tail of the file the
+statusline dumps to → **official** `rate_limits` data → `sensor-update`, D12). The
+frontend renders the speedometer with a physical spring (D18), a segment bar
+(estimated `blocks` marked "EST", or official `sensor` with priority and
+frozen on momentary disconnection, D23/D28), the PRND selector (D7), and the
+toggleable PACE/AUTO footer (D28). The same binary is the `statusLine` command
+(dual mode, early-return, D19) with previous-statusLine chaining (D21) and
+consent/backup/rollback auto-installation (D20/D22). The always-visible
+floating window was replaced with a menu-bar icon with an on-demand panel
+(D24, macOS only for now), with native rounded corners (D25) and a PIN
+button to pin it (D26). That tray icon is now a progress ring redrawn at
+runtime, not a static PNG (D30). Kickdown (the effort indicator) was
+implemented and later removed for not adding visual value (D29).
