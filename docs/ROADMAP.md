@@ -30,7 +30,7 @@ Implementation order, one layer at a time, verifying before moving forward.
 
 - [x] **Validate the premise** (2026-07-16): the JSONL only reports `usage` when the
       turn ends → an instantaneous needle is impossible; redefined to **per response** (D8).
-- [x] `engine::burn` (`burn.rs`) — tail of the most recent JSONL in
+- [x] `engine::burn` (`burn/`, split into `mod.rs`/`zulu.rs`/`parser.rs`/`tail.rs` in D32) — tail of the most recent JSONL in
       `~/.claude/projects/**/*.jsonl`, EOF-start; `stat`+`read` of the active file
       every 200 ms, re-scan of which file is active every 5 s (D17).
 - [x] `Δoutput / Δt_turn` calculation on turn close (`end_turn`/`stop_sequence`,
@@ -45,7 +45,7 @@ Implementation order, one layer at a time, verifying before moving forward.
 
 - [x] **Track A — wire up `blocks-update`** (frontend only): `#odo`, `#session-time`,
       `#avg`, `#autonomie` (EST), `#segments` (projection), `.gear` from `models[]`.
-- [x] `engine::sensor` (`sensor.rs`) — dual binary mode (`statusline` →
+- [x] `engine::sensor` (`sensor/`, split into `mod.rs`/`statusline_bin.rs`/`install.rs` in D32) — dual binary mode (`statusline` →
       early-return, 10 ms; D19), chaining the previous statusLine (D21), sensor
       file written atomically, tail in a dedicated thread every 2 s → `sensor-update`/
       `sensor-state`.
@@ -67,14 +67,14 @@ Implementation order, one layer at a time, verifying before moving forward.
       painted via `engine_status()` on startup + live `engine-missing`/
       `engine-detected`/`blocks-update` events, without depending on winning the
       race against the first event).
-- [x] "INSTALL ENGINE" button (`install_bun` in `engine.rs`: official Bun
+- [x] "INSTALL ENGINE" button (`install_bun` in `engine/install.rs`: official Bun
       installer via `std::process::Command`, process `PATH` manually updated
       after installing, retries `detect()` and relaunches `engine::start`).
       macOS/Linux; on Windows a manual-install message (project still
       untested on that OS, D24). Verified live (overlay + button + text
       fixed from `white-space: pre-wrap` inherited from `.sensor-body`).
 - [x] ~~Auto-install statusline sensor~~ — done in Phase 3 (D19-D22), not
-      Phase 4: `install_sensor`/`uninstall_sensor`/`sensor_status` in `sensor.rs`.
+      Phase 4: `install_sensor`/`uninstall_sensor`/`sensor_status` in `sensor/install.rs`.
 - [ ] (Optional) Package Bun as a Tauri sidecar.
 
 ## Phase 4.5 — Tray/menu-bar (D24, brought forward, done)
@@ -99,6 +99,8 @@ Implementation order, one layer at a time, verifying before moving forward.
 - [x] System tray (show/hide, quit) — see Phase 4.5 / D24.
 - [x] PACE/AUTO footer (recent pace vs. block average; autonomy
       adjusted to pace, official sensor only) — replaces "LAST tok/s" (D28).
+- [x] Split fat files (`engine.rs`/`sensor.rs`/`burn.rs`/`main.rs`/`main.js`) into
+      concern-sized modules, no behavior change (D32).
 
 ## Phase 6 — History (optional)
 

@@ -43,27 +43,33 @@ Responsible for **all I/O**. Never blocks the UI.
   trusted backend code. The engine runs on a dedicated `std::thread` (no async framework).
 - **Engine detection** (`engine::detect`): walks the `$PATH` looking for `ccusage`
   global → `npx` → `bunx` → none. See [DATA-ENGINE.md](./DATA-ENGINE.md).
-- **ccusage poll** (`engine::poll_once`): runs `ccusage blocks --active --json`
-  every **15 s** (D13, 10–30 s window), parses with `serde_json`, emits `blocks-update`
-  / `blocks-idle` / `engine-error` to the frontend.
-- **JSONL tail** (`engine::burn`): follows the active session log, computes `tok/s`
-  **per response** (`Δoutput / Δt_turn`) when each turn completes. This is the data
-  ccusage doesn't provide — but it's **not instantaneous**: the JSONL only reports when the
-  turn finishes (see D8/DATA-ENGINE §Source 2).
-- **Statusline sensor** (`engine::sensor`): installs cc-autobahn as the
-  `statusLine` command in `~/.claude/settings.json` (consent + backup + rollback, D12)
-  and tails the socket where its binary dumps the official JSON (`rate_limits`, model,
-  effort, cost).
+- **ccusage poll** (`engine::blocks::poll_once`, called from `engine::start`): runs
+  `ccusage blocks --active --json` every **15 s** (D13, 10–30 s window), parses with
+  `serde_json`, emits `blocks-update` / `blocks-idle` / `engine-error` to the frontend.
+  `engine::install` holds the Bun auto-installer.
+- **JSONL tail** (`burn::tail::Tail`, driven by `burn::start`): follows the active
+  session log, computes `tok/s` **per response** (`Δoutput / Δt_turn`) when each turn
+  completes via the pure turn-calc logic in `burn::parser` (Zulu timestamp parsing in
+  `burn::zulu`). This is the data ccusage doesn't provide — but it's **not
+  instantaneous**: the JSONL only reports when the turn finishes (see D8/DATA-ENGINE §Source 2).
+- **Statusline sensor** (`sensor::install`): installs cc-autobahn as the
+  `statusLine` command in `~/.claude/settings.json` (consent + backup + rollback, D12).
+  `sensor::statusline_bin` is the CLI entrypoint invoked as that command (reads stdin,
+  chains the previous line, dumps the sensor file); `sensor::start` (in `sensor/mod.rs`)
+  tails that file and emits the official JSON (`rate_limits`, model, effort, cost).
 - **History** (`engine::history`): `ccusage daily|monthly --json` on demand.
-- **Window / tray**: icon in the macOS menu bar (`TrayIconBuilder`, no
-  new plugin, D24), no Dock or Cmd+Tab (`ActivationPolicy::Accessory`). The
-  icon itself **is not a static PNG**: it's a progress ring (% of the
-  remaining 5h window) redrawn at runtime pixel by pixel by
-  `tray_icon.rs`, updated from `engine::poll` and `sensor::tail` on each
-  new data point (D30). Left click shows/hides the panel, anchored right
-  below the icon (position computed from `TrayIconEvent::rect`); clicking
-  outside hides it (hide-on-blur via `WindowEvent::Focused(false)`, with a
-  300 ms anti-race guard, except when the PIN button is active, D26); right click
+- **Window / tray**: split by concern — `window.rs` owns the panel (PIN state,
+  hide-on-blur, positioning under the icon), `tray.rs` owns the menu-bar icon
+  (`TrayIconBuilder`, no new plugin, D24) + menu + click handler; `main.rs` just
+  wires the two together in `.setup()`. No Dock or Cmd+Tab
+  (`ActivationPolicy::Accessory`). The icon itself **is not a static PNG**: it's
+  a progress ring (% of the remaining 5h window) redrawn at runtime pixel by
+  pixel by `tray_icon.rs`, updated from `engine::start` and `sensor::start` on
+  each new data point (D30). Left click shows/hides the panel, anchored right
+  below the icon (position computed from `TrayIconEvent::rect` via
+  `window::position_under_tray`); clicking outside hides it (hide-on-blur via
+  `WindowEvent::Focused(false)` in `window::wire`, with a 300 ms anti-race guard
+  in `tray.rs`, except when the PIN button is active, D26); right click
   opens a menu with "Quit". The window itself remains frameless, transparent
   (requires `macOSPrivateApi`, D14), `alwaysOnTop`, with native rounded
   corners via `CALayer` (D25). No longer draggable (supersedes D6). Config
@@ -77,17 +83,20 @@ Responsible for **all I/O**. Never blocks the UI.
 - `index.html`: cluster structure (display + PRND selector + PIN button,
   D26 + sensor consent overlay).
 - `src/style.css`: amber VFD W203 skin (see [DESIGN.md](./DESIGN.md)).
-- `src/main.js`: rendering — speedometer with physical spring (D18), segment
-  bar/autonomy (estimated `EST` or official with priority, frozen on
-  momentary disconnection, D23/D28), PRND selector (D7, no kickdown,
-  D29), toggleable PACE/AUTO footer (D28, persisted in `localStorage`).
+- `src/main.js`: thin entrypoint, wires the widget modules under `src/modules/`
+  on `DOMContentLoaded`. `speedometer.js` — physical spring (D18); `trip-computer.js`
+  — segment bar/autonomy (estimated `EST` or official with priority, frozen on
+  momentary disconnection, D23/D28) + PRND selector (D7, no kickdown, D29);
+  `footer-metric.js` — toggleable PACE/AUTO footer (D28, persisted in
+  `localStorage`); `telemetry-state.js` holds the state shared between the two
+  (`lastBlock`, sensor connection, PACE/AUTO buffers) to avoid a circular import.
 
 ## Data flow
 
 1. On startup, the backend detects the engine. If missing → `engine-missing`
    event (or the `engine_status` command, pull, for the first render without
    depending on winning the race against the event) → frontend shows the
-   "CHECK ENGINE" overlay with an "Install engine" button (`engine::install_bun`:
+   "CHECK ENGINE" overlay with an "Install engine" button (`engine::install::install_bun`:
    installs official Bun, updates the process `PATH`, and relaunches the engine
    without restarting the app, D9/Phase 4). It also offers to connect the
    statusline sensor (D12) if not installed.

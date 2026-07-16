@@ -582,3 +582,46 @@ triggering two installers in parallel) was fixed with an explicit guard
 review (fresh subagent against the diff) + live test by the user
 in `tauri dev` (PATH without `npx`/`bunx`, overlay confirmed, text fixed,
 "Install engine" button functional).
+
+## D32 — Split fat files into concern-sized modules (pure refactor, no behavior change)
+
+**Decision**: `engine.rs`, `sensor.rs`, and `burn.rs` had each grown to bundle 2-3
+unrelated concerns by history (D9/D12/D17 each adding to the same file rather than
+creating a new one); `main.rs` had the Tauri bootstrap, window positioning math, and
+tray menu/click wiring all inline in one `setup()` closure; `src/main.js` had grown to
+613 lines of 8 unrelated UI widgets as flat top-level functions and globals. Split each
+into a directory module by concern, with `#[cfg(test)] mod tests` moving with the code
+they test:
+- `engine/` — `mod.rs` (`Engine` enum, `detect`, poll loop `start`), `install.rs`
+  (`install_bun` + Bun installer), `blocks.rs` (`Block`/`Projection` structs + `poll_once`).
+- `sensor/` — `mod.rs` (shared paths, `SensorUpdate`, tail `start`), `statusline_bin.rs`
+  (the `statusline` CLI entrypoint), `install.rs` (settings.json install/uninstall commands).
+- `burn/` — `mod.rs` (tail thread `start`), `zulu.rs` (Zulu timestamp parsing),
+  `parser.rs` (`TurnState`/`process_line`, pure turn-calc logic), `tail.rs` (`Tail`,
+  JSONL file tailing).
+- `window.rs` (new) — `PinnedState`, `set_pinned`, `position_under_tray`, hide-on-blur
+  wiring, the macOS corner-radius block. `tray.rs` (new) — tray menu + icon +
+  click-to-toggle (the `REOPEN_GUARD` debounce). `main.rs` thinned to arg parsing +
+  `tauri::Builder` wiring, calling `window::wire` / `tray::build`.
+- `src/modules/` (new) — `format.js` (VFD formatters), `telemetry-state.js` (shared
+  state object between `trip-computer.js` and `footer-metric.js`, avoiding a circular
+  import), `clock.js`, `speedometer.js`, `trip-computer.js`, `footer-metric.js`,
+  `engine-overlay.js`, `sensor-consent.js`, `pin-button.js`, `ipc-events.js`. `main.js`
+  is now a thin entrypoint that imports and wires these on `DOMContentLoaded`.
+
+Cross-submodule Rust items that aren't `#[tauri::command]`s are `pub(crate)`, not full
+`pub` — encapsulation preserved despite the split. `tauri::generate_handler!` needs the
+full module path to a command (a `pub use` re-export doesn't carry the macro's hidden
+generated items), so `main.rs` invokes e.g. `engine::install::install_bun`, not
+`engine::install_bun`.
+
+**Reasoning**: mechanical cleanup requested directly ("refactor everything to be
+cleaner and more separated, both JS and Rust") — no new functionality, no behavior
+change, no new Tauri commands/events, no `capabilities/default.json` change (the
+command set is identical, just relocated).
+
+**Verified**: `cargo test` 26/26 (same test names, just relocated), `cargo clippy`
+clean, `vite build` clean (19 modules transformed, no import errors), and the
+already-running `tauri dev` session (with its file watcher) auto-recompiled and
+restarted live across every Rust edit without crashing — confirming the split runs
+correctly, not just compiles.

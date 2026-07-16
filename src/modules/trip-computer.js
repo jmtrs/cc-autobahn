@@ -1,0 +1,161 @@
+// Trip-computer readouts — data from ccusage's active block (blocks-update),
+// overwritten with OFFICIAL data from the statusLine sensor once it connects
+// (D11: official data is never presented as estimated). Wired in Phase 3
+// Track A/B.
+
+import { formatDurationMs, formatHMin, formatTokens } from "./format.js";
+import { renderFooterMetric } from "./footer-metric.js";
+import { state } from "./telemetry-state.js";
+
+export const SEGMENT_COUNT = 12;
+const WINDOW_MIN = 300; // 5h billing window, in minutes
+
+let lastGearHit = null; // last active model painted, to know if the "gear changed"
+
+/** Build the autonomie segment bar (fuel-gauge style). */
+export function buildSegments(filled) {
+  const bar = document.getElementById("segments");
+  bar.innerHTML = "";
+  for (let i = 0; i < SEGMENT_COUNT; i++) {
+    const seg = document.createElement("div");
+    seg.className = i < filled ? "seg on" : "seg";
+    bar.appendChild(seg);
+  }
+}
+
+/** Lights up the PRND selector gear according to the active model (O/S/H/F).
+ *  Slides the marker to the active letter and, if it changed gear relative
+ *  to the previous one, triggers a glow pulse (D-review: animate the change
+ *  instead of just switching color abruptly). */
+export function setGear(models) {
+  if (!Array.isArray(models) || models.length === 0) return;
+  const order = ["opus", "sonnet", "haiku", "fable"];
+  const hit = order.find((m) =>
+    models.some((id) => String(id).toLowerCase().includes(m))
+  );
+  if (!hit) return;
+
+  let activeEl = null;
+  document.querySelectorAll(".gear .g").forEach((el) => {
+    const isActive = el.dataset.model === hit;
+    el.classList.toggle("active", isActive);
+    if (isActive) activeEl = el;
+  });
+
+  const gearEl = document.getElementById("gear");
+  const marker = document.getElementById("gear-marker");
+  if (activeEl && gearEl && marker) {
+    // translateY relative to .gear itself — robust against font-size/gap
+    // changes, doesn't depend on assuming a fixed row height.
+    const targetY = activeEl.offsetTop + activeEl.offsetHeight / 2;
+    marker.style.transform = `translateY(${targetY}px)`;
+  }
+
+  if (hit !== lastGearHit && lastGearHit !== null && activeEl) {
+    activeEl.classList.remove("pulse");
+    // Force reflow so the animation can re-trigger if it returns to the same letter.
+    void activeEl.offsetWidth;
+    activeEl.classList.add("pulse");
+    activeEl.addEventListener(
+      "animationend",
+      () => activeEl.classList.remove("pulse"),
+      { once: true }
+    );
+  }
+  lastGearHit = hit;
+}
+
+/** Autonomy bar + text + gear from ccusage's PROJECTION (estimated). */
+export function applyEstimated(block) {
+  const remaining = Number(block?.projection?.remainingMinutes);
+  document.getElementById("autonomie").textContent = `EST ${formatHMin(remaining)}`;
+  const filled = Number.isFinite(remaining)
+    ? Math.max(
+        0,
+        Math.min(SEGMENT_COUNT, Math.round((SEGMENT_COUNT * remaining) / WINDOW_MIN))
+      )
+    : 0;
+  buildSegments(filled);
+  setGear(block?.models);
+}
+
+/** Updates the autonomy countdown to the official 5h reset. Keeps counting
+ *  even while `sensorConnected` is momentarily false — the known reset
+ *  doesn't stop being valid just because the sensor is quiet for a while. */
+export function refreshAutonomie() {
+  if (state.fiveHourResetsAtMs <= 0) return;
+  const remainMin = (state.fiveHourResetsAtMs - Date.now()) / 60000;
+  document.getElementById("autonomie").textContent =
+    remainMin > 0 ? formatHMin(remainMin) : "—";
+}
+
+/** Paints the ccusage active block's data. odo/trip/avg always; the
+ *  derived ones (segments/autonomie/gear) only if there is NO official sensor connected. */
+export function onBlocksUpdate(block) {
+  // block = camelCase Block from engine.rs (totalTokens, costUsd, projection, models, startTime).
+  // If the 5h block rotates (new id), the previous block's PACE buffer is no
+  // longer comparable — clearing it avoids mixing "recent" data from one
+  // block with another's average (found in review: misleading info even if
+  // rare, D28).
+  if (state.lastBlock && block?.id && state.lastBlock.id !== block.id) {
+    state.recentTicks = [];
+  }
+  state.lastBlock = block;
+  const tokens = Number(block?.totalTokens) || 0;
+  document.getElementById("odo").textContent = formatTokens(tokens);
+
+  const startedAt = block?.startTime ? Date.parse(block.startTime) : NaN;
+  if (Number.isFinite(startedAt)) {
+    document.getElementById("session-time").textContent = formatDurationMs(
+      Date.now() - startedAt
+    );
+  }
+
+  const costUsd = Number(block?.costUsd) || 0;
+  const perMtok = tokens > 0 ? (costUsd / tokens) * 1e6 : 0;
+  document.getElementById("avg").textContent = `$${perMtok.toFixed(2)}`;
+
+  // Only if there was NEVER an official sensor — once there was one, a
+  // momentary pause shouldn't let ccusage override the official data (D-review).
+  if (!state.everSensorConnected) applyEstimated(block);
+}
+
+/** OFFICIAL data from the statusLine: overwrites segments/autonomie/gear/warn. */
+export function onSensorUpdate(p) {
+  state.sensorConnected = true;
+  state.everSensorConnected = true;
+  const pct = Number.isFinite(p?.fiveHourPct) ? Math.max(0, Math.min(100, p.fiveHourPct)) : 0;
+  // Segments = REMAINING autonomy, not spent (a tank that empties, not one
+  // that fills) — consistent with applyEstimated() and the fuel-pump icon.
+  buildSegments(Math.round((SEGMENT_COUNT * (100 - pct)) / 100));
+  state.fiveHourResetsAtMs = p?.fiveHourResetsAt ? Number(p.fiveHourResetsAt) * 1000 : 0;
+  refreshAutonomie();
+  if (p?.modelId) setGear([p.modelId]);
+  // Reserve tint: seven_day > 80% → red border (W203 warning light).
+  document
+    .querySelector(".screen")
+    .classList.toggle("warn", (Number(p?.sevenDayPct) || 0) > 80);
+  // Sliding buffer for the footer's AUTO metric (see footer-metric.js).
+  if (Number.isFinite(pct)) {
+    state.recentPct.push({ recvAt: Date.now(), pct });
+  }
+  renderFooterMetric();
+}
+
+/** Sensor connection. If official data NEVER arrived, falls back to the
+ *  "EST" projection. If it already did, a momentary disconnection (normal
+ *  idle, no Claude Code rendering) FREEZES as-is — jumping to ccusage's
+ *  projection here is an independent 5h window system and the jump
+ *  looked like an absurd number (e.g. official "0h17" → ccusage's
+ *  "EST 4h31", found in review). */
+export function onSensorState(p) {
+  state.sensorConnected = !!p?.connected;
+  if (state.sensorConnected) return;
+  if (state.everSensorConnected) return; // frozen: don't touch anything
+  document.querySelector(".screen").classList.remove("warn");
+  if (state.lastBlock) applyEstimated(state.lastBlock);
+  else {
+    document.getElementById("autonomie").textContent = "EST —";
+    buildSegments(0);
+  }
+}

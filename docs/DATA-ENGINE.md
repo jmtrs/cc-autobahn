@@ -126,7 +126,7 @@ Two self-installing wires. The user only gives **one consent**.
 2. **Node** present → `npx -y ccusage@latest blocks --json` (nothing to install).
 3. **Bun** present → `bunx ccusage blocks --json`.
 4. **No runtime** → amber "CHECK ENGINE" overlay with a single button
-   **"Install engine"** (`engine::install_bun`, Phase 4/D9): runs the
+   **"Install engine"** (`engine::install::install_bun`, Phase 4/D9): runs the
    official Bun installer, updates the `PATH` of the already-running process (the installer
    only adds it to the shell rc) and relaunches the engine without restarting the app.
    macOS/Linux for now.

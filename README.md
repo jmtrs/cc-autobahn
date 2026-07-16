@@ -103,8 +103,18 @@ cc-autobahn/
 ├── index.html            # cluster shell (display, PRND selector, overlays)
 ├── src/
 │   ├── style.css         # amber VFD W203 skin
-│   └── main.js           # rendering: clock, segments, speedometer with spring,
-│                          # CHECK ENGINE / sensor overlays, PIN, PACE/AUTO footer
+│   ├── main.js           # thin entrypoint: wires all modules on DOMContentLoaded
+│   └── modules/
+│       ├── format.js         # VFD number formatters (tok/s, tokens, h:min)
+│       ├── telemetry-state.js # shared state (lastBlock/sensor/pace buffers)
+│       ├── clock.js          # trip-computer clock tick
+│       ├── speedometer.js    # tok/s spring animation + burn-tick handler
+│       ├── trip-computer.js  # segments, gear, odo/avg, blocks/sensor handlers
+│       ├── footer-metric.js  # PACE/AUTO footer toggle + computation
+│       ├── engine-overlay.js # CHECK ENGINE overlay + install_bun button
+│       ├── sensor-consent.js # sensor connect/disconnect consent UI
+│       ├── pin-button.js     # PIN button (pins panel open)
+│       └── ipc-events.js     # wires backend events to the modules above
 ├── scripts/
 │   └── make-icon.mjs      # amber icon generator (zero-dep PNG)
 ├── src-tauri/
@@ -113,10 +123,12 @@ cc-autobahn/
 │   ├── capabilities/      # v2 permissions (core:default + core:event:default)
 │   ├── icons/             # app icons + tray-icon-template.png
 │   └── src/
-│       ├── main.rs        # dual entrypoint (GUI / statusline mode) + tray/menu-bar
-│       ├── engine.rs      # ccusage sensor (detect + poll blocks + install_bun)
-│       ├── burn.rs        # tok/s sensor: tail JSONL → burn-tick
-│       ├── sensor.rs      # official statusline sensor (auto-install + tail)
+│       ├── main.rs        # dual entrypoint (GUI / statusline mode) + Tauri bootstrap
+│       ├── window.rs      # PinnedState, hide-on-blur, panel positioning
+│       ├── tray.rs        # menu-bar menu + icon + click-to-toggle
+│       ├── engine/        # ccusage sensor: detect (mod.rs) + install_bun (install.rs) + poll (blocks.rs)
+│       ├── burn/          # tok/s sensor: zulu parsing + turn calc (parser.rs) + JSONL tail (tail.rs)
+│       ├── sensor/         # official statusline sensor: mod.rs (tail) + statusline_bin.rs (CLI mode) + install.rs (settings.json)
 │       └── tray_icon.rs   # tray icon progress ring
 ├── docs/                  # architecture, design, decisions (ADR), roadmap
 ├── vite.config.js
