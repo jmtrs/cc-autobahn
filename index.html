@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>cc-autobahn</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <!-- data-tauri-drag-region makes the whole cluster draggable (frameless window). -->
+    <main class="cluster" data-tauri-drag-region>
+      <div class="screen" data-tauri-drag-region>
+        <!-- Top band: trip-computer header, like "AFTER START" -->
+        <div class="row header">
+          <span class="label">AFTER START</span>
+        </div>
+
+        <!-- Main readout grid -->
+        <div class="grid">
+          <div class="cell">
+            <span class="big" id="odo">1.24M</span>
+            <span class="unit">tok</span>
+          </div>
+          <div class="cell">
+            <span class="big" id="session-time">0:40</span>
+            <span class="unit">h</span>
+          </div>
+
+          <div class="cell">
+            <span class="big" id="burn">4.1k</span>
+            <span class="unit">tok/s</span>
+          </div>
+          <div class="cell">
+            <span class="big" id="avg">$0.42</span>
+            <span class="unit">/Mtok</span>
+          </div>
+        </div>
+
+        <!-- Bottom line: per-response burn + clock, like "106 Km/h   16:57" (D8) -->
+        <div class="row footer">
+          <span class="ghost" id="burn-inst">106 tok/s</span>
+          <span class="clock" id="clock">--:--</span>
+        </div>
+
+        <!-- Autonomie segment bar (5h window), like the coolant gauge -->
+        <div class="row gauge">
+          <span class="fuel">&#9973;</span>
+          <div class="segments" id="segments" aria-label="autonomia ventana 5h">
+            <!-- segments injected by JS -->
+          </div>
+          <span class="autonomie" id="autonomie">3h12</span>
+        </div>
+      </div>
+
+      <!-- PRND-style selector: active model lit, rest dimmed -->
+      <div class="gear" data-tauri-drag-region>
+        <span class="g active" data-model="opus">O</span>
+        <span class="g" data-model="sonnet">S</span>
+        <span class="g" data-model="haiku">H</span>
+        <span class="g" data-model="fable">F</span>
+        <span class="kick" id="kick" title="effort">&#9642;&#9642;&#9642;&#9642;</span>
+      </div>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,21 @@
+# Dependencias
+node_modules/
+
+# Build artifacts
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editores / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs y locales
+*.log
+*.tsbuildinfo

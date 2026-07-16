@@ -1,0 +1,199 @@
+/* cc-autobahn — Mercedes W203 amber trip-computer skin.
+   Visual shell only. Colors + layout tuned to the VFD dot-matrix look:
+   near-black background, warm amber glow, condensed digits. */
+
+:root {
+  --amber: #ff9a1f;         /* main amber */
+  --amber-dim: #7a3d08;     /* unlit / dimmed segments */
+  --amber-glow: #ffb347;    /* highlight glow */
+  --bg: #0a0705;            /* display glass */
+  --bezel: #17120d;         /* surrounding bezel */
+  --font: "Menlo", "DejaVu Sans Mono", ui-monospace, monospace;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  user-select: none;
+  cursor: default;
+}
+
+html,
+body {
+  background: transparent; /* frameless transparent window */
+  overflow: hidden;
+  width: 100vw;
+  height: 100vh;
+}
+
+.cluster {
+  display: flex;
+  gap: 6px;
+  width: 100vw;
+  height: 100vh;
+  padding: 8px;
+  background: var(--bezel);
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px #000, 0 6px 20px rgba(0, 0, 0, 0.6);
+}
+
+.screen {
+  position: relative;
+  flex: 1;
+  background: radial-gradient(120% 140% at 50% 0%, #140d06 0%, var(--bg) 70%);
+  border-radius: 6px;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  box-shadow: inset 0 0 24px rgba(255, 154, 31, 0.06),
+    inset 0 0 0 1px rgba(255, 154, 31, 0.08);
+  color: var(--amber);
+  font-family: var(--font);
+  text-shadow: 0 0 6px rgba(255, 154, 31, 0.5);
+  letter-spacing: 0.06em;
+}
+
+/* faint scanline / dot-matrix texture */
+.screen::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  pointer-events: none;
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(0, 0, 0, 0.18) 0px,
+    rgba(0, 0, 0, 0.18) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+  mix-blend-mode: multiply;
+}
+
+.row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.header .label {
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  opacity: 0.8;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px 16px;
+  margin: 2px 0;
+}
+
+.cell {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.big {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--amber-glow);
+  text-shadow: 0 0 8px rgba(255, 179, 71, 0.6);
+}
+
+.unit {
+  font-size: 10px;
+  opacity: 0.7;
+}
+
+.footer {
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+
+.footer .ghost {
+  font-size: 12px;
+  opacity: 0.55;
+}
+
+.footer .clock {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--amber-glow);
+}
+
+/* segment gauge (autonomie / 5h window) */
+.gauge {
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.fuel {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.segments {
+  flex: 1;
+  display: flex;
+  gap: 2px;
+  height: 9px;
+  align-items: stretch;
+}
+
+.seg {
+  flex: 1;
+  background: var(--amber-dim);
+  border-radius: 1px;
+}
+
+.seg.on {
+  background: var(--amber);
+  box-shadow: 0 0 5px rgba(255, 154, 31, 0.7);
+}
+
+.autonomie {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--amber-glow);
+  font-variant-numeric: tabular-nums;
+}
+
+/* PRND-style model selector */
+.gear {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: 26px;
+  padding: 6px 0;
+  background: var(--bg);
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(255, 154, 31, 0.12);
+  font-family: var(--font);
+  font-weight: 700;
+}
+
+.gear .g {
+  font-size: 13px;
+  color: var(--amber-dim);
+  text-shadow: none;
+  transition: color 0.15s, text-shadow 0.15s;
+}
+
+.gear .g.active {
+  color: var(--amber-glow);
+  text-shadow: 0 0 8px rgba(255, 179, 71, 0.9);
+}
+
+.gear .kick {
+  font-size: 7px;
+  letter-spacing: 1px;
+  color: var(--amber);
+  opacity: 0.8;
+}
