@@ -50,9 +50,7 @@ pub fn build(
                 return;
             };
 
-            let just_hid = last_blur_hide
-                .lock()
-                .unwrap()
+            let just_hid = crate::window::lock(&last_blur_hide)
                 .map(|t| t.elapsed() < REOPEN_GUARD)
                 .unwrap_or(false);
             if just_hid {

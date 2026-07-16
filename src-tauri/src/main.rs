@@ -11,6 +11,7 @@
 
 mod burn;
 mod engine;
+mod env_lock;
 mod sensor;
 mod tray;
 mod tray_icon;

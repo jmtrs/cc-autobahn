@@ -37,7 +37,7 @@ pub fn install_bun(app: AppHandle) -> Result<String, String> {
 /// `~/.bun/bin`, the fixed destination of the official installer.
 #[cfg(unix)]
 fn bun_bin_dir() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME")?;
+    let home = crate::env_lock::var_os("HOME")?;
     Some(PathBuf::from(home).join(".bun").join("bin"))
 }
 
@@ -49,11 +49,11 @@ fn bun_bin_dir() -> Option<PathBuf> {
 /// Prepends `dir` to the current process's `PATH` (not the shell's) so that
 /// `on_path` and subsequent `Command`s find `bunx` without restarting the app.
 fn prepend_path(dir: &Path) {
-    let existing = std::env::var_os("PATH").unwrap_or_default();
+    let existing = crate::env_lock::var_os("PATH").unwrap_or_default();
     let mut paths = vec![dir.to_path_buf()];
     paths.extend(std::env::split_paths(&existing));
     if let Ok(joined) = std::env::join_paths(paths) {
-        std::env::set_var("PATH", joined);
+        crate::env_lock::set_var("PATH", joined);
     }
 }
 

@@ -213,7 +213,7 @@ mod tests {
             use std::fs::OpenOptions;
             let mut f = OpenOptions::new().write(true).open(&path).unwrap();
             f.seek(SeekFrom::End(0)).unwrap();
-            write!(f, "\n").unwrap();
+            writeln!(f).unwrap();
         }
         let t2 = tail.drain();
         assert_eq!(t2.len(), 1, "closes exactly once");
@@ -230,7 +230,7 @@ mod tests {
         // (TurnState reset per file, same as the real tail when rotating
         // sessions) and verifies the parser closes real turns with tok/s > 0.
         // Doesn't depend on any specific project → portable and without filtering paths.
-        let home = std::env::var_os("HOME").map(PathBuf::from);
+        let home = crate::env_lock::var_os("HOME").map(PathBuf::from);
         let Some(home) = home else { return }; // skip on machines without HOME
         let projects = home.join(".claude/projects");
         let Some(files) = collect_jsonl(&projects) else {

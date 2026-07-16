@@ -26,7 +26,7 @@ use tauri::{AppHandle, Emitter};
 pub use statusline_bin::run_statusline;
 
 /// Cadence of the sensor file `stat`. Not a process spawn (D13).
-const TAIL_INTERVAL_MS: u64 = 2000;
+const SENSOR_TAIL_INTERVAL_MS: u64 = 2000;
 /// If the sensor file hasn't refreshed in longer than this → sensor "disconnected".
 const STALE_SECS: u64 = 60;
 
@@ -37,10 +37,10 @@ const STALE_SECS: u64 = 60;
 /// Resolves `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`. Single source of truth: used
 /// by statusline mode (write), the tail (read), and install.
 pub(crate) fn claude_config_dir() -> Option<PathBuf> {
-    if let Some(dir) = std::env::var_os("CLAUDE_CONFIG_DIR") {
+    if let Some(dir) = crate::env_lock::var_os("CLAUDE_CONFIG_DIR") {
         return Some(PathBuf::from(dir));
     }
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let home = crate::env_lock::var_os("HOME").map(PathBuf::from)?;
     Some(home.join(".claude"))
 }
 
@@ -215,7 +215,7 @@ pub fn start(app: AppHandle) {
                 last_connected = Some(connected);
             }
 
-            thread::sleep(Duration::from_millis(TAIL_INTERVAL_MS));
+            thread::sleep(Duration::from_millis(SENSOR_TAIL_INTERVAL_MS));
         }
     });
 }

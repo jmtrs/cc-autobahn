@@ -15,7 +15,13 @@ pub type PinnedState = Arc<Mutex<bool>>;
 /// `#[tauri::command]` The frontend's PIN button pins/releases the panel.
 #[tauri::command]
 pub fn set_pinned(state: tauri::State<'_, PinnedState>, value: bool) {
-    *state.lock().unwrap() = value;
+    *lock(&state) = value;
+}
+
+/// Locks a mutex recovering from poison (a prior panic while held) instead of
+/// propagating it — a background menu-bar app has no supervisor to restart it.
+pub(crate) fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Applies the native rounded corners and wires hide-on-blur onto `window`.
@@ -45,10 +51,10 @@ pub fn wire(app: &tauri::App, window: &WebviewWindow) -> tauri::Result<Arc<Mutex
     let pinned_for_blur = app.state::<PinnedState>().inner().clone();
     window.on_window_event(move |event| {
         if let WindowEvent::Focused(false) = event {
-            if *pinned_for_blur.lock().unwrap() {
+            if *lock(&pinned_for_blur) {
                 return; // PIN active (D24): don't hide on losing focus.
             }
-            *blur_flag.lock().unwrap() = Some(Instant::now());
+            *lock(&blur_flag) = Some(Instant::now());
             let _ = hide_window.hide();
         }
     });

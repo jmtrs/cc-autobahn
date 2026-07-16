@@ -34,7 +34,7 @@ use tail::Tail;
 /// is negligible cost). Previously 1000 ms: it showed as perceptible lag between
 /// the turn's actual closure and the needle reacting; 200 ms brings it down to
 /// imperceptible without touching the cadence (5 s) for which file is active.
-const TAIL_INTERVAL_MS: u64 = 200;
+const BURN_TAIL_INTERVAL_MS: u64 = 200;
 /// How often the most recent JSONL is re-searched for (the active session can rotate).
 const ACTIVE_RESCAN_SECS: u64 = 5;
 
@@ -43,14 +43,14 @@ const ACTIVE_RESCAN_SECS: u64 = 5;
 /// panics; any failure is silently ignored (it will be retried).
 pub fn start(app: AppHandle) {
     thread::spawn(move || {
-        let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        let Some(home) = crate::env_lock::var_os("HOME").map(PathBuf::from) else {
             return;
         };
         let projects = home.join(".claude").join("projects");
         let mut tail = Tail::new();
         // Spaced-out re-scan: the `readdir` over all projects doesn't need to
         // run every tick. Drain every 1 s; re-scan every N ticks.
-        let scan_every = (ACTIVE_RESCAN_SECS * 1000 / TAIL_INTERVAL_MS).max(1);
+        let scan_every = (ACTIVE_RESCAN_SECS * 1000 / BURN_TAIL_INTERVAL_MS).max(1);
         let mut tick = 0u64;
 
         loop {
@@ -59,7 +59,7 @@ pub fn start(app: AppHandle) {
             }
             tail.pump(&app);
             tick = tick.wrapping_add(1);
-            thread::sleep(Duration::from_millis(TAIL_INTERVAL_MS));
+            thread::sleep(Duration::from_millis(BURN_TAIL_INTERVAL_MS));
         }
     });
 }
