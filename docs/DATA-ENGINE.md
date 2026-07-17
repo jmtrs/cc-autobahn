@@ -15,11 +15,17 @@ Reference version: **20.0.17**.
 ### Commands
 
 ```bash
-ccusage blocks --active --json   # active 5h block: burnRate, projection, start/end
-ccusage daily   --json           # daily history
-ccusage monthly --json           # monthly history
-ccusage session --json           # per session
+ccusage blocks --active --json         # active 5h block: burnRate, projection, start/end
+ccusage claude daily --json --since …  # daily history (History/Limits pages, D33)
+ccusage session --json                 # per session (not used yet)
 ```
+
+**Scoping matters**: cc-autobahn's History page calls `ccusage claude daily`,
+not the bare `ccusage daily`. The top-level command aggregates every agent
+ccusage detects on the machine (Codex, Gemini, etc.) if the user has those
+CLIs installed too — confirmed by running both against real data. The
+`claude` subcommand scopes to Claude Code only, which is the only thing
+this project's numbers should ever reflect.
 
 ### Fields per object
 
@@ -47,7 +53,7 @@ lands all at once after 36 s of silence). The log **never sees the in-progress t
 why an "instantaneous, reacts-as-you-type" needle is **impossible** from this source — the
 honest approach is the per-response average as a step function. It's still the differentiator
 (no competitor shows it), but under its true label (see D8/D11). Real
-streaming → OTEL with streaming, parked for Phase 6.
+streaming would need Source 4 (OTEL) — not planned, see below.
 
 ## Source 3 — Claude Code statusline JSON (self-installing sensor)
 
@@ -104,7 +110,10 @@ export OTEL_METRICS_EXPORTER=prometheus   # or otlp / console
 - `claude_code.cost.usage` — cost in USD.
 
 With Prometheus+Grafana, `rate()` over `claude_code.token.usage` = real tok/s.
-Not required for the MVP; kept as an optional future integration.
+**Deliberately not implemented** (D-review, decided when scoping Phase 6):
+adds a whole new dependency (an OTEL collector) for a real-time need that
+D8's per-response `tok/s` already covers honestly. Not on the roadmap; would
+need a fresh decision recorded in `docs/DECISIONS.md` to revisit.
 
 Docs: <https://code.claude.com/docs/en/monitoring-usage>
 
@@ -115,6 +124,7 @@ Docs: <https://code.claude.com/docs/en/monitoring-usage>
 | `ccusage blocks` | **10–30 s** (or a persistent process) | the 5h block doesn't change every second; running `npx` every 1–2 s is wasteful |
 | JSONL tail (`tok/s`) | **event-driven** (when the log is written) | no polling |
 | Statusline (`rate_limits`, model) | **push** | arrives whenever Claude Code renders |
+| `ccusage claude daily` (History/Limits) | **on-demand** (D33) | daily totals barely move within a day; fetched only when that MFD page opens, cached client-side ~5 min |
 
 ## Zero-friction strategy (the app wires itself up, D9)
 

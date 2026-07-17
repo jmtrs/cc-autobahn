@@ -23,9 +23,13 @@ needles — it's text and glowing segment bars. Reference elements:
 | "AFTER START" trip           | Tokens and time since the last reset             |
 | Odometer                    | Total accumulated tokens                          |
 | PRND selector                | **Active model** (O/S/H/F), lit up               |
-| Kickdown (throttle kick)    | Effort level (low/med/high/max)                   |
 | Clock                        | Real time                                         |
-| Coolant bar                  | Weekly window (7 days) — secondary variant        |
+| Coolant bar                  | Weekly (7d) rate-limit window, Page 2 (D33)        |
+| Trip-computer stalk button  | MFD page cycle: trip / history / limits / settings (D33) |
+
+Kickdown (effort level as small bars) was implemented and later **removed**
+(D29) — it added no visual value once tried live. Don't re-add it without a
+new decision recorded in `docs/DECISIONS.md`.
 
 ## Model selector (PRND reinterpretation)
 
@@ -50,16 +54,33 @@ indicate the **model in use**, by its initial:
 
 ```
 ┌─────────────────────────────────────┐
-│        AFTER START            ┌─┐   │
-│                               │O│   │
-│   1.24M tok      0:40 h        │S│   │
-│                               │H│   │
-│   4.1k tok/s    $0.42/Mtok    │F│   │
-│  106 tok/s ················· 16:57  │
+│  CC 320    hover hint text   ▸ PIN  ┌─┐│
+│                                     │O││
+│   1.24M tok      0:40 h             │S││
+│                                     │H││
+│   4.1k tok/s    $0.42/Mtok          │F││
+│  106 tok/s ················· 16:57  └─┘│
 ├─────────────────────────────────────┤
 │ ⛽ ▐███████░░░░░  3h12         62%  │
 └─────────────────────────────────────┘
 ```
+
+**4-page MFD (D33)**, cycled by the `▸` button next to PIN, same UX as the
+real trip-computer stalk button — no page beyond Page 0 crowds this layout
+further; each is its own screen:
+
+1. Trip computer (above, unchanged since D8/D18/D23).
+2. History — 30-day cost sparkline + fixed detail readout (not a floating
+   tooltip, this window is 440-550×150, too short/narrow for one to not
+   clip an edge).
+3. Limits — weekly (7d) rate-limit bar, today's cost per model, instant vs.
+   average burn rate.
+4. Settings — default page + which pages are in the cycle.
+
+A docked "header-hint" line between the nameplate and the PIN/MFD buttons
+shows a one-line description of whatever's under the cursor, replacing
+every native `title=` tooltip (dark-gray OS chrome, breaks the amber skin
+with no CSS-reachable fix).
 
 ## Palette
 
@@ -75,15 +96,23 @@ indicate the **model in use**, by its initial:
 
 - Near-black background with a soft radial gradient (top glow).
 - Amber `text-shadow` to simulate phosphor emission.
-- **Scanlines**: `repeating-linear-gradient` + `mix-blend-mode: multiply`.
+- **Scanlines**: two `repeating-linear-gradient`s (0deg + 90deg, crosshatch)
+  + `mix-blend-mode: multiply`, `z-index` above every page/popup (including
+  the custom dropdown) so nothing reads as floating outside the screen effect.
 - `font-variant-numeric: tabular-nums` → digits that don't jitter.
 - Wide `letter-spacing`, uppercase labels.
-- Segment bar: `.seg` / `.seg.on` divs, 2 px gap (segmented look).
+- Segment bar: `.seg` / `.seg.on` divs, 2 px gap (segmented look) — reused
+  for the checkbox (Page 3): a lit/unlit block, not a native checkmark icon.
+- **No native form chrome** (D33): custom checkbox (`.vfd-check`, no browser
+  default), custom dropdown (`.vfd-dropdown`, a button + list — a native
+  `<select>`'s popup is unstyleable OS chrome in WKWebView), no `title=`
+  tooltips anywhere (see header-hint above).
 
 ## Done
 
 - Needle/speedometer easing curve: damped spring with overshoot
   (D18), not a linear interpolation.
+- 4-page MFD cycle, docked header-hint, custom checkbox/dropdown (D33).
 
 ## Parked ideas (outside the active roadmap, see `docs/ROADMAP.md`)
 

@@ -57,7 +57,11 @@ Responsible for **all I/O**. Never blocks the UI.
   `sensor::statusline_bin` is the CLI entrypoint invoked as that command (reads stdin,
   chains the previous line, dumps the sensor file); `sensor::start` (in `sensor/mod.rs`)
   tails that file and emits the official JSON (`rate_limits`, model, effort, cost).
-- **History** (`engine::history`): `ccusage daily|monthly --json` on demand.
+- **History** (`engine::history::history_daily`): `ccusage claude daily --json`
+  (scoped to `claude` — the bare `ccusage daily` mixes in every agent ccusage
+  detects on the machine), fetched **on demand** (D33's 4th cadence class,
+  alongside D13's three) — only when the History/Limits MFD page opens, not
+  on a timer, cached client-side (`history-data.js`) for a few minutes.
 - **Window / tray**: split by concern — `window.rs` owns the panel (PIN state,
   hide-on-blur, positioning under the icon), `tray.rs` owns the menu-bar icon
   (`TrayIconBuilder`, no new plugin, D24) + menu + click handler; `main.rs` just
@@ -80,16 +84,25 @@ Responsible for **all I/O**. Never blocks the UI.
 ### 2. Frontend (webview, `index.html` + `src/`)
 **Presentation only**. No system I/O; receives data via IPC/events.
 
-- `index.html`: cluster structure (display + PRND selector + PIN button,
-  D26 + sensor consent overlay).
+- `index.html`: cluster structure — header (nameplate, header-hint, PIN/MFD
+  buttons) + a 4-page MFD (`.pages`, D33) + PRND selector + sensor/engine
+  consent overlays.
 - `src/style.css`: amber VFD W203 skin (see [DESIGN.md](./DESIGN.md)).
 - `src/main.js`: thin entrypoint, wires the widget modules under `src/modules/`
   on `DOMContentLoaded`. `speedometer.js` — physical spring (D18); `trip-computer.js`
-  — segment bar/autonomy (estimated `EST` or official with priority, frozen on
-  momentary disconnection, D23/D28) + PRND selector (D7, no kickdown, D29);
-  `footer-metric.js` — toggleable PACE/AUTO footer (D28, persisted in
-  `localStorage`); `telemetry-state.js` holds the state shared between the two
-  (`lastBlock`, sensor connection, PACE/AUTO buffers) to avoid a circular import.
+  — Page 0: segment bar/autonomy (estimated `EST` or official with priority, frozen on
+  momentary disconnection, D23/D28) + PRND selector (D7, no kickdown, D29) +
+  header-hint wiring for its own static glyphs; `footer-metric.js` — toggleable
+  PACE/AUTO footer (D28, persisted in `localStorage`); `telemetry-state.js` holds
+  the state shared between the two (`lastBlock`, sensor connection, PACE/AUTO
+  buffers, `sevenDayPct`) to avoid a circular import. MFD pages (D33):
+  `mfd-nav.js` (page-cycle button + state), `mfd-settings.js` (localStorage:
+  default page, which pages are in the cycle), `history-data.js` (shared
+  on-demand fetch, used by both Page 1 and Page 2), `history-page.js` (Page 1:
+  cost sparkline), `limits-page.js` (Page 2: weekly window, cost/model, burn
+  rate), `settings-page.js` (Page 3, incl. the custom dropdown replacing a
+  native `<select>`). `header-hint.js` is the shared "what's under the cursor"
+  line, replacing every native `title=` tooltip.
 
 ## Data flow
 
@@ -112,6 +125,10 @@ Responsible for **all I/O**. Never blocks the UI.
    footer. In parallel, the tray icon receives the same remaining-autonomy %
    and redraws its progress ring (D30) — this doesn't go through the frontend,
    it's computed directly in Rust at the point where each event is emitted.
+6. **On demand only** (D33): when the user cycles the MFD to History or
+   Limits, the frontend calls the `history_daily` command — a one-off
+   `ccusage claude daily --json` run, not part of the loop above — and
+   caches the result client-side for a few minutes.
 
 ## Why Tauri (not Electron)
 
@@ -122,21 +139,33 @@ Responsible for **all I/O**. Never blocks the UI.
 
 ## Current status
 
-**Phases 0–5 done** (see the actual checklist in [ROADMAP.md](./ROADMAP.md); only
-the optional Phase 6 remains). The backend starts hidden behind the tray icon
-(D24) and runs three sensors on dedicated threads: `engine` (ccusage `blocks
---active --json` every 15 s → cost/projection), `burn` (tail of the active JSONL
-→ `tok/s` per response → `burn-tick`, D17, with a partial tick per intermediate
-message and a 200 ms cadence, D27), and `sensor` (tail of the file the
-statusline dumps to → **official** `rate_limits` data → `sensor-update`, D12). The
-frontend renders the speedometer with a physical spring (D18), a segment bar
-(estimated `blocks` marked "EST", or official `sensor` with priority and
-frozen on momentary disconnection, D23/D28), the PRND selector (D7), and the
-toggleable PACE/AUTO footer (D28). The same binary is the `statusLine` command
-(dual mode, early-return, D19) with previous-statusLine chaining (D21) and
-consent/backup/rollback auto-installation (D20/D22). The always-visible
-floating window was replaced with a menu-bar icon with an on-demand panel
-(D24, macOS only for now), with native rounded corners (D25) and a PIN
-button to pin it (D26). That tray icon is now a progress ring redrawn at
-runtime, not a static PNG (D30). Kickdown (the effort indicator) was
-implemented and later removed for not adding visual value (D29).
+**Phases 0–6 done** (see the actual checklist in [ROADMAP.md](./ROADMAP.md);
+only two optional/future items remain — Bun sidecar, Windows/Linux). The
+backend starts hidden behind the tray icon (D24) and runs three continuous
+sensors on dedicated threads — `engine` (ccusage `blocks --active --json`
+every 15 s → cost/projection), `burn` (tail of the active JSONL → `tok/s`
+per response → `burn-tick`, D17, with a partial tick per intermediate
+message and a 200 ms cadence, D27), `sensor` (tail of the file the
+statusline dumps to → **official** `rate_limits` data → `sensor-update`,
+D12) — plus one on-demand fetch, `engine::history` (`ccusage claude daily
+--json`, only when the History/Limits page opens, D33). The frontend is a
+4-page MFD (D33) cycled by a button next to PIN: Page 0 renders the
+speedometer with a physical spring (D18), a segment bar (estimated `blocks`
+marked "EST", or official `sensor` with priority and frozen on momentary
+disconnection, D23/D28), the PRND selector (D7), and the toggleable
+PACE/AUTO footer (D28); Page 1 is a 30-day cost history sparkline; Page 2
+surfaces the official weekly rate-limit window, per-model cost, and burn
+rate (data that was already flowing in but reduced to a border tint or
+never painted before D33); Page 3 is front-end-only settings
+(`localStorage`). A docked header-hint line (`header-hint.js`) replaces
+every native `title=` tooltip, and every form control (checkbox, dropdown)
+is custom-styled — WKWebView renders native form chrome as unstyleable OS
+elements that broke the amber skin (D33). The same binary is the
+`statusLine` command (dual mode, early-return, D19) with previous-statusLine
+chaining (D21) and consent/backup/rollback auto-installation (D20/D22). The
+always-visible floating window was replaced with a menu-bar icon with an
+on-demand panel (D24, macOS only for now), with native rounded corners
+(D25) and a PIN button to pin it (D26). That tray icon is now a progress
+ring redrawn at runtime, not a static PNG (D30). Kickdown (the effort
+indicator) was implemented and later removed for not adding visual value
+(D29).
