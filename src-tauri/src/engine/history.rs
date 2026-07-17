@@ -54,8 +54,27 @@ pub struct ModelBreakdown {
 /// `#[tauri::command]` Last `HISTORY_DAYS` days of Claude usage. `Err` with a
 /// readable message if no engine is available or ccusage/parsing fails —
 /// same contract as `engine::blocks::poll_once`.
+///
+/// `async fn` + `spawn_blocking` (D37-review, same footgun D36 already fixed
+/// once for `install_bun`): a plain non-`async` `#[tauri::command]` runs on
+/// the same thread that pumps the webview's event loop, so the `.output()`
+/// subprocess spawn below froze the whole UI for however long ccusage took
+/// (cold `npx`/`bunx` resolution can be seconds). Marking the command `async`
+/// lets Tauri dispatch it onto its own async runtime instead of the main
+/// thread; `spawn_blocking` then hands the actual blocking call to a
+/// dedicated blocking-pool thread so it doesn't stall that runtime either.
+/// Return-value contract unchanged — the frontend still does a plain
+/// `await invoke("history_daily")`, no event-based rework needed (unlike
+/// `install_bun`, this has no multi-stage progress to report).
 #[tauri::command]
-pub fn history_daily() -> Result<Vec<DailyEntry>, String> {
+pub async fn history_daily() -> Result<Vec<DailyEntry>, String> {
+    let result = tauri::async_runtime::spawn_blocking(history_daily_blocking)
+        .await
+        .map_err(|e| format!("history_daily task panicked: {e}"))?;
+    result
+}
+
+fn history_daily_blocking() -> Result<Vec<DailyEntry>, String> {
     let engine = super::detect().ok_or("no engine available")?;
     let since = since_date(HISTORY_DAYS);
 
