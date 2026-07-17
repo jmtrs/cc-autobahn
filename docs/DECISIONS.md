@@ -556,10 +556,11 @@ install Bun button` cascade). Two new commands in `engine.rs`:
   D16; macOS/Linux, on Windows a manual-install message, the project still
   untested there, D24). The installer adds `~/.bun/bin` to `PATH` through
   the shell rc file (`.zshrc`/`.bashrc`), which the **already-running** cc-autobahn
-  process doesn't re-read — it's prepended by hand with
-  `std::env::set_var("PATH", ...)` after installing, so that `detect()` and the
-  subsequent `Command`s find `bunx` without requiring an app restart (D9:
-  true zero friction). If the engine appears, `engine::start` is relaunched.
+  process doesn't re-read — it's prepended into app-managed `PathState` after
+  installing, and each engine subprocess receives that value via
+  `Command::env("PATH", ...)`, so that `detect()` and the subsequent `Command`s
+  find `bunx` without requiring an app restart (D9: true zero friction). If the
+  engine appears, `engine::start` is relaunched.
 
 **Reasoning**: without this, "Phase 4 — zero friction" was half done: the
 `engine-missing` screen was already emitted since Phase 1 but the frontend only did
@@ -835,3 +836,44 @@ native run — the threshold logic, edge-detection (no repeated flash while
 sustained-critical), and the `.warn`+`.redline` combined keyframe were reviewed
 by hand rather than driven end-to-end in a live `tauri dev` session; first run
 should confirm the visual effect against real `burn-tick`/`sensor-update` data.
+
+## D38 — Multi-session JSONL tail (concurrent windows)
+
+**Decision**: `burn::tail` tracked exactly one `.jsonl` file — the single
+highest-`mtime` one under `~/.claude/projects/**/*.jsonl` (`most_recent_jsonl`).
+Replaced with `active_jsonls`, which returns every `.jsonl` written within the
+last `ACTIVE_WINDOW_SECS` (60 min), and `TailSet`, a `HashMap<PathBuf, Tail>`
+that adds newly-discovered files at EOF (same D8 zero-historical-noise rule,
+now per file) and keeps already-discovered files tailed while they still exist.
+`Tail` itself lost its `active: Option<PathBuf>` field — the map key already
+identifies the path, so `drain`/`pump` take `path: &Path` explicitly. Still
+plain `stat`-based polling at the existing 200 ms/5 s cadence (D13/D17/D27) —
+no file watcher, no new crate.
+
+**Reasoning**: D17/D27 implicitly assumed a single active Claude Code session.
+Running 2+ concurrent sessions (two terminals, common in practice) meant
+`most_recent_jsonl` silently dropped every session but whichever wrote most
+recently — the needle would jump between sessions and lose turns from the
+non-winning one, with no error, no log, nothing in the docs warning it could
+happen.
+
+**Consequence**: the 60 min freshness window is a discovery heuristic, not
+synced to ccusage's exact 5h billing block boundary — deliberately, since
+`burn` has no dependency on `engine` and shouldn't gain one just to read a
+block boundary (would break D13's independent-dedicated-threads design). A
+session first seen within the window stays tracked even if it goes quiet for
+longer than 60 min, so a long-running turn can still emit its later `end_turn`;
+old files that were already stale before app startup are ignored until they
+write again. `burn-tick` emission is unchanged: each `Tail` still
+emits independently, no new payload field to distinguish source file — the
+frontend already treats every tick identically (D8's per-response semantics),
+and with 2+ sessions closing turns in the same 200 ms window the needle
+reflects whichever tick was processed last, acceptable given the needle was
+never meant to be an aggregate.
+
+**Verified**: `cargo test` (3 new tests: `active_jsonls_excludes_stale_includes_fresh`
+covers the window boundary and the EOF-start rule via `TailSet::rescan`;
+`drain_isolates_concurrent_files` proves two files' `pos`/state don't cross-talk
+when drained independently; `rescan_keeps_known_stale_file_state` covers the
+long quiet turn case), existing `drain_partial_line_not_duplicated` updated for
+the explicit-`path` signature, `cargo clippy`/`cargo fmt --check` clean.

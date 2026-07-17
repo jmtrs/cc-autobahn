@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use super::{detect, start};
 
@@ -22,7 +22,9 @@ use super::{detect, start};
 /// `install-failed` events instead of the invoke's return value.
 #[tauri::command]
 pub fn install_bun(app: AppHandle) {
-    if let Some(engine) = detect() {
+    let path_state = app.state::<crate::path_state::PathState>();
+    let path = crate::path_state::get(&path_state);
+    if let Some(engine) = detect(path.as_deref()) {
         start(app.clone());
         let _ = app.emit("install-succeeded", engine.label());
         return;
@@ -30,17 +32,20 @@ pub fn install_bun(app: AppHandle) {
 
     std::thread::spawn(move || {
         let _ = app.emit("install-progress", "downloading");
-        if let Err(e) = run_bun_installer() {
+        let path_state = app.state::<crate::path_state::PathState>();
+        let path = crate::path_state::get(&path_state);
+        if let Err(e) = run_bun_installer(path.as_deref()) {
             let _ = app.emit("install-failed", e);
             return;
         }
 
         let _ = app.emit("install-progress", "detecting");
         if let Some(dir) = bun_bin_dir() {
-            prepend_path(&dir);
+            prepend_path(&app, &dir);
         }
 
-        match detect() {
+        let path = crate::path_state::get(&app.state::<crate::path_state::PathState>());
+        match detect(path.as_deref()) {
             Some(engine) => {
                 start(app.clone());
                 let _ = app.emit("install-succeeded", engine.label());
@@ -64,24 +69,34 @@ fn bun_bin_dir() -> Option<PathBuf> {
     None
 }
 
-/// Prepends `dir` to the current process's `PATH` (not the shell's) so that
+/// Prepends `dir` to `PathState` (not the real process `PATH`) so that
 /// `on_path` and subsequent `Command`s find `bunx` without restarting the app.
-fn prepend_path(dir: &Path) {
-    let existing = crate::env_lock::var_os("PATH").unwrap_or_default();
+fn prepend_path(app: &AppHandle, dir: &Path) {
+    let state = app.state::<crate::path_state::PathState>();
+    let existing = crate::path_state::get(&state)
+        .map(std::ffi::OsString::from)
+        .or_else(|| crate::env_lock::var_os("PATH")); // fallback if pathfix hasn't run yet
     let mut paths = vec![dir.to_path_buf()];
-    paths.extend(std::env::split_paths(&existing));
+    paths.extend(existing.iter().flat_map(std::env::split_paths));
     if let Ok(joined) = std::env::join_paths(paths) {
-        crate::env_lock::set_var("PATH", joined);
+        crate::path_state::set(&state, joined.to_string_lossy().into_owned());
     }
 }
 
 /// Official Bun installer (https://bun.sh/install). macOS/Linux only for
-/// now — the rest of the project isn't tested on Windows either (D24).
+/// now — the rest of the project isn't tested on Windows either (D24). `path`
+/// (from `PathState`) is applied to the child so the installer script itself
+/// sees the hardened PATH (Homebrew/Bun dirs), belt-and-suspenders alongside
+/// the bare launchd PATH it'd otherwise inherit.
 #[cfg(unix)]
-fn run_bun_installer() -> Result<(), String> {
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg("curl -fsSL https://bun.sh/install | bash")
+fn run_bun_installer(path: Option<&str>) -> Result<(), String> {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg("curl -fsSL https://bun.sh/install | bash");
+    if let Some(p) = path {
+        cmd.env("PATH", p);
+    }
+    let status = cmd
         .status()
         .map_err(|e| format!("could not launch the Bun installer: {e}"))?;
     if status.success() {
@@ -92,6 +107,6 @@ fn run_bun_installer() -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn run_bun_installer() -> Result<(), String> {
+fn run_bun_installer(_path: Option<&str>) -> Result<(), String> {
     Err("Automatic installation is only available on macOS/Linux for now. Install Bun manually from https://bun.sh and restart cc-autobahn.".to_string())
 }

@@ -11,6 +11,8 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use tauri::Manager;
+
 /// Directories prepended when they exist on disk, in priority order.
 fn candidates() -> Vec<PathBuf> {
     let mut dirs = vec![
@@ -43,11 +45,13 @@ pub(crate) fn hardened(existing: Option<OsString>, candidates: &[PathBuf]) -> Os
     }
 }
 
-/// Reads PATH, prepends the candidates, writes it back (under the env lock).
-pub fn apply() {
+/// Reads PATH, prepends the candidates, and stores the result in `PathState`
+/// — no longer mutates the real process PATH, see `path_state.rs` for why.
+pub fn apply(app: &tauri::AppHandle) {
     let current = crate::env_lock::var_os("PATH");
     let next = hardened(current, &candidates());
-    crate::env_lock::set_var("PATH", next);
+    let state = app.state::<crate::path_state::PathState>();
+    crate::path_state::set(&state, next.to_string_lossy().into_owned());
 }
 
 #[cfg(test)]

@@ -32,13 +32,7 @@ pub(crate) fn parse_zulu_millis(s: &str) -> Option<i64> {
         return None;
     }
     let days = days_from_civil(y, mo as u64, d as u64);
-    Some(
-        days * 86_400_000
-            + hh * 3_600_000
-            + mi * 60_000
-            + ss * 1000
-            + msec,
-    )
+    Some(days * 86_400_000 + hh * 3_600_000 + mi * 60_000 + ss * 1000 + msec)
 }
 
 /// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm,
@@ -60,7 +54,10 @@ mod tests {
     fn zulu_epoch_origin() {
         assert_eq!(parse_zulu_millis("1970-01-01T00:00:00.000Z"), Some(0));
         assert_eq!(parse_zulu_millis("1970-01-01T00:00:01.000Z"), Some(1000));
-        assert_eq!(parse_zulu_millis("1970-01-02T00:00:00.000Z"), Some(86_400_000));
+        assert_eq!(
+            parse_zulu_millis("1970-01-02T00:00:00.000Z"),
+            Some(86_400_000)
+        );
     }
 
     #[test]

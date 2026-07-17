@@ -16,7 +16,7 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 /// Cadence for `ccusage blocks` (D13: 10–30 s). The 5 h block changes slowly;
 /// polling every second would be a wasteful process spawn.
@@ -43,9 +43,12 @@ pub(crate) enum Engine {
 }
 
 impl Engine {
-    /// Base command; the caller appends `blocks --active --json`.
-    fn base_command(self) -> Command {
-        match self {
+    /// Base command; the caller appends `blocks --active --json`. `path`, when
+    /// present, comes from `PathState` (the resolved-at-startup/post-install
+    /// PATH — see `path_state.rs`) and is applied explicitly instead of
+    /// relying on the inherited process environment.
+    fn base_command(self, path: Option<&str>) -> Command {
+        let mut c = match self {
             Engine::Global => Command::new("ccusage"),
             Engine::Npx => {
                 let mut c = Command::new("npx");
@@ -57,7 +60,11 @@ impl Engine {
                 c.arg("ccusage");
                 c
             }
+        };
+        if let Some(p) = path {
+            c.env("PATH", p);
         }
+        c
     }
 
     /// Short label for the `engine-detected` event.
@@ -70,13 +77,15 @@ impl Engine {
     }
 }
 
-/// Checks the PATH once and returns the first available engine (D9).
-pub(crate) fn detect() -> Option<Engine> {
-    if on_path("ccusage") {
+/// Checks the PATH once and returns the first available engine (D9). `path`
+/// comes from `PathState`; `None` falls back to `env_lock::var_os("PATH")`
+/// (state not yet populated, e.g. called before `pathfix::apply`).
+pub(crate) fn detect(path: Option<&str>) -> Option<Engine> {
+    if on_path("ccusage", path) {
         Some(Engine::Global)
-    } else if on_path("npx") {
+    } else if on_path("npx", path) {
         Some(Engine::Npx)
-    } else if on_path("bunx") {
+    } else if on_path("bunx", path) {
         Some(Engine::Bunx)
     } else {
         None
@@ -85,16 +94,27 @@ pub(crate) fn detect() -> Option<Engine> {
 
 /// `true` if `bin` resolves on the PATH. Walks `$PATH` by hand — no extra crate,
 /// portable. On Windows it accounts for the usual executable extensions.
-fn on_path(bin: &str) -> bool {
-    let Some(path) = crate::env_lock::var_os("PATH") else {
-        return false;
+fn on_path(bin: &str, path: Option<&str>) -> bool {
+    let owned;
+    let path: &str = match path {
+        Some(p) => p,
+        None => {
+            let Some(p) = crate::env_lock::var_os("PATH") else {
+                return false;
+            };
+            owned = p;
+            let Some(s) = owned.to_str() else {
+                return false;
+            };
+            s
+        }
     };
     let exts: &[&str] = if cfg!(windows) {
         &["", ".cmd", ".exe", ".bat"]
     } else {
         &[""]
     };
-    for dir in std::env::split_paths(&path) {
+    for dir in std::env::split_paths(path) {
         for ext in exts {
             let candidate = dir.join(format!("{bin}{ext}"));
             if candidate.is_file() {
@@ -110,8 +130,9 @@ fn on_path(bin: &str) -> bool {
 /// race against the `engine-missing` event (the `start` thread may emit it
 /// before the frontend finishes registering the listener). Same pattern as `sensor_status`.
 #[tauri::command]
-pub fn engine_status() -> bool {
-    detect().is_some()
+pub fn engine_status(app: tauri::AppHandle) -> bool {
+    let path = crate::path_state::get(&app.state::<crate::path_state::PathState>());
+    detect(path.as_deref()).is_some()
 }
 
 /// Starts the engine on a dedicated thread. Detects once; if there's no engine
@@ -122,7 +143,14 @@ pub fn engine_status() -> bool {
 ///   · `engine-detected`→ once, with the engine's label
 pub fn start(app: AppHandle) {
     thread::spawn(move || {
-        let mut engine = match detect() {
+        // Read PathState ONCE at thread entry (PATH only ever changes at
+        // pathfix::apply on startup or install::prepend_path after a Bun
+        // install — and that second case already re-spawns a fresh `start`
+        // thread via install_bun, so re-reading per-iteration here would add
+        // nothing but the risk of two engine threads racing).
+        let path = crate::path_state::get(&app.state::<crate::path_state::PathState>());
+
+        let mut engine = match detect(path.as_deref()) {
             Some(e) => e,
             None => {
                 let _ = app.emit("engine-missing", ());
@@ -134,7 +162,7 @@ pub fn start(app: AppHandle) {
         let mut consecutive_failures: u32 = 0;
 
         loop {
-            match blocks::poll_once(engine) {
+            match blocks::poll_once(engine, path.as_deref()) {
                 Ok(Some(block)) => {
                     consecutive_failures = 0;
                     // % remaining of the 5h window for the tray ring —
@@ -160,7 +188,7 @@ pub fn start(app: AppHandle) {
                     // The resolved engine may have disappeared (uninstalled/moved);
                     // re-run the detection cascade instead of hammering a dead binary forever.
                     if consecutive_failures.is_multiple_of(REDETECT_AFTER_FAILURES) {
-                        if let Some(e) = detect() {
+                        if let Some(e) = detect(path.as_deref()) {
                             if e != engine {
                                 engine = e;
                                 let _ = app.emit("engine-detected", engine.label());

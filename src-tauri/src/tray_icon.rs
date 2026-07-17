@@ -137,7 +137,13 @@ fn paint(app: &AppHandle, buf: Vec<u8>) {
 /// the shared geometry.
 fn render(pct: f64) -> Vec<u8> {
     let sweep = pct / 100.0 * TAU;
-    render_ring(|angle| if angle <= sweep { ARC_ALPHA } else { TRACK_ALPHA })
+    render_ring(|angle| {
+        if angle <= sweep {
+            ARC_ALPHA
+        } else {
+            TRACK_ALPHA
+        }
+    })
 }
 
 /// Whole ring at one flat alpha — the alert blink's two frames.

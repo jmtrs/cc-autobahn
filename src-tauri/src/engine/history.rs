@@ -10,6 +10,7 @@
 //! the machine (Codex, Gemini, etc.) if the user has those CLIs installed.
 
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 
 /// How many days back the History page shows (D-review: a month of bars is
 /// enough for a trip-computer sparkline; more would need pagination, which
@@ -67,19 +68,20 @@ pub struct ModelBreakdown {
 /// `await invoke("history_daily")`, no event-based rework needed (unlike
 /// `install_bun`, this has no multi-stage progress to report).
 #[tauri::command]
-pub async fn history_daily() -> Result<Vec<DailyEntry>, String> {
-    let result = tauri::async_runtime::spawn_blocking(history_daily_blocking)
+pub async fn history_daily(app: tauri::AppHandle) -> Result<Vec<DailyEntry>, String> {
+    let path = crate::path_state::get(&app.state::<crate::path_state::PathState>());
+    let result = tauri::async_runtime::spawn_blocking(move || history_daily_blocking(path))
         .await
         .map_err(|e| format!("history_daily task panicked: {e}"))?;
     result
 }
 
-fn history_daily_blocking() -> Result<Vec<DailyEntry>, String> {
-    let engine = super::detect().ok_or("no engine available")?;
+fn history_daily_blocking(path: Option<String>) -> Result<Vec<DailyEntry>, String> {
+    let engine = super::detect(path.as_deref()).ok_or("no engine available")?;
     let since = since_date(HISTORY_DAYS);
 
     let output = engine
-        .base_command()
+        .base_command(path.as_deref())
         .args(["claude", "daily", "--json", "--since", &since])
         .output()
         .map_err(|e| format!("could not launch {}: {e}", engine.label()))?;
@@ -203,8 +205,7 @@ mod tests {
 
     #[test]
     fn parses_real_multi_model_sample() {
-        let env: DailyEnvelope =
-            serde_json::from_str(REAL_MULTI_MODEL_SAMPLE).expect("must parse");
+        let env: DailyEnvelope = serde_json::from_str(REAL_MULTI_MODEL_SAMPLE).expect("must parse");
         let models = &env.daily[0].model_breakdowns;
         assert_eq!(models.len(), 3);
         for m in models {

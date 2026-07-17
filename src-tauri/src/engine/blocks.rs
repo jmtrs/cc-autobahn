@@ -82,9 +82,9 @@ pub(crate) struct Projection {
 
 /// Runs ccusage once and returns the active block (if any).
 /// `Err` with a readable message on any spawn / exit / parse failure.
-pub(crate) fn poll_once(engine: Engine) -> Result<Option<Block>, String> {
+pub(crate) fn poll_once(engine: Engine, path: Option<&str>) -> Result<Option<Block>, String> {
     let output = engine
-        .base_command()
+        .base_command(path)
         .args(["blocks", "--active", "--json"])
         .output()
         .map_err(|e| format!("could not launch {}: {e}", engine.label()))?;
@@ -101,7 +101,10 @@ pub(crate) fn poll_once(engine: Engine) -> Result<Option<Block>, String> {
     let envelope: BlocksEnvelope = serde_json::from_slice(&output.stdout)
         .map_err(|e| format!("unparseable ccusage JSON: {e}"))?;
 
-    Ok(envelope.blocks.into_iter().find(|b| b.is_active && !b.is_gap))
+    Ok(envelope
+        .blocks
+        .into_iter()
+        .find(|b| b.is_active && !b.is_gap))
 }
 
 #[cfg(test)]

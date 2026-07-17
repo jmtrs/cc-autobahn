@@ -1,13 +1,14 @@
-//! Process-wide guard for environment variable access.
+//! Process-wide guard for environment variable reads.
 //!
-//! `std::env::set_var`/`var_os` are backed by POSIX `setenv`/`getenv`, which
-//! are not thread-safe against each other: mutating the environment on one
-//! thread while another reads it is a data race (this is why Rust 2024 marks
-//! `set_var` `unsafe`). `engine::install::prepend_path` mutates `PATH` once,
-//! from the Tauri command-handler thread, while the `engine`/`burn`/`sensor`
-//! poll threads keep reading `PATH`/`HOME`/`CLAUDE_CONFIG_DIR` in their loops.
-//! Every env read/write in the crate takes this lock first to serialize
-//! access instead of relying on the mutation window being "unlikely to hit".
+//! `PATH` is no longer mutated anywhere in this crate post-startup (see
+//! `path_state.rs`: the resolved PATH lives in app-managed state and is
+//! applied per-`Command::env(...)` instead of via `std::env::set_var`). What
+//! remains here are legitimate reads of `HOME`/`CLAUDE_CONFIG_DIR`/PATH-fallback
+//! from the `engine`/`burn`/`sensor` poll threads. This lock centralizes
+//! those reads under one call site — it does NOT protect against `getenv`/
+//! `setenv` made by Tauri/objc2/libc internals outside this module (they
+//! don't take it), so it's a namespacing convenience, not a soundness
+//! guarantee against every possible env race in the process.
 
 use std::sync::Mutex;
 
@@ -17,10 +18,4 @@ static ENV_LOCK: Mutex<()> = Mutex::new(());
 pub(crate) fn var_os(key: &str) -> Option<std::ffi::OsString> {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     std::env::var_os(key)
-}
-
-/// Sets an environment variable under the process-wide env lock.
-pub(crate) fn set_var(key: &str, value: impl AsRef<std::ffi::OsStr>) {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-    std::env::set_var(key, value);
 }

@@ -12,6 +12,7 @@
 mod burn;
 mod engine;
 mod env_lock;
+mod path_state;
 mod pathfix;
 mod sensor;
 mod tray;
@@ -22,6 +23,7 @@ use std::sync::{Arc, Mutex};
 
 use tauri::Manager;
 
+use path_state::PathState;
 use window::PinnedState;
 
 fn main() {
@@ -45,8 +47,9 @@ fn main() {
             tray_icon::set_tray_alert,
         ])
         .manage::<PinnedState>(Arc::new(Mutex::new(false)))
+        .manage::<PathState>(Arc::new(Mutex::new(None)))
         .setup(|app| {
-            pathfix::apply();
+            pathfix::apply(&app.handle().clone());
             sensor::install::refresh_if_stale();
 
             let handle = app.handle().clone();

@@ -1,6 +1,7 @@
 //! burn — `tok/s` **per response** sensor (D8).
 //!
-//! Tails the JSONL of the active session at `~/.claude/projects/**/*.jsonl`
+//! Tails every JSONL under `~/.claude/projects/**/*.jsonl` written within the
+//! last hour (D38: concurrent Claude Code sessions each get their own tail)
 //! and, when each turn closes, calculates `Δoutput / Δt_turn` and emits `burn-tick`.
 //! It's the data ccusage doesn't offer — but it's **not instant**: the JSONL only
 //! stamps `usage` when the message finishes (D8/DATA-ENGINE §Source 2), never
@@ -27,7 +28,7 @@ use std::time::Duration;
 
 use tauri::AppHandle;
 
-use tail::Tail;
+use tail::TailSet;
 
 /// Cadence of the JSONL `stat` (D13: event-driven in spirit; `stat` isn't
 /// process spawning — opening+stat+reading-if-changed a single file every 200 ms
@@ -39,7 +40,7 @@ const BURN_TAIL_INTERVAL_MS: u64 = 200;
 const ACTIVE_RESCAN_SECS: u64 = 5;
 
 /// Starts the sensor in a dedicated thread. Looks for `~/.claude/projects/` and tails
-/// the most recent JSONL, emitting `burn-tick` for each closed turn. Never
+/// every active JSONL, emitting `burn-tick` for each closed turn. Never
 /// panics; any failure is silently ignored (it will be retried).
 pub fn start(app: AppHandle) {
     thread::spawn(move || {
@@ -47,7 +48,7 @@ pub fn start(app: AppHandle) {
             return;
         };
         let projects = home.join(".claude").join("projects");
-        let mut tail = Tail::new();
+        let mut tails = TailSet::new();
         // Spaced-out re-scan: the `readdir` over all projects doesn't need to
         // run every tick. Drain every 1 s; re-scan every N ticks.
         let scan_every = (ACTIVE_RESCAN_SECS * 1000 / BURN_TAIL_INTERVAL_MS).max(1);
@@ -55,9 +56,9 @@ pub fn start(app: AppHandle) {
 
         loop {
             if tick.is_multiple_of(scan_every) {
-                tail.rescan(&projects);
+                tails.rescan(&projects);
             }
-            tail.pump(&app);
+            tails.pump(&app);
             tick = tick.wrapping_add(1);
             thread::sleep(Duration::from_millis(BURN_TAIL_INTERVAL_MS));
         }

@@ -53,7 +53,11 @@ pub(crate) fn status_file() -> Option<PathBuf> {
 /// `~/.claude/cc-autobahn/prev-statusline` — the user's previous statusLine command,
 /// for the chain (D-new-3) and for uninstall.
 pub(crate) fn prev_statusline_file() -> Option<PathBuf> {
-    Some(claude_config_dir()?.join("cc-autobahn").join("prev-statusline"))
+    Some(
+        claude_config_dir()?
+            .join("cc-autobahn")
+            .join("prev-statusline"),
+    )
 }
 
 /// Writes `buf` to `path` with mode 0600 (no partial-permission window on unix).

@@ -26,7 +26,7 @@ const PREV_KEY: &str = "prevStatusLine"; // settings["cc-autobahn"]["prevStatusL
 #[serde(rename_all = "camelCase")]
 pub struct SensorStatus {
     installed: bool, // statusLine points to our binary
-    has_prev: bool, // there's a previous statusLine saved (for rollback)
+    has_prev: bool,  // there's a previous statusLine saved (for rollback)
 }
 
 /// Installation preview (for the consent modal).
@@ -63,7 +63,10 @@ fn statusline_command(cfg: &Path) -> String {
 #[tauri::command]
 pub fn sensor_status() -> SensorStatus {
     let Some(v) = read_settings() else {
-        return SensorStatus { installed: false, has_prev: false };
+        return SensorStatus {
+            installed: false,
+            has_prev: false,
+        };
     };
     let obj = v.as_object();
     let installed = obj
@@ -75,7 +78,10 @@ pub fn sensor_status() -> SensorStatus {
         .and_then(|o| o.get(APP_KEY))
         .and_then(|a| a.get(PREV_KEY))
         .is_some();
-    SensorStatus { installed, has_prev }
+    SensorStatus {
+        installed,
+        has_prev,
+    }
 }
 
 /// `#[tauri::command]` Computes the preview without touching anything (for confirmation).
@@ -102,10 +108,7 @@ pub fn sensor_preview_install() -> Result<InstallPreview, String> {
 ///
 /// Idempotent: if the current `statusLine` ALREADY points to us, we do NOT
 /// capture ourselves as `prev` (that would cause an infinite recursive chain at runtime).
-fn apply_install(
-    settings: &mut serde_json::Value,
-    command: &str,
-) -> Option<serde_json::Value> {
+fn apply_install(settings: &mut serde_json::Value, command: &str) -> Option<serde_json::Value> {
     let obj = settings.as_object_mut()?;
     let already_ours = obj
         .get("statusLine")
@@ -162,8 +165,7 @@ pub fn install_sensor() -> Result<(), String> {
 
     // 2. 0600 backup, WITHOUT overwriting a pre-existing one (caveman pattern).
     if settings_path.exists() && !backup_path.exists() {
-        copy_private(&settings_path, &backup_path)
-            .map_err(|e| format!("backup failed: {e}"))?;
+        copy_private(&settings_path, &backup_path).map_err(|e| format!("backup failed: {e}"))?;
     }
 
     // 3. copy the binary to a stable path (D-new-2).
@@ -177,7 +179,11 @@ pub fn install_sensor() -> Result<(), String> {
     // 4. transform settings (pure apply_install) and write the prev-statusline.
     let prev = apply_install(&mut settings, &statusline_command(&cfg));
     let prev_file = bin_dir.join("prev-statusline");
-    match prev.as_ref().and_then(|v| v.get("command")).and_then(|c| c.as_str()) {
+    match prev
+        .as_ref()
+        .and_then(|v| v.get("command"))
+        .and_then(|c| c.as_str())
+    {
         Some(cmd) => {
             let _ = fs::write(&prev_file, cmd);
         }
@@ -214,9 +220,13 @@ pub fn refresh_if_stale() {
         if !sensor_status().installed {
             return; // not installed yet — the consent flow owns the first copy
         }
-        let Some(cfg) = claude_config_dir() else { return };
+        let Some(cfg) = claude_config_dir() else {
+            return;
+        };
         let bin_path = stable_bin_path(&cfg);
-        let Ok(exe) = std::env::current_exe() else { return };
+        let Ok(exe) = std::env::current_exe() else {
+            return;
+        };
         if same_contents(&exe, &bin_path) {
             return;
         }
@@ -311,7 +321,10 @@ mod tests {
             .unwrap()
             .contains("cc-autobahn-statusline"));
         // The previous one is saved for rollback/chain.
-        assert_eq!(s["cc-autobahn"]["prevStatusLine"]["command"], original["statusLine"]["command"]);
+        assert_eq!(
+            s["cc-autobahn"]["prevStatusLine"]["command"],
+            original["statusLine"]["command"]
+        );
         // Unrelated field PRESERVED (round-trip with Value, not a typed struct).
         assert_eq!(s["permissions"]["allow"][0], "ed:x");
 

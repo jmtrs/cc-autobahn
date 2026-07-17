@@ -21,13 +21,18 @@ pub fn set_pinned(state: tauri::State<'_, PinnedState>, value: bool) {
 /// Locks a mutex recovering from poison (a prior panic while held) instead of
 /// propagating it — a background menu-bar app has no supervisor to restart it.
 pub(crate) fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Applies the native rounded corners and wires hide-on-blur onto `window`.
 /// Returns the last-blur-hide timestamp guard, which `tray.rs` needs to debounce
 /// the tray-icon click that immediately follows a hide-by-blur (D24).
-pub fn wire(app: &tauri::App, window: &WebviewWindow) -> tauri::Result<Arc<Mutex<Option<Instant>>>> {
+pub fn wire(
+    app: &tauri::App,
+    window: &WebviewWindow,
+) -> tauri::Result<Arc<Mutex<Option<Instant>>>> {
     // Native rounded corners (D24 addendum): with transparent:true,
     // Tauri/WebKit doesn't clip the CSS border-radius to the window's
     // alpha well (known bug, leaves a square "corner" on all 4 corners).

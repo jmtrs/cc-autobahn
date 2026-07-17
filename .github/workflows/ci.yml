@@ -1,0 +1,38 @@
+name: CI
+
+# Runs on every push to main and every PR: backend tests, clippy (-D warnings),
+# fmt --check, frontend build. Independent of release.yml, which only gates
+# on `cargo test` when a version tag is pushed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm run build
+
+      - name: cargo fmt --check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: cargo clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --manifest-path src-tauri/Cargo.toml

@@ -212,18 +212,34 @@ mod tests {
         // Δoutput=500, Δt=10 s → 50 tok/s
         assert_eq!(calc.turn_output_tokens, 500);
         assert_eq!(calc.turn_duration_ms, 10_000);
-        assert!((calc.tok_per_s - 50.0).abs() < 1e-6, "tok/s = {}", calc.tok_per_s);
+        assert!(
+            (calc.tok_per_s - 50.0).abs() < 1e-6,
+            "tok/s = {}",
+            calc.tok_per_s
+        );
     }
 
     #[test]
     fn turn_calc_second_turn_uses_last_end() {
         let mut s = TurnState::new();
-        process_line(&mut s, assistant("m1", "2026-07-16T08:00:00.000Z", 200, "tool_use").as_bytes());
-        process_line(&mut s, assistant("m2", "2026-07-16T08:00:10.000Z", 300, "end_turn").as_bytes());
+        process_line(
+            &mut s,
+            assistant("m1", "2026-07-16T08:00:00.000Z", 200, "tool_use").as_bytes(),
+        );
+        process_line(
+            &mut s,
+            assistant("m2", "2026-07-16T08:00:10.000Z", 300, "end_turn").as_bytes(),
+        );
         // Second turn: previous closure = 08:00:10.
-        process_line(&mut s, assistant("m3", "2026-07-16T08:00:15.000Z", 100, "tool_use").as_bytes());
-        let calc = process_line(&mut s, assistant("m4", "2026-07-16T08:00:35.000Z", 400, "end_turn").as_bytes())
-            .expect("closes second turn");
+        process_line(
+            &mut s,
+            assistant("m3", "2026-07-16T08:00:15.000Z", 100, "tool_use").as_bytes(),
+        );
+        let calc = process_line(
+            &mut s,
+            assistant("m4", "2026-07-16T08:00:35.000Z", 400, "end_turn").as_bytes(),
+        )
+        .expect("closes second turn");
         // Δoutput=500, Δt=08:00:35 − 08:00:10 = 25 s → 20 tok/s
         assert_eq!(calc.turn_output_tokens, 500);
         assert_eq!(calc.turn_duration_ms, 25_000);
@@ -271,12 +287,18 @@ mod tests {
         // an incorrect reference (bug found in code review, D27).
         let mut s = TurnState::new();
         let a1 = assistant("a1", "2026-07-16T08:00:00.000Z", 100, "tool_use");
-        assert!(process_line(&mut s, a1.as_bytes()).is_none(), "Δt=0, start of the turn");
+        assert!(
+            process_line(&mut s, a1.as_bytes()).is_none(),
+            "Δt=0, start of the turn"
+        );
 
         // a2 arrives with ts EARLIER than a1 (rewrite/clock glitch) → Δt<0 → None,
         // and must NOT seal last_msg_ms with this erroneous ts.
         let bad = assistant("a2", "2026-07-16T07:59:00.000Z", 50, "tool_use");
-        assert!(process_line(&mut s, bad.as_bytes()).is_none(), "non-monotonic ts doesn't emit");
+        assert!(
+            process_line(&mut s, bad.as_bytes()).is_none(),
+            "non-monotonic ts doesn't emit"
+        );
 
         // a3 arrives correctly 5s after a1 (NOT after a2): if last_msg_ms had
         // been sealed with a2's ts, Δt would be absurdly large.
@@ -295,8 +317,11 @@ mod tests {
         let rewrite = assistant("m1", "2026-07-16T08:00:01.000Z", 200, "tool_use");
         assert!(process_line(&mut s, first.as_bytes()).is_none());
         assert!(process_line(&mut s, rewrite.as_bytes()).is_none()); // ignored
-        let calc = process_line(&mut s, assistant("m2", "2026-07-16T08:00:10.000Z", 300, "end_turn").as_bytes())
-            .unwrap();
+        let calc = process_line(
+            &mut s,
+            assistant("m2", "2026-07-16T08:00:10.000Z", 300, "end_turn").as_bytes(),
+        )
+        .unwrap();
         // 200 (once) + 300 = 500, not 700.
         assert_eq!(calc.turn_output_tokens, 500);
     }
@@ -305,11 +330,19 @@ mod tests {
     fn ignores_non_assistant_and_partial() {
         let mut s = TurnState::new();
         // user / system / garbage → none close.
-        assert!(process_line(&mut s, br#"{"type":"user","timestamp":"2026-07-16T08:00:00.000Z"}"#).is_none());
+        assert!(process_line(
+            &mut s,
+            br#"{"type":"user","timestamp":"2026-07-16T08:00:00.000Z"}"#
+        )
+        .is_none());
         assert!(process_line(&mut s, b"this is not json").is_none());
         assert!(process_line(&mut s, b"").is_none());
         // assistant without usage → ignored.
-        assert!(process_line(&mut s, br#"{"type":"assistant","timestamp":"2026-07-16T08:00:00.000Z","message":{"id":"x"}}"#).is_none());
+        assert!(process_line(
+            &mut s,
+            br#"{"type":"assistant","timestamp":"2026-07-16T08:00:00.000Z","message":{"id":"x"}}"#
+        )
+        .is_none());
     }
 
     #[test]
@@ -317,7 +350,10 @@ mod tests {
         // BUG 2: an id seen as tool_use and rewritten as end_turn must NOT
         // ignore the closure. Tokens are counted the first time (100).
         let mut s = TurnState::new();
-        process_line(&mut s, assistant("mx", "2026-07-16T08:00:00.000Z", 100, "tool_use").as_bytes());
+        process_line(
+            &mut s,
+            assistant("mx", "2026-07-16T08:00:00.000Z", 100, "tool_use").as_bytes(),
+        );
         let calc = process_line(
             &mut s,
             assistant("mx", "2026-07-16T08:00:10.000Z", 200, "end_turn").as_bytes(),
@@ -332,10 +368,19 @@ mod tests {
         // last_end_ms (doesn't go backwards), and does NOT lose accumulated tokens.
         let mut s = TurnState::new();
         // Initial VALID turn (with prior tool_use → dt>0) to fix last_end_ms.
-        process_line(&mut s, assistant("a1", "2026-07-16T08:00:00.000Z", 100, "tool_use").as_bytes());
-        process_line(&mut s, assistant("a2", "2026-07-16T08:00:10.000Z", 50, "end_turn").as_bytes());
+        process_line(
+            &mut s,
+            assistant("a1", "2026-07-16T08:00:00.000Z", 100, "tool_use").as_bytes(),
+        );
+        process_line(
+            &mut s,
+            assistant("a2", "2026-07-16T08:00:10.000Z", 50, "end_turn").as_bytes(),
+        );
         // Turn in progress: tool_use accumulates 300.
-        process_line(&mut s, assistant("t1", "2026-07-16T08:00:15.000Z", 300, "tool_use").as_bytes());
+        process_line(
+            &mut s,
+            assistant("t1", "2026-07-16T08:00:15.000Z", 300, "tool_use").as_bytes(),
+        );
         // closure with ts EARLIER than the last valid closure (08:00:10) → dt < 0 → None.
         let bad = process_line(
             &mut s,
