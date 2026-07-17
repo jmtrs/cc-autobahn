@@ -143,17 +143,18 @@ export function wireNameplateEdit() {
   };
 }
 
+/** Segment count for `min` minutes remaining out of the 5h window — shared
+ *  basis for both the estimated and official sources (D23/D39: both segments
+ *  and the "autonomie" text must read the same unit, time, not a mix). */
+function segmentsForMinutes(min) {
+  return Math.max(0, Math.min(SEGMENT_COUNT, Math.round((SEGMENT_COUNT * min) / WINDOW_MIN)));
+}
+
 /** Autonomy bar + text + gear from ccusage's PROJECTION (estimated). */
 export function applyEstimated(block) {
   const remaining = Number(block?.projection?.remainingMinutes);
   document.getElementById("autonomie").textContent = `EST ${formatHMin(remaining)}`;
-  const filled = Number.isFinite(remaining)
-    ? Math.max(
-        0,
-        Math.min(SEGMENT_COUNT, Math.round((SEGMENT_COUNT * remaining) / WINDOW_MIN))
-      )
-    : 0;
-  buildSegments(filled);
+  buildSegments(Number.isFinite(remaining) ? segmentsForMinutes(remaining) : 0);
   setGear(block?.models);
 }
 
@@ -205,10 +206,18 @@ export function onSensorUpdate(p) {
   state.sensorConnected = true;
   state.everSensorConnected = true;
   const pct = Number.isFinite(p?.fiveHourPct) ? Math.max(0, Math.min(100, p.fiveHourPct)) : 0;
-  // Segments = REMAINING autonomy, not spent (a tank that empties, not one
-  // that fills) — consistent with applyEstimated() and the fuel-pump icon.
-  buildSegments(Math.round((SEGMENT_COUNT * (100 - pct)) / 100));
   state.fiveHourResetsAtMs = p?.fiveHourResetsAt ? Number(p.fiveHourResetsAt) * 1000 : 0;
+  // Segments = time remaining until reset, same basis as applyEstimated()
+  // and the "autonomie" text below — NOT the quota % (`pct`), which is a
+  // different axis from time and would disagree with the text under the
+  // same gauge (found in review). If `resetsAt` didn't arrive with this
+  // payload (a real, tolerated partial shape — see sensor::mod.rs's
+  // `tolerates_partial_rate_limits`), leave the segments as they were rather
+  // than forcing an empty tank on incomplete data — same "don't touch it"
+  // rule refreshAutonomie() already follows below for the text.
+  const remainMin =
+    state.fiveHourResetsAtMs > 0 ? (state.fiveHourResetsAtMs - Date.now()) / 60000 : 0;
+  if (remainMin > 0) buildSegments(segmentsForMinutes(remainMin));
   refreshAutonomie();
   if (p?.modelId) setGear([p.modelId]);
   // Official 7d rate-limit window — full numbers live on Page 2 (limits-page.js);

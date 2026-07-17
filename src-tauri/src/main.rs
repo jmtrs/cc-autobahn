@@ -73,7 +73,11 @@ fn main() {
             // engine::poll or sensor::tail (D-review: tray icon as a
             // progress ring instead of a static disc with no information).
             app.manage(tray_handle);
-            tray_icon::set_progress(&app.handle().clone(), 100.0);
+            tray_icon::set_progress(
+                &app.handle().clone(),
+                100.0,
+                tray_icon::ProgressSource::Estimated,
+            );
 
             Ok(())
         })

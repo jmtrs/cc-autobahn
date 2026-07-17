@@ -165,20 +165,31 @@ pub fn start(app: AppHandle) {
             match blocks::poll_once(engine, path.as_deref()) {
                 Ok(Some(block)) => {
                     consecutive_failures = 0;
-                    // % remaining of the 5h window for the tray ring —
-                    // same criterion as applyEstimated() in main.js.
+                    // % remaining of the 5h window for the tray ring — same
+                    // criterion as applyEstimated() in main.js. Reported
+                    // unconditionally: `tray_icon::set_progress` itself
+                    // arbitrates against the sensor's OFFICIAL writes (D39),
+                    // so `engine` doesn't need to know whether it's active.
                     let pct_remaining = block
                         .projection
                         .as_ref()
                         .map(|p| p.remaining_minutes as f64 / crate::tray_icon::WINDOW_MIN * 100.0)
                         .unwrap_or(0.0);
-                    crate::tray_icon::set_progress(&app, pct_remaining);
+                    crate::tray_icon::set_progress(
+                        &app,
+                        pct_remaining,
+                        crate::tray_icon::ProgressSource::Estimated,
+                    );
                     let _ = app.emit("blocks-update", &block);
                 }
                 Ok(None) => {
                     consecutive_failures = 0;
                     // No active block: window not being spent, ring full.
-                    crate::tray_icon::set_progress(&app, 100.0);
+                    crate::tray_icon::set_progress(
+                        &app,
+                        100.0,
+                        crate::tray_icon::ProgressSource::Estimated,
+                    );
                     let _ = app.emit("blocks-idle", ());
                 }
                 Err(message) => {

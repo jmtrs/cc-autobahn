@@ -24,14 +24,34 @@ const ALERT_BLINK_MS: u64 = 450; // on/off half-period while critical (D37/D-rev
 /// 5h billing window in minutes — same as WINDOW_MIN in main.js.
 pub const WINDOW_MIN: f64 = 300.0;
 
+/// Which sensor produced a `set_progress` call — `engine`'s slow ccusage poll
+/// (time-based % of the 5h window) or `sensor`'s statusLine push (official
+/// quota-based %). Both run on independent dedicated threads with different
+/// cadences (D13); without this, painting the ring is a last-writer-wins race
+/// between two different percentage *meanings*, and the ring visibly flickers
+/// between them whenever they diverge (real bug, found live with both ccusage
+/// and the statusLine sensor connected). Official wins once seen, matching the
+/// panel's own `#segments` precedence (D23: `state.everSensorConnected` in
+/// `trip-computer.js`) — same "sticky" semantics on both displays instead of
+/// re-deriving a slightly different rule per gauge.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ProgressSource {
+    Estimated,
+    Official,
+}
+
 /// Shared tray state: the real progress value (kept up to date even while an
-/// alert is painting over it) plus whether the redline alert is active.
-/// A `Mutex` here isn't optional — `set_progress` (called from `engine`'s
-/// and `sensor`'s own dedicated threads) and the blink thread below both
-/// repaint the same tray icon, and without one they'd race each other.
+/// alert is painting over it), whether the redline alert is active, and
+/// whether OFFICIAL data has ever arrived (sticky — mirrors `everSensorConnected`
+/// in trip-computer.js so a momentary sensor blip doesn't hand the ring back to
+/// the estimated source, same reasoning as D23). A `Mutex` here isn't optional —
+/// `set_progress` (called from `engine`'s and `sensor`'s own dedicated threads)
+/// and the blink thread below both repaint the same tray icon, and without one
+/// they'd race each other.
 struct TrayState {
     pct_remaining: f64,
     alert: bool,
+    official_ever_active: bool,
 }
 
 fn state() -> &'static Mutex<TrayState> {
@@ -40,25 +60,40 @@ fn state() -> &'static Mutex<TrayState> {
         Mutex::new(TrayState {
             pct_remaining: 100.0,
             alert: false,
+            official_ever_active: false,
         })
     })
 }
 
 static BLINK_THREAD_STARTED: AtomicBool = AtomicBool::new(false);
 
-/// Redraws the tray icon with the ring at the given `pct_remaining`
-/// (0–100, clamped). If the tray isn't managed yet (very early startup)
-/// this does nothing — it will be retried on the next tick. While the
-/// redline alert is active, the value is only remembered (not painted) —
-/// the blink thread owns the icon until `set_alert(app, false)` restores it.
-pub fn set_progress(app: &AppHandle, pct_remaining: f64) {
+/// Redraws the tray icon with the ring at the given `pct_remaining` (0–100,
+/// clamped), from `source`. Once an `Official` write has landed, later
+/// `Estimated` writes are ignored for the rest of the process's lifetime —
+/// this is the ONLY place that arbitrates between the two sources; callers
+/// (`engine`, `sensor`) just report their own reading unconditionally. If the
+/// tray isn't managed yet (very early startup) this does nothing — it will be
+/// retried on the next tick. While the redline alert is active, the value is
+/// only remembered (not painted) — the blink thread owns the icon until
+/// `set_alert(app, false)` restores it.
+pub fn set_progress(app: &AppHandle, pct_remaining: f64, source: ProgressSource) {
     let pct = pct_remaining.clamp(0.0, 100.0);
-    let alert = {
+    let (alert, should_paint) = {
         let mut s = state().lock().unwrap();
-        s.pct_remaining = pct;
-        s.alert
+        match source {
+            ProgressSource::Official => {
+                s.official_ever_active = true;
+                s.pct_remaining = pct;
+                (s.alert, true)
+            }
+            ProgressSource::Estimated if s.official_ever_active => (s.alert, false),
+            ProgressSource::Estimated => {
+                s.pct_remaining = pct;
+                (s.alert, true)
+            }
+        }
     };
-    if !alert {
+    if should_paint && !alert {
         paint(app, render(pct));
     }
 }

@@ -877,3 +877,54 @@ covers the window boundary and the EOF-start rule via `TailSet::rescan`;
 when drained independently; `rescan_keeps_known_stale_file_state` covers the
 long quiet turn case), existing `drain_partial_line_not_duplicated` updated for
 the explicit-`path` signature, `cargo clippy`/`cargo fmt --check` clean.
+
+## D39 — Tray ring: estimated-vs-official arbitration moves into `tray_icon.rs` (supersedes part of D30)
+
+**Decision**: `tray_icon::set_progress` now takes a `ProgressSource` (`Estimated` |
+`Official`) and owns the priority decision itself — once an `Official` write
+has landed, later `Estimated` writes are ignored for the rest of the process's
+lifetime (sticky, mirrors `everSensorConnected` in `trip-computer.js`, D23).
+`engine.rs` and `sensor.rs` call it unconditionally with their own source tag;
+neither module needs to know about the other's connection state.
+
+**Supersedes D30**: D30 stated "No estimated-vs-official precedence logic
+replicated from the frontend (D23): the tray is a low-commitment glance, the
+last data point that arrives from either source wins — a deliberate
+simplification, not an oversight." That simplification turned out to be a
+real, user-visible bug: with both ccusage and the official statusLine sensor
+connected (any Pro/Max user with the sensor installed), `engine`'s 15s poll and
+`sensor`'s 2s tail both painted the same ring with different percentage
+*meanings* (time-remaining vs quota-remaining), so the ring visibly flickered
+between the two every cycle. D30's "last writer wins" was fine when only one
+source could ever be active; it stopped being fine once both routinely are.
+
+**Why the arbitration lives in `tray_icon.rs`, not in a caller**: an earlier
+version of this fix added a `sensor::is_official_active()` flag that `engine`
+checked before writing — functionally correct, but wrong altitude: the actual
+contested resource is `tray_icon`'s `Mutex<TrayState>`, written from two
+independent threads, so the priority rule belongs there. Splitting it across
+two unrelated modules also meant a future third writer of the ring would have
+no signal that a priority protocol exists and could reintroduce the flicker
+bug by writing unconditionally, the same way `sensor.rs` originally did. It
+also created exactly the D38-flagged risk of coupling `engine`'s independent
+thread to `sensor`'s connection state (D13's independent-dedicated-threads
+design). Moving the rule into `set_progress` removes that coupling entirely:
+`engine`/`sensor` are back to knowing nothing about each other.
+
+**Consequence**: the ring's priority is now sticky (matches `#segments`'
+`everSensorConnected` semantics) instead of momentary — a sensor blip no
+longer hands the ring back to the estimated source and then back again a few
+seconds later. The same review also fixed `onSensorUpdate` (`trip-computer.js`)
+computing `#segments`' fill from the quota % while the accompanying
+"autonomie" text stayed time-based — same class of "two sources disagreeing
+under one gauge" bug D23 already fixed once for direction/polarity, this time
+for units. Fill now always derives from time-remaining, matching the text; if
+`resetsAt` is momentarily absent from a partial statusLine payload, segments
+are left as-is rather than forced to an empty tank (mirrors `refreshAutonomie`'s
+existing "don't touch it on incomplete data" rule).
+
+**Verified**: `cargo test` (38/38), `cargo clippy` clean; manual check pending
+(run the app with both ccusage and the statusLine sensor connected — ring
+should hold the official reading with no flicker; disconnect the sensor mid-
+session and confirm the ring stays on the last official value instead of
+reverting to the time-based one).

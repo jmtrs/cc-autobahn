@@ -206,8 +206,14 @@ pub fn start(app: AppHandle) {
             if let Some(input) = read_if_changed(&mut last_mtime) {
                 let update = SensorUpdate::from_input(&input);
                 // OFFICIAL data: % remaining for the tray ring = 100 - % used.
+                // Priority over `engine`'s estimated writes is arbitrated by
+                // `tray_icon::set_progress` itself, not here (D39).
                 if let Some(used_pct) = update.five_hour_pct {
-                    crate::tray_icon::set_progress(&app, 100.0 - used_pct);
+                    crate::tray_icon::set_progress(
+                        &app,
+                        100.0 - used_pct,
+                        crate::tray_icon::ProgressSource::Official,
+                    );
                 }
                 let _ = app.emit("sensor-update", update);
             }

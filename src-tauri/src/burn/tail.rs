@@ -27,6 +27,7 @@ struct BurnTick {
     turn_duration_ms: i64,
     message_id: String,
     timestamp: String,
+    is_partial: bool,
 }
 
 impl From<BurnCalc> for BurnTick {
@@ -37,6 +38,7 @@ impl From<BurnCalc> for BurnTick {
             turn_duration_ms: c.turn_duration_ms,
             message_id: c.message_id,
             timestamp: c.timestamp,
+            is_partial: c.is_partial,
         }
     }
 }

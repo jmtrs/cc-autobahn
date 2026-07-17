@@ -46,6 +46,7 @@ pub(crate) struct BurnCalc {
     pub(crate) turn_duration_ms: i64,
     pub(crate) message_id: String,
     pub(crate) timestamp: String,
+    pub(crate) is_partial: bool,
 }
 
 /// State of the current turn. Accumulates `output_tokens` (deduped by `message.id`)
@@ -119,6 +120,7 @@ impl TurnState {
                 turn_duration_ms: dt_ms,
                 message_id: msg_id.to_string(),
                 timestamp: timestamp.to_string(),
+                is_partial: true,
             });
         }
 
@@ -143,6 +145,7 @@ impl TurnState {
             turn_duration_ms: dt_ms,
             message_id: msg_id.to_string(),
             timestamp: timestamp.to_string(),
+            is_partial: false,
         };
         // Seal the closure ONLY when emitting: the next turn starts from here.
         self.last_end_ms = Some(ts_ms);
@@ -266,6 +269,7 @@ mod tests {
         assert_eq!(partial.turn_output_tokens, 150);
         assert_eq!(partial.turn_duration_ms, 5_000);
         assert!((partial.tok_per_s - 30.0).abs() < 1e-6);
+        assert!(partial.is_partial, "intermediate tick must be marked partial");
 
         // The final closure DOES aggregate the WHOLE turn (100+150+200=450), not just
         // what remained since the last partial tick.
@@ -277,6 +281,7 @@ mod tests {
         assert_eq!(close.turn_output_tokens, 450);
         assert_eq!(close.turn_duration_ms, 15_000); // from the start of the turn
         assert!((close.tok_per_s - 30.0).abs() < 1e-6); // 450 / 15
+        assert!(!close.is_partial, "closing tick must be marked final");
     }
 
     #[test]

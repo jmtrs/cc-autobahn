@@ -27,7 +27,7 @@ pub(crate) struct Block {
     end_time: String,
     #[serde(default)]
     actual_end_time: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "costUSD")]
     cost_usd: f64,
     #[serde(default)]
     total_tokens: u64,
@@ -139,6 +139,7 @@ mod tests {
             .into_iter()
             .find(|b| b.is_active && !b.is_gap)
             .expect("there's an active block");
+        assert!((block.cost_usd - 24.846).abs() < 1e-9);
         assert_eq!(block.total_tokens, 27_769_638);
         assert_eq!(block.token_counts.output_tokens, 227_752);
         assert_eq!(block.projection.unwrap().remaining_minutes, 185);
