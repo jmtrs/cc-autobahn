@@ -269,7 +269,10 @@ mod tests {
         assert_eq!(partial.turn_output_tokens, 150);
         assert_eq!(partial.turn_duration_ms, 5_000);
         assert!((partial.tok_per_s - 30.0).abs() < 1e-6);
-        assert!(partial.is_partial, "intermediate tick must be marked partial");
+        assert!(
+            partial.is_partial,
+            "intermediate tick must be marked partial"
+        );
 
         // The final closure DOES aggregate the WHOLE turn (100+150+200=450), not just
         // what remained since the last partial tick.
