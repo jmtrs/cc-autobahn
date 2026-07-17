@@ -41,12 +41,22 @@ Responsible for **all I/O**. Never blocks the UI.
 - **Subprocess execution**: `std::process::Command` from Rust (D16). No
   `tauri-plugin-shell` — that plugin is for exec from the frontend JS; our I/O is
   trusted backend code. The engine runs on a dedicated `std::thread` (no async framework).
+- **PATH hardening** (`pathfix::apply`, D36): runs once at GUI startup (not
+  statusline mode), prepends `/opt/homebrew/bin`, `/usr/local/bin`,
+  `~/.bun/bin`, `~/.local/bin` to the process `PATH` when they exist on disk.
+  A Finder/Dock launch inherits launchd's bare `PATH`, which hides an
+  already-installed engine that `npm run tauri dev` never surfaces (it
+  inherits the terminal's `PATH` instead).
 - **Engine detection** (`engine::detect`): walks the `$PATH` looking for `ccusage`
   global → `npx` → `bunx` → none. See [DATA-ENGINE.md](./DATA-ENGINE.md).
 - **ccusage poll** (`engine::blocks::poll_once`, called from `engine::start`): runs
   `ccusage blocks --active --json` every **15 s** (D13, 10–30 s window), parses with
   `serde_json`, emits `blocks-update` / `blocks-idle` / `engine-error` to the frontend.
-  `engine::install` holds the Bun auto-installer.
+  `engine::install` holds the Bun auto-installer, which runs the actual
+  `curl | bash` install on its own `std::thread` and reports progress/outcome
+  via `install-progress`/`install-succeeded`/`install-failed` events — the
+  `#[tauri::command]` handler itself must return fast, since a plain sync
+  command runs on the thread that also pumps the webview's event loop (D36).
 - **JSONL tail** (`burn::tail::Tail`, driven by `burn::start`): follows the active
   session log, computes `tok/s` **per response** (`Δoutput / Δt_turn`) when each turn
   completes via the pure turn-calc logic in `burn::parser` (Zulu timestamp parsing in
@@ -57,6 +67,11 @@ Responsible for **all I/O**. Never blocks the UI.
   `sensor::statusline_bin` is the CLI entrypoint invoked as that command (reads stdin,
   chains the previous line, dumps the sensor file); `sensor::start` (in `sensor/mod.rs`)
   tails that file and emits the official JSON (`rate_limits`, model, effort, cost).
+  `sensor::install::refresh_if_stale` runs on a background thread at every GUI
+  startup and silently re-copies the binary in place (byte-for-byte diff
+  against the running one) if already installed — the consent flow only ever
+  runs once, so without this a copy from an old release would keep pointing
+  `statusLine` at dead code forever (D36).
 - **History** (`engine::history::history_daily`): `ccusage claude daily --json`
   (scoped to `claude` — the bare `ccusage daily` mixes in every agent ccusage
   detects on the machine), fetched **on demand** (D33's 4th cadence class,
@@ -168,4 +183,8 @@ on-demand panel (D24, macOS only for now), with native rounded corners
 (D25) and a PIN button to pin it (D26). That tray icon is now a progress
 ring redrawn at runtime, not a static PNG (D30). Kickdown (the effort
 indicator) was implemented and later removed for not adding visual value
-(D29).
+(D29). Post-launch hardening from testing an actual clean machine (D36): the
+process `PATH` is repaired at startup so a Finder/Dock launch still finds an
+already-installed engine, the Bun installer runs off the UI thread instead
+of freezing it, and the installed statusline binary quietly re-syncs itself
+against newer releases.

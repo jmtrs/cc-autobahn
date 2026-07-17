@@ -484,8 +484,72 @@ body {
   box-shadow: inset 0 0 0 1px var(--amber-dim);
 }
 
+/* D36-review: a disabled .sensor-btn kept the exact same look as enabled —
+   the label text swap in JS was the only signal, and it read as "did my
+   click even register?" at a glance. Dim it and kill the pointer cursor so
+   "busy" is unmistakable without depending on the label being read. */
+.sensor-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+  background: var(--amber-dim);
+}
+
 .sensor-btn[hidden] {
   display: none;
+}
+
+/* Indeterminate loader for long-running installs (D36): the Bun installer
+   has no progress fraction we can read, only stage transitions, so this
+   scans forever rather than filling — pairs with staged text in .sensor-body.
+   Same amber-dim → amber + glow language as the .seg fuel gauge, chased in
+   sequence via staggered animation-delay (Knight Rider VFD scanner, not a
+   generic spinner — matches the instrument-cluster skin). */
+.engine-spinner {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+  align-self: center;
+  margin-right: auto;
+}
+
+.engine-spinner[hidden] {
+  display: none;
+}
+
+.engine-spinner-seg {
+  width: 4px;
+  height: 10px;
+  border-radius: 1px;
+  background: var(--amber-dim);
+  animation: engine-scan 1.2s ease-in-out infinite;
+}
+
+.engine-spinner-seg:nth-child(1) {
+  animation-delay: 0s;
+}
+.engine-spinner-seg:nth-child(2) {
+  animation-delay: 0.12s;
+}
+.engine-spinner-seg:nth-child(3) {
+  animation-delay: 0.24s;
+}
+.engine-spinner-seg:nth-child(4) {
+  animation-delay: 0.36s;
+}
+.engine-spinner-seg:nth-child(5) {
+  animation-delay: 0.48s;
+}
+
+@keyframes engine-scan {
+  0%,
+  100% {
+    background: var(--amber-dim);
+    box-shadow: none;
+  }
+  50% {
+    background: var(--amber);
+    box-shadow: 0 0 5px rgba(255, 154, 31, 0.7);
+  }
 }
 
 /* ── MFD pages (D-review: cycle screens like a real trip computer instead

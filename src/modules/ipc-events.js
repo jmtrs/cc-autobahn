@@ -2,7 +2,12 @@
 // sensor) into the widget modules. Guarded: under plain `vite` (no Tauri)
 // there is no IPC, so we skip silently.
 
-import { showEngineOverlay } from "./engine-overlay.js";
+import {
+  onInstallFailed,
+  onInstallProgress,
+  onInstallSucceeded,
+  showEngineOverlay,
+} from "./engine-overlay.js";
 import { onBurnTick } from "./speedometer.js";
 import { onBlocksUpdate, onSensorState, onSensorUpdate } from "./trip-computer.js";
 
@@ -12,6 +17,9 @@ export async function wireEngine() {
 
   listen("engine-detected", () => showEngineOverlay(false));
   listen("engine-missing", () => showEngineOverlay(true));
+  listen("install-progress", (e) => onInstallProgress(e.payload));
+  listen("install-succeeded", (e) => onInstallSucceeded(e.payload));
+  listen("install-failed", (e) => onInstallFailed(e.payload));
   listen("engine-error", (e) => console.error("[engine] error:", e.payload));
   listen("blocks-idle", () => console.info("[engine] no active block"));
   listen("blocks-update", (e) => {

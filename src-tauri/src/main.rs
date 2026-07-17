@@ -12,6 +12,7 @@
 mod burn;
 mod engine;
 mod env_lock;
+mod pathfix;
 mod sensor;
 mod tray;
 mod tray_icon;
@@ -44,6 +45,9 @@ fn main() {
         ])
         .manage::<PinnedState>(Arc::new(Mutex::new(false)))
         .setup(|app| {
+            pathfix::apply();
+            sensor::install::refresh_if_stale();
+
             let handle = app.handle().clone();
             engine::start(handle.clone());
             burn::start(handle.clone());

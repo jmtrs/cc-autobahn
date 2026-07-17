@@ -731,3 +731,57 @@ stanza (Homebrew ≥ 5 quarantines all casks; `--no-quarantine` is gone).
 (downloads the dmg and validates the sha256); `scripts/release.mjs` syntax
 checked and its four version-bump regexes matched against the real files. The
 cask-update step itself first runs on the next tag.
+
+## D36 — Finder-launch PATH hardening, non-blocking Bun install, self-healing statusline copy
+
+**Decision**: three fixes surfaced by actually simulating a clean machine
+(isolated `HOME`/`CLAUDE_CONFIG_DIR`/`PATH`, and briefly relocating the real
+`/opt/homebrew/bin/npx`/`bunx` to reproduce a truly engine-less Mac) instead
+of reasoning about it from the source:
+
+1. **`pathfix::apply()`** (new module, `src-tauri/src/pathfix.rs`): runs once
+   at GUI startup (not statusline mode), prepends `/opt/homebrew/bin`,
+   `/usr/local/bin`, `~/.bun/bin`, `~/.local/bin` to the process `PATH` when
+   they exist on disk. A Finder/Dock launch inherits launchd's bare `PATH`
+   (`/usr/bin:/bin:/usr/sbin:/sbin`), which hides an already-installed
+   Homebrew/Bun engine — `npm run tauri dev` never surfaced this because it
+   inherits the terminal's `PATH`.
+2. **`install_bun` made fire-and-forget** (`engine/install.rs`): it used to
+   run the Bun installer (`curl -fsSL https://bun.sh/install | bash`, D9)
+   synchronously inside the `#[tauri::command]` handler. A plain synchronous
+   command runs on the same thread that pumps the webview's event loop — the
+   10–60 s blocking child process froze the whole UI (button label, spinner,
+   everything), even though the JS had already mutated the DOM moments
+   earlier. A classic Tauri footgun, caught live: cosmetic install-progress
+   work (staged button text, an amber segment scanner) kept "not appearing"
+   in testing because the browser never got a chance to repaint, not because
+   the CSS/JS was wrong. Moved the installer to `std::thread::spawn` (same
+   "never block the UI" rule already applied to `engine`/`burn`/`sensor`);
+   the command now returns almost immediately and the outcome arrives via
+   `install-succeeded`/`install-failed` events instead of the invoke's
+   return value.
+3. **`sensor::install::refresh_if_stale()`**: the statusline binary copy
+   (`~/.claude/cc-autobahn/cc-autobahn-statusline`) is only ever written
+   once, at consent time (D12/D20) — a copy installed by an old release
+   never learns about newer builds on its own, so every subsequent release
+   would silently leave `statusLine` pointing at dead code forever. Runs on
+   a background thread at every GUI startup: if the sensor is already
+   installed and the on-disk copy differs byte-for-byte from the current
+   binary, overwrites it in place. Same stable path, no `settings.json`
+   write, no re-consent — nothing a user would need to approve twice.
+
+**Reasoning**: all three are Finder-launch / long-lived-install bugs that
+dev mode structurally can't reproduce (inherited terminal `PATH`, short
+session lifetime, a synchronous command *feels* instant against a warm
+cache). Found by simulating a clean machine end-to-end rather than by
+inspection — `pathfix::hardened()`'s dedup logic was itself inverted on the
+first pass (candidates were filtered out instead of winning the front of
+`PATH`) and caught immediately by its own unit test.
+
+**Verified**: `cargo test` 34/34 (3 new `pathfix` tests), `cargo clippy`
+clean. End-to-end: isolated instance with `HOME`/`CLAUDE_CONFIG_DIR` pointed
+at empty temp dirs, `npx`/`bunx` briefly relocated out of `/opt/homebrew/bin`
+(restored after) — confirmed the CHECK ENGINE overlay, the button's staged
+progress (now actually visible mid-install), a real isolated Bun install,
+engine auto-detection via the hardened `PATH`, and the sensor consent flow
+all complete correctly.

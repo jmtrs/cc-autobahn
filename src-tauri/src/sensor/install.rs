@@ -202,6 +202,40 @@ pub fn install_sensor() -> Result<(), String> {
     }
 }
 
+/// Refreshes the installed statusline binary copy if it's stale (D36): the
+/// consent modal in [`install_sensor`] only ever runs once, so a copy made
+/// by an old release never learns about newer builds on its own — every
+/// subsequent release would leave `statusLine` pointing at dead code. Runs
+/// silently on a background thread at every GUI startup: same stable path,
+/// no `settings.json` write, no re-consent (nothing a user would need to
+/// approve twice).
+pub fn refresh_if_stale() {
+    std::thread::spawn(|| {
+        if !sensor_status().installed {
+            return; // not installed yet — the consent flow owns the first copy
+        }
+        let Some(cfg) = claude_config_dir() else { return };
+        let bin_path = stable_bin_path(&cfg);
+        let Ok(exe) = std::env::current_exe() else { return };
+        if same_contents(&exe, &bin_path) {
+            return;
+        }
+        if fs::copy(&exe, &bin_path).is_ok() {
+            chmod_755(&bin_path);
+        }
+    });
+}
+
+/// Byte-for-byte comparison — mtime isn't a reliable staleness signal here
+/// (an app bundle replaced on disk can carry an older mtime than the copy
+/// made from a previous, newer run).
+fn same_contents(a: &Path, b: &Path) -> bool {
+    match (fs::read(a), fs::read(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
+}
+
 /// `#[tauri::command]` Uninstalls: restores prevStatusLine (or removes it).
 #[tauri::command]
 pub fn uninstall_sensor() -> Result<(), String> {

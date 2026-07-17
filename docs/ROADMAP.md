@@ -73,8 +73,17 @@ Implementation order, one layer at a time, verifying before moving forward.
       macOS/Linux; on Windows a manual-install message (project still
       untested on that OS, D24). Verified live (overlay + button + text
       fixed from `white-space: pre-wrap` inherited from `.sensor-body`).
+      Later moved off the UI thread and given staged progress feedback
+      (spinner, staged button text) after live clean-machine testing showed
+      the synchronous installer call froze the whole webview (D36).
 - [x] ~~Auto-install statusline sensor~~ — done in Phase 3 (D19-D22), not
       Phase 4: `install_sensor`/`uninstall_sensor`/`sensor_status` in `sensor/install.rs`.
+- [x] PATH hardening at GUI startup (`pathfix::apply`) so a Finder/Dock
+      launch — which inherits launchd's bare PATH, not the terminal's — still
+      finds an already-installed Homebrew/Bun engine (D36).
+- [x] Installed statusline binary self-refreshes on every startup
+      (`sensor::install::refresh_if_stale`) so an old release's copy doesn't
+      keep pointing `statusLine` at dead code forever (D36).
 - [ ] (Optional) Package Bun as a Tauri sidecar.
 
 ## Phase 4.5 — Tray/menu-bar (D24, brought forward, done)

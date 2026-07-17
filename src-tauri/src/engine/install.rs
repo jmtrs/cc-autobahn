@@ -4,34 +4,52 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use super::{detect, start};
 
 /// `#[tauri::command]` "INSTALL ENGINE" button (D9, Phase 4): runs Bun's
 /// official installer, updates the `PATH` of the already-running process (the
 /// installer only appends it to the shell rc, which this process never
-/// re-reads) and retries the engine. `Err` with a readable message to render in the overlay.
+/// re-reads) and retries the engine.
+///
+/// Fire-and-forget by design (D36-review): a plain synchronous `#[tauri::command]`
+/// runs on the same thread that pumps the webview's event loop — a `curl | bash`
+/// child process blocking that thread for 10s+ freezes the whole UI (button
+/// label swap, spinner CSS, everything), a classic Tauri footgun. The heavy
+/// work moves to `std::thread::spawn` (same "never block the UI" rule as
+/// `engine`/`burn`/`sensor`); the outcome comes back via `install-succeeded`/
+/// `install-failed` events instead of the invoke's return value.
 #[tauri::command]
-pub fn install_bun(app: AppHandle) -> Result<String, String> {
+pub fn install_bun(app: AppHandle) {
     if let Some(engine) = detect() {
-        start(app);
-        return Ok(engine.label().to_string());
+        start(app.clone());
+        let _ = app.emit("install-succeeded", engine.label());
+        return;
     }
 
-    run_bun_installer()?;
-
-    if let Some(dir) = bun_bin_dir() {
-        prepend_path(&dir);
-    }
-
-    match detect() {
-        Some(engine) => {
-            start(app);
-            Ok(engine.label().to_string())
+    std::thread::spawn(move || {
+        let _ = app.emit("install-progress", "downloading");
+        if let Err(e) = run_bun_installer() {
+            let _ = app.emit("install-failed", e);
+            return;
         }
-        None => Err("Bun was installed but bunx isn't on PATH".to_string()),
-    }
+
+        let _ = app.emit("install-progress", "detecting");
+        if let Some(dir) = bun_bin_dir() {
+            prepend_path(&dir);
+        }
+
+        match detect() {
+            Some(engine) => {
+                start(app.clone());
+                let _ = app.emit("install-succeeded", engine.label());
+            }
+            None => {
+                let _ = app.emit("install-failed", "Bun was installed but bunx isn't on PATH");
+            }
+        }
+    });
 }
 
 /// `~/.bun/bin`, the fixed destination of the official installer.
