@@ -15,13 +15,16 @@ JSONL tail), which no existing tool offers.
 
 ## Status
 
-**Phases 0–5 done** (only Phase 6 remains, history, optional — see the
-[roadmap](./docs/ROADMAP.md) for the actual checklist). The backend runs
-three sensors on dedicated threads:
+**Phases 0–6 done** (see the [roadmap](./docs/ROADMAP.md) for the actual
+checklist; only two optional/future items remain — Bun sidecar, Windows/
+Linux). The backend runs three continuous sensors on dedicated threads,
+plus one on-demand fetch:
 
 - `engine` — detects ccusage (global → npx → bunx → an "Install engine"
   button that installs Bun on its own, D9) and polls `blocks --active --json`
-  every 15 s → cost, projection, and estimated autonomy.
+  every 15 s → cost, projection, and estimated autonomy. `engine::history`
+  fetches `ccusage claude daily --json` on demand (only when the History/
+  Limits page opens, not on a timer, D33).
 - `burn` — tails the JSONL of the active session → `tok/s` per response →
   `burn-tick` event. The speedometer jumps on turn completion and decays
   with a physical spring (D8/D18).
@@ -32,9 +35,13 @@ three sensors on dedicated threads:
 
 With no engine detected, the panel shows the "CHECK ENGINE" overlay instead
 of data. Tray icon (menu-bar, no Dock or Cmd+Tab) with a progress ring
-redrawn at runtime; panel with a PIN button and a toggleable PACE/AUTO
-footer. `cargo test` 26/26 (includes verification against real JSONL and
-statusline data), `cargo clippy` clean.
+redrawn at runtime. The panel itself is a 4-page MFD cycled by one button
+next to PIN (D33), same UX as the W203's real trip-computer stalk button:
+the live trip computer (speedometer, odometer, autonomy), a 30-day cost
+History sparkline, the official weekly rate-Limits window + per-model cost
+breakdown, and front-end Settings (which pages are in the cycle, and which
+opens by default). `cargo test` 32/32 (includes verification against real
+JSONL, statusline, and multi-model ccusage data), `cargo clippy` clean.
 
 ## Design (car → tokens mapping)
 
@@ -47,6 +54,7 @@ statusline data), `cargo clippy` clean.
 | Odometer                    | Total accumulated tokens                      |
 | PRND selector               | Active model (O/S/H/F) lit up + effort        |
 | Clock                       | Real time                                     |
+| Trip-computer stalk button  | MFD page cycle: trip / history / limits / settings |
 
 ## Philosophy
 
@@ -105,16 +113,23 @@ cc-autobahn/
 │   ├── style.css         # amber VFD W203 skin
 │   ├── main.js           # thin entrypoint: wires all modules on DOMContentLoaded
 │   └── modules/
-│       ├── format.js         # VFD number formatters (tok/s, tokens, h:min)
+│       ├── format.js         # VFD number formatters (tok/s, tokens, h:min, $, model codes)
 │       ├── telemetry-state.js # shared state (lastBlock/sensor/pace buffers)
 │       ├── clock.js          # trip-computer clock tick
 │       ├── speedometer.js    # tok/s spring animation + burn-tick handler
-│       ├── trip-computer.js  # segments, gear, odo/avg, blocks/sensor handlers
+│       ├── trip-computer.js  # Page 0: segments, gear, odo/avg, blocks/sensor handlers
 │       ├── footer-metric.js  # PACE/AUTO footer toggle + computation
 │       ├── engine-overlay.js # CHECK ENGINE overlay + install_bun button
 │       ├── sensor-consent.js # sensor connect/disconnect consent UI
 │       ├── pin-button.js     # PIN button (pins panel open)
-│       └── ipc-events.js     # wires backend events to the modules above
+│       ├── ipc-events.js     # wires backend events to the modules above
+│       ├── header-hint.js    # docked "what's under the cursor" line (replaces title= tooltips)
+│       ├── mfd-nav.js        # MFD page-cycle button + state (D33)
+│       ├── mfd-settings.js   # localStorage: default page, which pages are in the cycle
+│       ├── history-data.js   # shared on-demand fetch (history_daily), used by Page 1 + 2
+│       ├── history-page.js   # Page 1: 30-day cost sparkline + per-day model breakdown
+│       ├── limits-page.js    # Page 2: weekly rate-limit window, cost/model, burn rate
+│       └── settings-page.js  # Page 3: default page + page-cycle toggles, custom dropdown
 ├── scripts/
 │   └── make-icon.mjs      # amber icon generator (zero-dep PNG)
 ├── src-tauri/
@@ -126,7 +141,7 @@ cc-autobahn/
 │       ├── main.rs        # dual entrypoint (GUI / statusline mode) + Tauri bootstrap
 │       ├── window.rs      # PinnedState, hide-on-blur, panel positioning
 │       ├── tray.rs        # menu-bar menu + icon + click-to-toggle
-│       ├── engine/        # ccusage sensor: detect (mod.rs) + install_bun (install.rs) + poll (blocks.rs)
+│       ├── engine/        # ccusage sensor: detect (mod.rs) + install_bun (install.rs) + poll (blocks.rs) + on-demand daily history (history.rs)
 │       ├── burn/          # tok/s sensor: zulu parsing + turn calc (parser.rs) + JSONL tail (tail.rs)
 │       ├── sensor/         # official statusline sensor: mod.rs (tail) + statusline_bin.rs (CLI mode) + install.rs (settings.json)
 │       └── tray_icon.rs   # tray icon progress ring
@@ -145,12 +160,13 @@ cc-autobahn/
 
 ## Roadmap
 
-Phases 0–5 done (chassis, data engine, `tok/s` per response, official
-statusline sensor, zero friction, tray/menu-bar, polish). The real,
-up-to-date checklist lives in [docs/ROADMAP.md](./docs/ROADMAP.md) — don't
-duplicate it here, it gets out of sync. Only **Phase 6** remains (history,
-optional): weekly/monthly view (`ccusage daily|monthly`) and OTEL
-integration.
+Phases 0–6 done (chassis, data engine, `tok/s` per response, official
+statusline sensor, zero friction, tray/menu-bar, polish, MFD history/limits/
+settings pages). The real, up-to-date checklist lives in
+[docs/ROADMAP.md](./docs/ROADMAP.md) — don't duplicate it here, it gets out
+of sync. Only two optional/future items remain: packaging Bun as a Tauri
+sidecar, and Windows/Linux support (tray API is cross-platform except
+`set_activation_policy`, untested outside macOS so far).
 
 ## License
 
