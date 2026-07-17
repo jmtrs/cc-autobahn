@@ -97,9 +97,39 @@ body {
 }
 
 .header .label {
+  font-size: 8px;
+  letter-spacing: 0.15em;
+  opacity: 0.6;
+  color: var(--amber-dim);
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Model badge, Mercedes trim-nameplate style (e.g. "C 220 CDI"), in the
+   header's primary slot. Repainted by setGear() in trip-computer.js
+   whenever the active model changes; click to rename (wireNameplateEdit). */
+.nameplate {
   font-size: 10px;
+  font-weight: 700;
   letter-spacing: 0.28em;
   opacity: 0.8;
+  cursor: pointer;
+}
+
+.nameplate:hover {
+  opacity: 1;
+}
+
+.nameplate[contenteditable="true"] {
+  cursor: text;
+  user-select: text;
+  opacity: 1;
+  outline: 1px dashed var(--amber-dim);
+  outline-offset: 2px;
 }
 
 /* PIN button: keeps the panel open (doesn't hide on blur, D24). */

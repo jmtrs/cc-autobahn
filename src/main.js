@@ -11,7 +11,7 @@ import { wireEngine } from "./modules/ipc-events.js";
 import { wirePinButton } from "./modules/pin-button.js";
 import { wireSensorUi } from "./modules/sensor-consent.js";
 import { burnFrame } from "./modules/speedometer.js";
-import { buildSegments, setGear } from "./modules/trip-computer.js";
+import { buildSegments, setGear, wireNameplateEdit } from "./modules/trip-computer.js";
 
 function init() {
   // Autonomy bar empty until the first blocks-update (no data yet).
@@ -23,6 +23,7 @@ function init() {
   wireSensorUi();
   wirePinButton();
   wireFooterToggle();
+  wireNameplateEdit();
   renderFooterMetric();
   setGear(["opus"]); // positions the marker against the HTML's default gear
   requestAnimationFrame(burnFrame); // starts idle (pos=0), true to the car

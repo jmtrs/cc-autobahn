@@ -10,10 +10,13 @@
     <main class="cluster">
       <div class="screen">
         <div class="display">
-          <!-- Top band: trip-computer header, like "AFTER START" -->
+          <!-- Top band: model nameplate badge (editable) + "SINCE START" caption -->
           <div class="row header">
-            <span class="label">AFTER START</span>
-            <button class="pin-btn" id="pin-btn" title="Pin panel (don't close on blur)">PIN</button>
+            <span class="nameplate" id="nameplate"></span>
+            <span class="header-right">
+              <span class="label">SINCE START</span>
+              <button class="pin-btn" id="pin-btn" title="Pin panel (don't close on blur)">PIN</button>
+            </span>
           </div>
 
           <!-- Main readout grid -->

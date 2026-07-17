@@ -12,6 +12,29 @@ const WINDOW_MIN = 300; // 5h billing window, in minutes
 
 let lastGearHit = null; // last active model painted, to know if the "gear changed"
 
+// Model badge, Mercedes trim-nameplate style — one per active model (D-review naming session).
+// User-editable (click the badge); custom text persists per model in localStorage.
+const NAMEPLATES = {
+  opus: "CC 500 4MATIC",
+  sonnet: "CC 320",
+  haiku: "CC 220 CDI",
+  fable: "CC 63 AMG",
+};
+const NAMEPLATE_STORAGE_KEY = "cc-autobahn.nameplates";
+let currentGearHit = null; // which model key the visible nameplate belongs to, for saving edits
+
+function loadNameplateOverrides() {
+  try {
+    return JSON.parse(localStorage.getItem(NAMEPLATE_STORAGE_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+
+function getNameplate(hit) {
+  return loadNameplateOverrides()[hit] || NAMEPLATES[hit];
+}
+
 /** Build the autonomie segment bar (fuel-gauge style). */
 export function buildSegments(filled) {
   const bar = document.getElementById("segments");
@@ -34,6 +57,14 @@ export function setGear(models) {
     models.some((id) => String(id).toLowerCase().includes(m))
   );
   if (!hit) return;
+
+  currentGearHit = hit;
+  const nameplateEl = document.getElementById("nameplate");
+  // Don't overwrite mid-edit — the user is typing (D-review: a live model
+  // tick landing while editing would clobber the in-progress text).
+  if (nameplateEl && nameplateEl.contentEditable !== "true") {
+    nameplateEl.textContent = getNameplate(hit);
+  }
 
   let activeEl = null;
   document.querySelectorAll(".gear .g").forEach((el) => {
@@ -63,6 +94,48 @@ export function setGear(models) {
     );
   }
   lastGearHit = hit;
+}
+
+/** Click the nameplate badge to rewrite it for the current model. Empty
+ *  input reverts to the built-in default (D-review: needs an escape hatch,
+ *  otherwise a typo is permanent). Persisted per model so switching gears
+ *  doesn't lose the customization. */
+export function wireNameplateEdit() {
+  const el = document.getElementById("nameplate");
+  el.title = "Click to rename";
+  el.onclick = () => {
+    el.contentEditable = "true";
+    el.focus();
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  };
+  const commit = () => {
+    if (el.contentEditable !== "true") return;
+    el.contentEditable = "false";
+    if (!currentGearHit) return;
+    const overrides = loadNameplateOverrides();
+    const value = el.textContent.trim().toUpperCase();
+    if (!value || value === NAMEPLATES[currentGearHit]) {
+      delete overrides[currentGearHit];
+    } else {
+      overrides[currentGearHit] = value;
+    }
+    localStorage.setItem(NAMEPLATE_STORAGE_KEY, JSON.stringify(overrides));
+    el.textContent = getNameplate(currentGearHit);
+  };
+  el.onblur = commit;
+  el.onkeydown = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      el.blur();
+    } else if (e.key === "Escape") {
+      el.textContent = getNameplate(currentGearHit);
+      el.blur();
+    }
+  };
 }
 
 /** Autonomy bar + text + gear from ccusage's PROJECTION (estimated). */
