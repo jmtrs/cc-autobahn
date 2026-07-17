@@ -126,28 +126,54 @@
               </div>
             </div>
 
-            <!-- Page 3: MFD settings — front-end only, localStorage -->
+            <!-- Page 3: MFD settings — front-end only, localStorage.
+                 Two columns (same trick as Page 2's .limits-cols): the window
+                 is 440x150, wide and short, so a single vertical stack ran out
+                 of height once THEME was added below SHOW SCREENS. -->
             <div class="page" data-page="3" id="page-3">
-              <div class="row header-sub"><span class="label">DEFAULT SCREEN</span></div>
-              <!-- Custom dropdown, not a native <select>: WKWebView renders the
-                   popup list as native OS chrome (the stray blue focus ring,
-                   D-review) which CSS can't reach. -->
-              <div class="vfd-dropdown" id="default-page-dropdown">
-                <button type="button" class="vfd-dropdown-btn" id="default-page-btn">
-                  <span id="default-page-value">SINCE START</span>
-                  <span class="vfd-dropdown-arrow">&#9662;</span>
-                </button>
-                <ul class="vfd-dropdown-list" id="default-page-list" hidden>
-                  <li data-value="0">SINCE START</li>
-                  <li data-value="1">HISTORY</li>
-                  <li data-value="2">LIMITS</li>
-                </ul>
-              </div>
+              <div class="settings-cols">
+                <div class="settings-col">
+                  <div class="row header-sub"><span class="label">DEFAULT SCREEN</span></div>
+                  <!-- Custom dropdown, not a native <select>: WKWebView renders the
+                       popup list as native OS chrome (the stray blue focus ring,
+                       D-review) which CSS can't reach. -->
+                  <div class="vfd-dropdown" id="default-page-dropdown">
+                    <button type="button" class="vfd-dropdown-btn" id="default-page-btn">
+                      <span id="default-page-value">SINCE START</span>
+                      <span class="vfd-dropdown-arrow">&#9662;</span>
+                    </button>
+                    <ul class="vfd-dropdown-list" id="default-page-list" hidden>
+                      <li data-value="0">SINCE START</li>
+                      <li data-value="1">HISTORY</li>
+                      <li data-value="2">LIMITS</li>
+                    </ul>
+                  </div>
 
-              <div class="row header-sub"><span class="label">SHOW SCREENS</span></div>
-              <!-- Rows built by settings-page.js (renderScreenList), ordered
-                   per screenOrder — up/down buttons reorder the MFD cycle. -->
-              <div id="screen-order-list"></div>
+                  <div class="row header-sub"><span class="label">SHOW SCREENS</span></div>
+                  <!-- Rows built by settings-page.js (renderScreenList), ordered
+                       per screenOrder — up/down buttons reorder the MFD cycle. -->
+                  <div id="screen-order-list"></div>
+                </div>
+
+                <div class="settings-col">
+                  <div class="row header-sub"><span class="label">THEME</span></div>
+                  <!-- List items rendered by settings-page.js from theme.js's
+                       PRESETS (single source of truth) + a CUSTOM entry. -->
+                  <div class="vfd-dropdown" id="theme-dropdown">
+                    <button type="button" class="vfd-dropdown-btn" id="theme-btn">
+                      <span id="theme-value">AMBER</span>
+                      <span class="vfd-dropdown-arrow">&#9662;</span>
+                    </button>
+                    <ul class="vfd-dropdown-list" id="theme-list" hidden></ul>
+                  </div>
+                  <!-- Only shown when CUSTOM is active — theme.js derives dim/glow/bg/bezel
+                       from this one accent color. -->
+                  <div class="row vfd-theme-accent" id="theme-accent-row" hidden>
+                    <span class="label">ACCENT COLOR</span>
+                    <input type="color" id="theme-accent-input" />
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 

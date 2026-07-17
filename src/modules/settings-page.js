@@ -6,6 +6,7 @@
 
 import { hintOnHover } from "./header-hint.js";
 import { loadMfdSettings, saveMfdSettings } from "./mfd-settings.js";
+import { applyTheme, initTheme, loadThemeSettings, PRESETS, saveThemeSettings } from "./theme.js";
 
 const PAGE_OPTIONS = [
   { value: 0, label: "SINCE START" },
@@ -112,7 +113,77 @@ function renderScreenList() {
   });
 }
 
+const THEME_OPTIONS = [
+  ...Object.entries(PRESETS).map(([value, preset]) => ({ value, label: preset.label })),
+  { value: "custom", label: "CUSTOM" },
+];
+
+/** Same custom-dropdown pattern as wireDefaultPageDropdown, plus a single
+ *  accent-color picker that only shows up for the CUSTOM entry (theme.js
+ *  derives the other 4 palette variables from that one color). */
+function wireThemeSection() {
+  const root = document.getElementById("theme-dropdown");
+  const btn = document.getElementById("theme-btn");
+  const valueEl = document.getElementById("theme-value");
+  const list = document.getElementById("theme-list");
+  const accentRow = document.getElementById("theme-accent-row");
+  const accentInput = document.getElementById("theme-accent-input");
+  hintOnHover(btn, "Instrument cluster color palette");
+  hintOnHover(accentRow, "Pick your own accent color");
+
+  list.innerHTML = THEME_OPTIONS.map(
+    (opt) => `<li data-value="${opt.value}">${opt.label}</li>`
+  ).join("");
+
+  function paint(themeId) {
+    const opt = THEME_OPTIONS.find((o) => o.value === themeId) ?? THEME_OPTIONS[0];
+    valueEl.textContent = opt.label;
+    list.querySelectorAll("li").forEach((li) => {
+      li.classList.toggle("active", li.dataset.value === opt.value);
+    });
+    accentRow.hidden = themeId !== "custom";
+  }
+
+  function close() {
+    list.hidden = true;
+    root.classList.remove("open");
+  }
+
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const wasOpen = !list.hidden;
+    close();
+    if (!wasOpen) {
+      list.hidden = false;
+      root.classList.add("open");
+    }
+  };
+
+  list.querySelectorAll("li").forEach((li) => {
+    li.onclick = () => {
+      const themeId = li.dataset.value;
+      paint(themeId);
+      applyTheme(themeId);
+      close();
+    };
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!root.contains(e.target)) close();
+  });
+
+  accentInput.oninput = () => {
+    saveThemeSettings({ customAccent: accentInput.value });
+    initTheme();
+  };
+
+  const settings = loadThemeSettings();
+  accentInput.value = settings.customAccent;
+  paint(settings.themeId);
+}
+
 export function wireSettingsPage() {
   wireDefaultPageDropdown();
   renderScreenList();
+  wireThemeSection();
 }

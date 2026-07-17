@@ -16,6 +16,7 @@ import { wireRedlineTray } from "./modules/redline.js";
 import { wireSensorUi } from "./modules/sensor-consent.js";
 import { wireSettingsPage } from "./modules/settings-page.js";
 import { burnFrame } from "./modules/speedometer.js";
+import { initTheme } from "./modules/theme.js";
 import {
   buildSegments,
   setGear,
@@ -24,6 +25,7 @@ import {
 } from "./modules/trip-computer.js";
 
 function init() {
+  initTheme();
   // Autonomy bar empty until the first blocks-update (no data yet).
   buildSegments(0);
   tickClock();
