@@ -683,3 +683,22 @@ Page 3's "hide History" toggle correctly removing it from the cycle, zero consol
 errors across the run. `history_daily`'s real IPC round-trip against a live Claude
 Code install is unverified — first `npm run tauri dev` should confirm Page 1/2 render
 real numbers, not just the empty-state fallback.
+
+## D34 — Distribution: unsigned GitHub Releases, no Apple Developer ID (yet)
+
+**Decision**: distribute as an **unsigned** universal (arm64 + x86_64) macOS build
+attached to GitHub Releases, built by `.github/workflows/release.yml`
+(`tauri-action`, triggered by `v*` tags, draft release). No code signing, no
+notarization, no auto-updater. The Gatekeeper friction is documented instead of
+paid for: right-click → Open, or `xattr -dr com.apple.quarantine`.
+
+**Reasoning**: Developer ID + notarization ($99/yr) is the *only* way to remove
+the first-launch warning — ad-hoc/self-signed certs change nothing, and Homebrew
+no longer helps (Homebrew 5.0 forces `com.apple.quarantine` on all casks and is
+removing `--no-quarantine`). For a 0.x project whose audience is
+terminal-comfortable Claude Code users, the documented workaround is acceptable;
+the $99 is deferred until there's real traction (unknown users hitting the
+warning, a homebrew-cask official submission, or a Tauri auto-updater, which
+would want signing anyway).
+
+**Verified**: workflow not yet exercised — first tag push (`v0.1.0`) is the test.

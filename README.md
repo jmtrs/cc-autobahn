@@ -13,6 +13,25 @@ pricing, and billing windows are delegated to
 done in-house is `tok/s` **per response** (`Δoutput / Δt_turn` over the
 JSONL tail), which no existing tool offers.
 
+## Install
+
+Requirements: **macOS** (universal: Apple Silicon + Intel) and
+[Claude Code](https://claude.ai/code). Nothing else upfront — the cluster
+offers to install its own engine (Bun + ccusage) on first run.
+
+1. Download the `.dmg` from the
+   [latest release](https://github.com/jmtrs/cc-autobahn/releases/latest) and
+   drag `cc-autobahn.app` to `/Applications`.
+2. The build is **unsigned** (no Apple Developer ID, D34), so Gatekeeper
+   blocks the first launch. Either right-click the app → **Open** → **Open**,
+   or run:
+   ```sh
+   xattr -dr com.apple.quarantine /Applications/cc-autobahn.app
+   ```
+3. Click the new menu-bar icon (no Dock, no Cmd+Tab) to show the cluster.
+   With no engine detected, the **CHECK ENGINE** overlay has an *Install
+   engine* button that wires everything up on its own (D9/D12).
+
 ## Status
 
 **Phases 0–6 done** (see the [roadmap](./docs/ROADMAP.md) for the actual

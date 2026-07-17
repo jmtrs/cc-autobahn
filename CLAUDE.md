@@ -28,6 +28,8 @@ npx @tauri-apps/cli icon scripts/source-icon.png  # derives all sizes
 
 Backend: `cargo test` (26 tests, in `src-tauri/`) + `cargo clippy` clean. Frontend: no tests or linter configured.
 
+Releases: push a `v*` tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) → `.github/workflows/release.yml` (tauri-action) builds the **unsigned** universal (arm64+x86_64) `.dmg`/`.app` on `macos-latest` and attaches it to a **draft** GitHub Release — publish the draft manually. No signing secrets configured (D34).
+
 ## Architecture (two layers)
 
 - **Rust backend (`src-tauri/`)** — responsible for **all I/O**, never blocks the UI. Each sensor is a directory module, split by concern: `engine/` (`mod.rs`: `detect` global ccusage → npx → bunx + poll loop; `blocks.rs`: `poll_once`/`ccusage blocks --active --json` at **slow cadence 15 s**, D13; `install.rs`: `install_bun`; `history.rs`: `history_daily`/`ccusage claude daily --json`, **on-demand** cadence, D33), `burn/` (`zulu.rs`: Zulu timestamp parsing; `parser.rs`: `TurnState`/`process_line`, pure turn-calc logic; `tail.rs`: JSONL file tail → `tok/s` per response, D17/D27), `sensor/` (`mod.rs`: shared paths + tail watcher; `statusline_bin.rs`: the `statusline` CLI entrypoint; `install.rs`: settings.json auto-install/uninstall), `tray_icon.rs` (tray icon progress ring, D30), `window.rs` (PIN state, hide-on-blur, panel positioning), `tray.rs` (menu-bar menu/icon/click).

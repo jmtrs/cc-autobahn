@@ -1,0 +1,48 @@
+name: Release
+
+# Push a `v*` tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) to build the
+# unsigned universal macOS bundle and attach it to a draft GitHub Release.
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'cc-autobahn ${{ github.ref_name }}'
+          releaseBody: |
+            **Unsigned build** (no Apple Developer ID). Gatekeeper blocks the first
+            launch — either right-click the app → **Open**, or run:
+
+            ```sh
+            xattr -dr com.apple.quarantine /Applications/cc-autobahn.app
+            ```
+          releaseDraft: true
+          prerelease: false
+          args: --target universal-apple-darwin
