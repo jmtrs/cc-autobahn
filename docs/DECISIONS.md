@@ -785,3 +785,53 @@ at empty temp dirs, `npx`/`bunx` briefly relocated out of `/opt/homebrew/bin`
 progress (now actually visible mid-install), a real isolated Bun install,
 engine auto-detection via the hardened `PATH`, and the sensor consent flow
 all complete correctly.
+
+## D37 — Redline: the whole instrument reacts to PACE/AUTO, not just the footer
+
+**Decision**: the PACE/AUTO footer (`footer-metric.js`) used to be a flat text
+value with no visual weight — it lost against the speedometer's spring (D18) and
+the segment bar's glow (D23). New module `src/modules/redline.js` evaluates
+PACE and AUTO **both, every render** (not just whichever is currently displayed)
+against two thresholds — PACE ≥ +50% over the block average, or AUTO ≤ 15 min
+remaining — and, when either is crossed, drives a **sustained** tint
+(`.screen.redline`, `.segments.redline`, red breathing box-shadow/segment
+color, `@keyframes redlinePulse`) plus a **one-shot** entry effect fired only on
+the edge (`wasRedline` tracked module-locally, not per-render): a brightness
+flash on `.screen` (`redline-enter`/`redlineFlash`, animates `filter` — kept off
+`box-shadow` on purpose, see below), a ripple sweep across the 12 segments
+(`.seg.ripple`/`segRipple`, staggered via a per-segment `--i` custom property),
+and a mechanical "kick" (`.spike`/`valueSpike`, scaleY + white flash) on both
+the footer value and the speedometer readout (`#burn`).
+
+No new DOM, no backend/Rust changes, no new IPC — pure CSS/JS reusing patterns
+already in the codebase instead of inventing a new one: the reflow-then-class
+one-shot trigger is the same technique `setGear()` already uses for `.gear .g.pulse`
+(`trip-computer.js`), and the sustained tint follows the same
+`classList.toggle()` shape as the existing 7-day `.screen.warn`.
+
+**`.warn`/`.redline` overlap**: both tint the same `.screen` element's
+`box-shadow`. A CSS animation always overrides a static declaration on the same
+property regardless of selector specificity or source order — so a plain
+`.screen.redline` rule would silently swallow `.warn`'s 7-day reserve tint
+whenever both are active simultaneously (a real, not hypothetical, case: heavy
+weekly usage and a recent burst pace can coincide). Fixed with a dedicated
+higher-specificity `.screen.warn.redline` rule (`redlinePulseWarn` keyframe)
+that layers both tints' `box-shadow` values into one animation instead of one
+hiding the other.
+
+**Reasoning**: explicit user direction ("que sea interactivo... que pasen
+cosas... que quede guau") for the footer to have real presence, escalated
+through several rounds to "the whole interface changes" rather than a local
+effect — landed on threshold-crossing reactions across screen/segments/footer/
+speedometer instead of a literal rotating needle (there is no needle DOM,
+D18's "speedometer" is a spring-animated number) or a tray-icon color change
+(the tray is a monochrome "template" image, D30 — alpha-only, can't carry a
+red tint without breaking macOS's light/dark adaptation; left out of scope for
+this pass).
+
+**Verified**: `vite build` clean, no import cycles, no class-name collisions
+with existing CSS. No Tauri runtime available in this environment for a full
+native run — the threshold logic, edge-detection (no repeated flash while
+sustained-critical), and the `.warn`+`.redline` combined keyframe were reviewed
+by hand rather than driven end-to-end in a live `tauri dev` session; first run
+should confirm the visual effect against real `burn-tick`/`sensor-update` data.

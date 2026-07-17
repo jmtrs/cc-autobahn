@@ -8,7 +8,7 @@
 
 import { formatModelCode, formatTokens, formatUsd } from "./format.js";
 import { hintOnHover } from "./header-hint.js";
-import { latestDay, loadHistory } from "./history-data.js";
+import { latestDay, loadHistory, SPINNER_HTML } from "./history-data.js";
 
 let allDays = [];
 
@@ -71,7 +71,10 @@ function render(days) {
 }
 
 async function refresh() {
-  showMessage("…");
+  // Bars stay empty on a cold load (nothing rendered yet) — without this,
+  // the whole page looks stuck for however long ccusage takes to spawn.
+  document.getElementById("history-bars").innerHTML = SPINNER_HTML;
+  showMessage("loading…");
   try {
     render(await loadHistory());
   } catch (e) {

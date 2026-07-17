@@ -12,6 +12,7 @@ import { wireEngine } from "./modules/ipc-events.js";
 import { wireLimitsPage } from "./modules/limits-page.js";
 import { wireMfdNav } from "./modules/mfd-nav.js";
 import { wirePinButton } from "./modules/pin-button.js";
+import { wireRedlineTray } from "./modules/redline.js";
 import { wireSensorUi } from "./modules/sensor-consent.js";
 import { wireSettingsPage } from "./modules/settings-page.js";
 import { burnFrame } from "./modules/speedometer.js";
@@ -31,6 +32,7 @@ function init() {
   wireEngine();
   wireSensorUi();
   wirePinButton();
+  wireRedlineTray();
   wireFooterToggle();
   wireNameplateEdit();
   wireTripComputerHints();

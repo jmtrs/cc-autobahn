@@ -9,6 +9,7 @@
 
 import { formatHMin } from "./format.js";
 import { hintOnHover } from "./header-hint.js";
+import { updateRedline } from "./redline.js";
 import { state } from "./telemetry-state.js";
 
 const PACE_WINDOW_MS = 5 * 60 * 1000; // recent window for PACE
@@ -88,17 +89,21 @@ function computeAdjustedAutonomy() {
   return minutesLeft;
 }
 
-/** Repaints the footer based on the active metric (PACE/AUTO, see footerMetric). */
+/** Repaints the footer based on the active metric (PACE/AUTO, see footerMetric).
+ *  Both PACE and AUTO are always computed here, regardless of which one is
+ *  displayed — updateRedline() needs both to decide if the whole instrument
+ *  should react, not just whichever text happens to be showing. */
 export function renderFooterMetric() {
   const label = document.getElementById("footer-metric-label");
   const value = document.getElementById("footer-metric-value");
+  const deltaPct = computePace();
+  const minutesLeft = computeAdjustedAutonomy();
+
   if (footerMetric === "autonomy") {
     label.textContent = "AUTO";
-    const minutesLeft = computeAdjustedAutonomy();
     value.textContent = minutesLeft == null ? "—" : formatHMin(minutesLeft);
   } else {
     label.textContent = "PACE";
-    const deltaPct = computePace();
     if (deltaPct == null) {
       value.textContent = "—";
     } else {
@@ -107,12 +112,13 @@ export function renderFooterMetric() {
       value.textContent = `${arrow} ${sign}${Math.round(deltaPct)}%`;
     }
   }
+  updateRedline(deltaPct, minutesLeft);
 }
 
 /** Clicking the footer toggles PACE/AUTO, persisted to localStorage. */
 export function wireFooterToggle() {
   const el = document.getElementById("footer-metric");
-  hintOnHover(el, "Click to switch PACE / AUTO");
+  hintOnHover(el, "PACE: rate/avg ⇄ AUTO: Range at this pace");
   el.onclick = () => {
     footerMetric = footerMetric === "pace" ? "autonomy" : "pace";
     localStorage.setItem("cc-autobahn.footerMetric", footerMetric);

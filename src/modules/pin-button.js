@@ -7,7 +7,7 @@ export async function wirePinButton() {
   const btn = document.getElementById("pin-btn");
   // Hint wired unconditionally (D-review): it's plain UI, no reason to gate
   // it behind the Tauri guard below like the actual pin functionality.
-  hintOnHover(btn, "Keep panel open, ignore blur");
+  hintOnHover(btn, "Keep panel open");
   if (!("__TAURI_INTERNALS__" in window)) return;
   const { invoke } = await import("@tauri-apps/api/core");
   let pinned = false;

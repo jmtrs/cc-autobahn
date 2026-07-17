@@ -13,6 +13,12 @@ const PAGE_OPTIONS = [
   { value: 2, label: "LIMITS" },
 ];
 
+// Metadata for the reorderable "SHOW SCREENS" rows (screenOrder, mfd-nav.js).
+const SCREEN_META = {
+  1: { checkId: "toggle-history", flag: "showHistory", label: "HISTORY", hint: "Show History in the screen cycle" },
+  2: { checkId: "toggle-limits", flag: "showLimits", label: "LIMITS", hint: "Show Limits in the screen cycle" },
+};
+
 /** Custom dropdown, not a native <select> (D-review): WKWebView renders a
  *  <select>'s popup as native OS chrome outside CSS's reach — a stray blue
  *  focus ring in an otherwise all-amber UI. Built from a button + a plain
@@ -64,20 +70,49 @@ function wireDefaultPageDropdown() {
   paint(loadMfdSettings().defaultPage);
 }
 
+/** Swaps `pageId` with its neighbor (delta = -1 up / +1 down) in screenOrder
+ *  and re-renders. Real trip computers don't let you drag things around —
+ *  up/down buttons on each row fit the same mechanical-button language as
+ *  the rest of Page 3 (D10: no drag-and-drop lib, zero new deps). */
+function moveScreen(pageId, delta) {
+  const order = [...loadMfdSettings().screenOrder];
+  const idx = order.indexOf(pageId);
+  const target = idx + delta;
+  if (idx === -1 || target < 0 || target >= order.length) return;
+  [order[idx], order[target]] = [order[target], order[idx]];
+  saveMfdSettings({ screenOrder: order });
+  renderScreenList();
+}
+
+/** Rebuilds the "SHOW SCREENS" rows in screenOrder's order, each with its own
+ *  checkbox (still toggles showHistory/showLimits) plus up/down reorder
+ *  buttons — top row's up and bottom row's down are disabled. */
+function renderScreenList() {
+  const s = loadMfdSettings();
+  const list = document.getElementById("screen-order-list");
+  list.innerHTML = "";
+  s.screenOrder.forEach((pageId, i) => {
+    const meta = SCREEN_META[pageId];
+    if (!meta) return;
+    const row = document.createElement("div");
+    row.className = "vfd-reorder-row";
+    row.innerHTML = `
+      <label class="vfd-check"><input type="checkbox" id="${meta.checkId}" ${s[meta.flag] ? "checked" : ""} /> ${meta.label}</label>
+      <span class="vfd-reorder-btns">
+        <button type="button" class="vfd-reorder-btn" data-dir="up" ${i === 0 ? "disabled" : ""}>&#9650;</button>
+        <button type="button" class="vfd-reorder-btn" data-dir="down" ${i === s.screenOrder.length - 1 ? "disabled" : ""}>&#9660;</button>
+      </span>`;
+
+    const chk = row.querySelector("input");
+    hintOnHover(chk.closest("label"), meta.hint);
+    chk.onchange = () => saveMfdSettings({ [meta.flag]: chk.checked });
+    row.querySelector('[data-dir="up"]').onclick = () => moveScreen(pageId, -1);
+    row.querySelector('[data-dir="down"]').onclick = () => moveScreen(pageId, 1);
+    list.appendChild(row);
+  });
+}
+
 export function wireSettingsPage() {
   wireDefaultPageDropdown();
-
-  const historyChk = document.getElementById("toggle-history");
-  const limitsChk = document.getElementById("toggle-limits");
-
-  const s = loadMfdSettings();
-  historyChk.checked = s.showHistory;
-  limitsChk.checked = s.showLimits;
-
-  // Hint on the whole label (not just the input) so the text is hoverable too.
-  hintOnHover(historyChk.closest("label"), "Show History in the screen cycle");
-  hintOnHover(limitsChk.closest("label"), "Show Limits in the screen cycle");
-
-  historyChk.onchange = () => saveMfdSettings({ showHistory: historyChk.checked });
-  limitsChk.onchange = () => saveMfdSettings({ showLimits: limitsChk.checked });
+  renderScreenList();
 }

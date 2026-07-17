@@ -7,7 +7,7 @@
 
 import { formatModelCode, formatResetAt, formatUsd } from "./format.js";
 import { hintOnHover } from "./header-hint.js";
-import { latestDay, loadHistory } from "./history-data.js";
+import { latestDay, loadHistory, SPINNER_HTML } from "./history-data.js";
 import { state } from "./telemetry-state.js";
 
 const LIMIT_SEGMENTS = 12;
@@ -47,6 +47,10 @@ function renderBurnRates() {
 
 async function renderBreakdown() {
   const list = document.getElementById("breakdown-list");
+  // Same cold-load gap as History (D-review): on a first, uncached
+  // loadHistory() call this list otherwise stays empty/stale with no
+  // indication anything is happening.
+  list.innerHTML = SPINNER_HTML;
   try {
     const today = latestDay(await loadHistory());
     const models = today?.modelBreakdowns ?? [];

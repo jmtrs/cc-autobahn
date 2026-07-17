@@ -42,17 +42,20 @@
                   <span class="big" id="burn">4.1k</span>
                   <span class="unit">tok/s</span>
                 </div>
-                <div class="cell">
-                  <span class="big" id="avg">$0.42</span>
-                  <span class="unit">/Mtok</span>
+                <!-- PACE/AUTO promoted to a primary grid cell (D-review: was a
+                     small footer ghost line, lost against the other 3 big
+                     readouts) — same ids/click-toggle, just relocated. -->
+                <div class="cell footer-metric" id="footer-metric">
+                  <span class="big" id="footer-metric-value">—</span>
+                  <span class="unit" id="footer-metric-label">PACE</span>
                 </div>
               </div>
 
-              <!-- Bottom line: pace/autonomy toggle + clock, like "106 Km/h   16:57" (D8) -->
+              <!-- Bottom line: avg cost (demoted, D-review) + clock, like "106 Km/h   16:57" (D8) -->
               <div class="row footer">
-                <span class="ghost footer-metric" id="footer-metric">
-                  <span class="ghost-label" id="footer-metric-label">PACE</span>
-                  <span id="footer-metric-value">—</span>
+                <span class="ghost" id="avg-metric">
+                  <span class="ghost-label">AVG</span>
+                  <span id="avg">$0.42</span><span class="unit">/Mtok</span>
                 </span>
                 <span class="clock" id="clock">--:--</span>
               </div>
@@ -142,8 +145,9 @@
               </div>
 
               <div class="row header-sub"><span class="label">SHOW SCREENS</span></div>
-              <label class="vfd-check"><input type="checkbox" id="toggle-history" /> HISTORY</label>
-              <label class="vfd-check"><input type="checkbox" id="toggle-limits" /> LIMITS</label>
+              <!-- Rows built by settings-page.js (renderScreenList), ordered
+                   per screenOrder — up/down buttons reorder the MFD cycle. -->
+              <div id="screen-order-list"></div>
             </div>
           </div>
 

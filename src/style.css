@@ -327,6 +327,86 @@ body {
     inset 0 0 0 1px rgba(255, 51, 0, 0.4);
 }
 
+/* Redline: PACE far above the block average, or AUTO about to run out
+   (redline.js) — the whole instrument reacts, not just the footer text. */
+.screen.redline {
+  animation: redlinePulse 1.6s ease-in-out infinite;
+}
+
+@keyframes redlinePulse {
+  0%, 100% {
+    box-shadow: inset 0 0 20px rgba(255, 64, 0, 0.18),
+      inset 0 0 0 1px rgba(255, 64, 0, 0.35);
+  }
+  50% {
+    box-shadow: inset 0 0 34px rgba(255, 64, 0, 0.4),
+      inset 0 0 0 1px rgba(255, 64, 0, 0.6);
+  }
+}
+
+/* .warn (7d reserve tint) and .redline both animate/set box-shadow on the
+   same element — a CSS animation always wins over a static declaration on
+   the same property regardless of source order, so plain .screen.redline
+   would silently swallow .warn's tint whenever both are active at once.
+   This higher-specificity rule (3 classes) layers both tints into the same
+   keyframe instead of letting one hide the other. */
+.screen.warn.redline {
+  animation: redlinePulseWarn 1.6s ease-in-out infinite;
+}
+
+@keyframes redlinePulseWarn {
+  0%, 100% {
+    box-shadow: inset 0 0 24px rgba(255, 51, 0, 0.22), inset 0 0 0 1px rgba(255, 51, 0, 0.4),
+      inset 0 0 20px rgba(255, 64, 0, 0.18), inset 0 0 0 1px rgba(255, 64, 0, 0.35);
+  }
+  50% {
+    box-shadow: inset 0 0 24px rgba(255, 51, 0, 0.22), inset 0 0 0 1px rgba(255, 51, 0, 0.4),
+      inset 0 0 34px rgba(255, 64, 0, 0.4), inset 0 0 0 1px rgba(255, 64, 0, 0.6);
+  }
+}
+
+/* One-shot flash the instant redline is entered. Animates `filter`, not
+   `box-shadow` — redlinePulse above already owns that property, and both
+   classes can be present on .screen at the same time. */
+.screen.redline-enter {
+  animation: redlineFlash 0.3s ease-out;
+}
+
+@keyframes redlineFlash {
+  0% { filter: brightness(2.2) saturate(1.4); }
+  100% { filter: brightness(1) saturate(1); }
+}
+
+/* Segment bar (5h window, #segments) turns red while redline holds. */
+.segments.redline .seg.on {
+  background: #ff5533;
+  box-shadow: 0 0 6px rgba(255, 68, 17, 0.8);
+}
+
+/* One-shot sweep across the 12 segments when redline is first entered
+   (--i set per-segment by redline.js). */
+.seg.ripple {
+  animation: segRipple 0.4s ease-out;
+  animation-delay: calc(var(--i, 0) * 40ms);
+}
+
+@keyframes segRipple {
+  0% { filter: brightness(2.5); }
+  100% { filter: brightness(1); }
+}
+
+/* One-shot mechanical "kick" on the footer value and the speedometer
+   readout (#burn) the instant redline is entered. */
+.spike {
+  animation: valueSpike 0.35s ease-out;
+}
+
+@keyframes valueSpike {
+  0% { transform: scaleY(0.4); text-shadow: 0 0 20px rgba(255, 255, 255, 0.9); }
+  60% { transform: scaleY(1.15); }
+  100% { transform: scaleY(1); }
+}
+
 .autonomie {
   font-size: 12px;
   font-weight: 700;
@@ -538,6 +618,14 @@ body {
 }
 .engine-spinner-seg:nth-child(5) {
   animation-delay: 0.48s;
+}
+
+/* Same scanner reused inside History's bars / Limits' breakdown while
+   loadHistory() is in flight (history-data.js, SPINNER_HTML) — centered
+   here instead of pinned left like the CHECK ENGINE row. */
+.history-bars .engine-spinner,
+.breakdown-list .engine-spinner {
+  margin: auto;
 }
 
 @keyframes engine-scan {
@@ -824,4 +912,40 @@ body {
   background: var(--amber);
   border-color: var(--amber);
   box-shadow: 0 0 5px rgba(255, 154, 31, 0.7);
+}
+
+/* Reorderable "SHOW SCREENS" rows (settings-page.js) — checkbox + up/down
+   buttons, same mechanical-button language as .mfd-btn/.pin-btn instead of
+   drag-and-drop (D10: no new deps, and WKWebView drag support is finicky). */
+.vfd-reorder-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.vfd-reorder-btns {
+  display: flex;
+  gap: 2px;
+}
+
+.vfd-reorder-btn {
+  font-family: var(--font);
+  font-size: 8px;
+  line-height: 1;
+  color: var(--amber-dim);
+  background: transparent;
+  border: 1px solid var(--amber-dim);
+  border-radius: 3px;
+  padding: 1px 4px;
+  cursor: pointer;
+}
+
+.vfd-reorder-btn:hover:not(:disabled) {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+
+.vfd-reorder-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
 }

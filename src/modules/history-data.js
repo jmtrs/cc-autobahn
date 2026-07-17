@@ -8,6 +8,15 @@
 const CACHE_MS = 5 * 60 * 1000;
 let cache = null; // { at, days }
 
+// Shared loading indicator for the first (uncached) `loadHistory()` call —
+// reuses the CHECK ENGINE overlay's "VFD scanner" (.engine-spinner, D36)
+// instead of inventing a second spinner, so a slow ccusage spawn doesn't
+// read as a frozen page to whoever opens History/Limits first.
+export const SPINNER_HTML =
+  '<div class="engine-spinner" aria-hidden="true">' +
+  '<span class="engine-spinner-seg"></span>'.repeat(5) +
+  "</div>";
+
 /** `Array<{date, totalCost, totalTokens, modelBreakdowns}>`, oldest first. */
 export async function loadHistory(force = false) {
   if (!force && cache && Date.now() - cache.at < CACHE_MS) return cache.days;

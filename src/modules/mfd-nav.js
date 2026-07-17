@@ -11,9 +11,16 @@ const PAGE_LABELS = { 0: "SINCE START", 1: "HISTORY", 2: "LIMITS", 3: "SETTINGS"
 
 let current = 0;
 
+const SHOW_FLAG = { 1: "showHistory", 2: "showLimits" };
+
 function cycleOrder() {
   const s = loadMfdSettings();
-  return [0, ...(s.showHistory ? [1] : []), ...(s.showLimits ? [2] : []), 3];
+  // Guard against a corrupted/partial screenOrder (e.g. hand-edited
+  // localStorage) — falls back to the default pair instead of silently
+  // dropping a page from the cycle forever.
+  const order = Array.isArray(s.screenOrder) ? s.screenOrder : [1, 2];
+  const shown = order.filter((id) => SHOW_FLAG[id] && s[SHOW_FLAG[id]]);
+  return [0, ...shown, 3];
 }
 
 function activate(page) {
