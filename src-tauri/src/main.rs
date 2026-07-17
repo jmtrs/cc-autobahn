@@ -42,6 +42,7 @@ fn main() {
             sensor::install::install_sensor,
             sensor::install::uninstall_sensor,
             window::set_pinned,
+            tray_icon::set_tray_alert,
         ])
         .manage::<PinnedState>(Arc::new(Mutex::new(false)))
         .setup(|app| {
