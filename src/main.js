@@ -7,11 +7,20 @@
 import { tickClock } from "./modules/clock.js";
 import { wireEngineOverlay } from "./modules/engine-overlay.js";
 import { renderFooterMetric, wireFooterToggle } from "./modules/footer-metric.js";
+import { wireHistoryPage } from "./modules/history-page.js";
 import { wireEngine } from "./modules/ipc-events.js";
+import { wireLimitsPage } from "./modules/limits-page.js";
+import { wireMfdNav } from "./modules/mfd-nav.js";
 import { wirePinButton } from "./modules/pin-button.js";
 import { wireSensorUi } from "./modules/sensor-consent.js";
+import { wireSettingsPage } from "./modules/settings-page.js";
 import { burnFrame } from "./modules/speedometer.js";
-import { buildSegments, setGear, wireNameplateEdit } from "./modules/trip-computer.js";
+import {
+  buildSegments,
+  setGear,
+  wireNameplateEdit,
+  wireTripComputerHints,
+} from "./modules/trip-computer.js";
 
 function init() {
   // Autonomy bar empty until the first blocks-update (no data yet).
@@ -24,6 +33,13 @@ function init() {
   wirePinButton();
   wireFooterToggle();
   wireNameplateEdit();
+  wireTripComputerHints();
+  // Page listeners wired before wireMfdNav() so its initial activate() (which
+  // may land on Page 1/2 if that's the saved default) is already observed.
+  wireHistoryPage();
+  wireLimitsPage();
+  wireSettingsPage();
+  wireMfdNav();
   renderFooterMetric();
   setGear(["opus"]); // positions the marker against the HTML's default gear
   requestAnimationFrame(burnFrame); // starts idle (pos=0), true to the car

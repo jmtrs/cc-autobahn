@@ -14,6 +14,8 @@ export const state = {
   sensorConnected: false, // is official data arriving from the statusLine?
   everSensorConnected: false, // did it ever connect? (sticky, see above)
   fiveHourResetsAtMs: 0, // epoch-ms of the 5h reset (countdown, refreshed by the clock)
+  sevenDayPct: 0, // official 7d rate-limit window used%, read by limits-page (Page 2)
+  sevenDayResetsAtMs: 0, // epoch-ms of the 7d reset, read by limits-page (Page 2)
   recentTicks: [], // { recvAt, tokens } — fed by onBurnTick, read by footer-metric's PACE
   recentPct: [], // { recvAt, pct } — fed by onSensorUpdate, read by footer-metric's AUTO
 };

@@ -10,56 +10,141 @@
     <main class="cluster">
       <div class="screen">
         <div class="display">
-          <!-- Top band: model nameplate badge (editable) + "SINCE START" caption -->
+          <!-- Top band: model nameplate badge (editable), header-hint (what's under
+               the cursor, replaces native title tooltips, D-review), page label + MFD/PIN. -->
           <div class="row header">
             <span class="nameplate" id="nameplate"></span>
+            <span class="header-hint" id="header-hint"></span>
             <span class="header-right">
-              <span class="label">SINCE START</span>
-              <button class="pin-btn" id="pin-btn" title="Pin panel (don't close on blur)">PIN</button>
+              <span class="label" id="page-label">SINCE START</span>
+              <button class="mfd-btn" id="mfd-btn">&#9656;</button>
+              <button class="pin-btn" id="pin-btn">PIN</button>
             </span>
           </div>
 
-          <!-- Main readout grid -->
-          <div class="grid">
-            <div class="cell">
-              <span class="big" id="odo">1.24M</span>
-              <span class="unit">tok</span>
-            </div>
-            <div class="cell">
-              <span class="big" id="session-time">0:40</span>
-              <span class="unit">h</span>
+          <!-- MFD pages (D-review: real trip computers cycle screens with a
+               stalk button instead of cramming everything into one readout).
+               Page 0 is the untouched original trip computer. -->
+          <div class="pages" id="pages">
+            <!-- Page 0: live trip computer (default) -->
+            <div class="page active" data-page="0" id="page-0">
+              <div class="grid">
+                <div class="cell">
+                  <span class="big" id="odo">1.24M</span>
+                  <span class="unit">tok</span>
+                </div>
+                <div class="cell">
+                  <span class="big" id="session-time">0:40</span>
+                  <span class="unit">h</span>
+                </div>
+
+                <div class="cell">
+                  <span class="big" id="burn">4.1k</span>
+                  <span class="unit">tok/s</span>
+                </div>
+                <div class="cell">
+                  <span class="big" id="avg">$0.42</span>
+                  <span class="unit">/Mtok</span>
+                </div>
+              </div>
+
+              <!-- Bottom line: pace/autonomy toggle + clock, like "106 Km/h   16:57" (D8) -->
+              <div class="row footer">
+                <span class="ghost footer-metric" id="footer-metric">
+                  <span class="ghost-label" id="footer-metric-label">PACE</span>
+                  <span id="footer-metric-value">—</span>
+                </span>
+                <span class="clock" id="clock">--:--</span>
+              </div>
+
+              <!-- Autonomie segment bar (5h window), like the coolant gauge -->
+              <div class="row gauge">
+                <svg class="fuel" viewBox="0 0 12 16" aria-hidden="true">
+                  <rect class="fuel-body" x="1.5" y="4" width="6" height="10" rx="1" />
+                  <rect class="fuel-window" x="3" y="6.2" width="3" height="2.6" />
+                  <path class="fuel-hose" d="M7 5.5 C8.5 4.3 10.5 5 10.5 7 C10.5 9 8.7 8.8 8.2 10.3 C7.9 11.2 8.6 11.6 9.3 11.2" />
+                </svg>
+                <div class="segments" id="segments" aria-label="5h window autonomy">
+                  <!-- segments injected by JS -->
+                </div>
+                <span class="autonomie" id="autonomie">3h12</span>
+              </div>
             </div>
 
-            <div class="cell">
-              <span class="big" id="burn">4.1k</span>
-              <span class="unit">tok/s</span>
-            </div>
-            <div class="cell">
-              <span class="big" id="avg">$0.42</span>
-              <span class="unit">/Mtok</span>
-            </div>
-          </div>
+            <!-- Page 1: history (Phase 6) — `ccusage claude daily`, last 30 days -->
+            <div class="page" data-page="1" id="page-1">
+              <div class="row header-sub">
+                <span class="label">LAST 30 DAYS</span>
+                <span class="big small-total" id="history-total">—</span>
+              </div>
+              <div class="history-bars" id="history-bars"></div>
 
-          <!-- Bottom line: pace/autonomy toggle + clock, like "106 Km/h   16:57" (D8) -->
-          <div class="row footer">
-            <span class="ghost footer-metric" id="footer-metric" title="Click to switch">
-              <span class="ghost-label" id="footer-metric-label">PACE</span>
-              <span id="footer-metric-value">—</span>
-            </span>
-            <span class="clock" id="clock">--:--</span>
-          </div>
-
-          <!-- Autonomie segment bar (5h window), like the coolant gauge -->
-          <div class="row gauge">
-            <svg class="fuel" viewBox="0 0 12 16" aria-hidden="true">
-              <rect class="fuel-body" x="1.5" y="4" width="6" height="10" rx="1" />
-              <rect class="fuel-window" x="3" y="6.2" width="3" height="2.6" />
-              <path class="fuel-hose" d="M7 5.5 C8.5 4.3 10.5 5 10.5 7 C10.5 9 8.7 8.8 8.2 10.3 C7.9 11.2 8.6 11.6 9.3 11.2" />
-            </svg>
-            <div class="segments" id="segments" aria-label="5h window autonomy">
-              <!-- segments injected by JS -->
+              <!-- Fixed detail readout (D-review: a floating tooltip always clips against
+                   this window's real size, 440x150 — a docked panel can't overflow).
+                   Hover a bar to fill it; defaults to the latest day. -->
+              <div class="history-detail" id="history-detail">
+                <div class="hd-row">
+                  <span id="hd-date">—</span>
+                  <span id="hd-total">—</span>
+                </div>
+                <div class="hd-models" id="hd-models"></div>
+              </div>
             </div>
-            <span class="autonomie" id="autonomie">3h12</span>
+
+            <!-- Page 2: official weekly limit + today's per-model cost + instant/avg burn.
+                 Two columns (D-review): the window is 440x150 — wide and short — so a
+                 single vertical stack left the model list with ~2 visible rows. -->
+            <div class="page" data-page="2" id="page-2">
+              <div class="limits-cols">
+                <div class="limits-col">
+                  <div class="row header-sub">
+                    <span class="label">WEEKLY LIMIT</span>
+                    <span class="big small-total" id="limit-pct">—</span>
+                  </div>
+                  <div class="segments" id="limit-bar" aria-label="7d rate-limit window"></div>
+                  <div class="row footer">
+                    <span class="ghost" id="limit-reset">—</span>
+                  </div>
+                </div>
+
+                <div class="limits-col">
+                  <div class="row header-sub">
+                    <span class="label">TODAY BY MODEL</span>
+                  </div>
+                  <div class="breakdown-list" id="breakdown-list"></div>
+                </div>
+              </div>
+
+              <!-- Full-width footer: label above the value in each group;
+                   INSTANT hugs the left edge, AVG the right one -->
+              <div class="row footer burn-rates">
+                <span class="burn-group"><span class="ghost-label">INSTANT</span> <span id="burn-instant">—</span></span>
+                <span class="burn-group burn-right"><span class="ghost-label">AVG</span> <span id="burn-avg">—</span></span>
+              </div>
+            </div>
+
+            <!-- Page 3: MFD settings — front-end only, localStorage -->
+            <div class="page" data-page="3" id="page-3">
+              <div class="row header-sub"><span class="label">DEFAULT SCREEN</span></div>
+              <!-- Custom dropdown, not a native <select>: WKWebView renders the
+                   popup list as native OS chrome (the stray blue focus ring,
+                   D-review) which CSS can't reach. -->
+              <div class="vfd-dropdown" id="default-page-dropdown">
+                <button type="button" class="vfd-dropdown-btn" id="default-page-btn">
+                  <span id="default-page-value">SINCE START</span>
+                  <span class="vfd-dropdown-arrow">&#9662;</span>
+                </button>
+                <ul class="vfd-dropdown-list" id="default-page-list" hidden>
+                  <li data-value="0">SINCE START</li>
+                  <li data-value="1">HISTORY</li>
+                  <li data-value="2">LIMITS</li>
+                </ul>
+              </div>
+
+              <div class="row header-sub"><span class="label">SHOW SCREENS</span></div>
+              <label class="vfd-check"><input type="checkbox" id="toggle-history" /> HISTORY</label>
+              <label class="vfd-check"><input type="checkbox" id="toggle-limits" /> LIMITS</label>
+            </div>
           </div>
 
           <!-- CHECK ENGINE overlay (shown while no ccusage/npx/bunx on PATH, D9/Phase 4) -->

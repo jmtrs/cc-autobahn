@@ -102,10 +102,25 @@ Implementation order, one layer at a time, verifying before moving forward.
 - [x] Split fat files (`engine.rs`/`sensor.rs`/`burn.rs`/`main.rs`/`main.js`) into
       concern-sized modules, no behavior change (D32).
 
-## Phase 6 — History (optional)
+## Phase 6 — MFD pages: history + limits (D33)
 
-- [ ] Weekly/monthly view (`ccusage daily|monthly --json`).
-- [ ] (Optional) OTEL integration → Prometheus/Grafana for real tok/s and dashboards.
+- [x] 4-page MFD cycle (`#mfd-btn`, header): Page 0 trip computer (unchanged),
+      Page 1 History, Page 2 Limits, Page 3 Settings — cycles like the W203's
+      real stalk-mounted trip-computer button instead of cramming more
+      fields into Page 0.
+- [x] Page 1 — daily history (`ccusage claude daily --json`, **scoped to
+      `claude`**, not the top-level multi-agent command), 30-day bar
+      sparkline + total. New `engine::history::history_daily` command,
+      on-demand cadence (D13's 4th class): fetched on page-open, not polled.
+- [x] Page 2 — official weekly rate-limit window (`sevenDayPct`/
+      `sevenDayResetsAt`, already parsed since D23 but only ever used as a
+      border tint), today's per-model cost split (reuses Page 1's fetch),
+      instant vs. average $/h burn rate (`burnRate.costPerHour`, already
+      parsed since D28, never painted).
+- [x] Page 3 — default landing page + which optional pages are in the
+      cycle, `localStorage` only. Deliberately deferred: project filter,
+      cost-mode toggle (would need mutable poll-settings state shared with
+      the continuous `engine::start` loop — not justified yet).
 
 ## Verification per phase
 

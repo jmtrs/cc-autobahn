@@ -5,6 +5,7 @@
 
 import { formatDurationMs, formatHMin, formatTokens } from "./format.js";
 import { renderFooterMetric } from "./footer-metric.js";
+import { hintOnHover } from "./header-hint.js";
 import { state } from "./telemetry-state.js";
 
 export const SEGMENT_COUNT = 12;
@@ -15,7 +16,7 @@ let lastGearHit = null; // last active model painted, to know if the "gear chang
 // Model badge, Mercedes trim-nameplate style — one per active model (D-review naming session).
 // User-editable (click the badge); custom text persists per model in localStorage.
 const NAMEPLATES = {
-  opus: "CC 500 4MATIC",
+  opus: "CC 500",
   sonnet: "CC 320",
   haiku: "CC 220 CDI",
   fable: "CC 63 AMG",
@@ -102,7 +103,11 @@ export function setGear(models) {
  *  doesn't lose the customization. */
 export function wireNameplateEdit() {
   const el = document.getElementById("nameplate");
-  el.title = "Click to rename";
+  // No `title` (D-review): a native browser tooltip is dark-gray/sans-serif
+  // OS chrome, breaks the amber VFD look with no CSS-reachable fix — same
+  // reason the MFD/PIN buttons and PACE/AUTO toggle don't have one either.
+  // header-hint.js replaces it.
+  hintOnHover(el, "Click to rename this model's badge");
   el.onclick = () => {
     el.contentEditable = "true";
     el.focus();
@@ -191,6 +196,8 @@ export function onBlocksUpdate(block) {
   // Only if there was NEVER an official sensor — once there was one, a
   // momentary pause shouldn't let ccusage override the official data (D-review).
   if (!state.everSensorConnected) applyEstimated(block);
+  // Lets Page 2 (limits-page.js) keep its instant/avg burn rate live while visible.
+  document.dispatchEvent(new Event("telemetry-tick"));
 }
 
 /** OFFICIAL data from the statusLine: overwrites segments/autonomie/gear/warn. */
@@ -204,15 +211,18 @@ export function onSensorUpdate(p) {
   state.fiveHourResetsAtMs = p?.fiveHourResetsAt ? Number(p.fiveHourResetsAt) * 1000 : 0;
   refreshAutonomie();
   if (p?.modelId) setGear([p.modelId]);
-  // Reserve tint: seven_day > 80% → red border (W203 warning light).
-  document
-    .querySelector(".screen")
-    .classList.toggle("warn", (Number(p?.sevenDayPct) || 0) > 80);
+  // Official 7d rate-limit window — full numbers live on Page 2 (limits-page.js);
+  // the border tint here stays as the always-visible "check engine"-style warning.
+  const sevenDayPct = Number(p?.sevenDayPct) || 0;
+  state.sevenDayPct = sevenDayPct;
+  state.sevenDayResetsAtMs = p?.sevenDayResetsAt ? Number(p.sevenDayResetsAt) * 1000 : 0;
+  document.querySelector(".screen").classList.toggle("warn", sevenDayPct > 80);
   // Sliding buffer for the footer's AUTO metric (see footer-metric.js).
   if (Number.isFinite(pct)) {
     state.recentPct.push({ recvAt: Date.now(), pct });
   }
   renderFooterMetric();
+  document.dispatchEvent(new Event("telemetry-tick"));
 }
 
 /** Sensor connection. If official data NEVER arrived, falls back to the
@@ -231,4 +241,22 @@ export function onSensorState(p) {
     document.getElementById("autonomie").textContent = "EST —";
     buildSegments(0);
   }
+}
+
+/** Header-hint wiring for Page 0's static glyphs and numbers whose meaning
+ *  isn't fully covered by their `.unit` label (D-review). The `.row.gauge`
+ *  hint covers the fuel icon + segment bar + "3h12" text as one zone —
+ *  they're one gauge, not three separate things to explain. `#burn`/`#avg`
+ *  get one despite already having a unit label: D8/D11 are this project's
+ *  most-documented points of confusion (tok/s isn't live, cost is estimated). */
+export function wireTripComputerHints() {
+  hintOnHover(document.getElementById("gear"), "Active mod: Opus / Sonnet / Haiku / Fable");
+  hintOnHover(document.querySelector(".row.gauge"), "5h billing window remaining");
+  hintOnHover(
+    document.getElementById("burn"),
+    "Per-response rate"
+  );
+  hintOnHover(document.getElementById("avg"), "Estimated cost, not official");
+  hintOnHover(document.getElementById("odo"), "Total tokens since this block started");
+  hintOnHover(document.getElementById("session-time"), "Elapsed time in this 5h block");
 }

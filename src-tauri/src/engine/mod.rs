@@ -9,6 +9,7 @@
 //! every failure is turned into an event towards the frontend.
 
 mod blocks;
+pub mod history;
 pub mod install;
 
 use std::process::Command;

@@ -35,3 +35,34 @@ export function formatDurationMs(ms) {
   const totalMin = Math.floor(ms / 60000);
   return `${Math.floor(totalMin / 60)}:${String(totalMin % 60).padStart(2, "0")}`;
 }
+
+/** Formats a USD amount VFD-style: "$0.42", "$12.30". */
+export function formatUsd(n) {
+  return `$${(Number(n) || 0).toFixed(2)}`;
+}
+
+/** epoch-ms → short reset label, e.g. "Sat, 12:00" (weekly rate-limit reset, Page 2). */
+export function formatResetAt(ms) {
+  if (!(ms > 0)) return "—";
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(ms));
+}
+
+const MODEL_CODES = { opus: "O", sonnet: "S", haiku: "H", fable: "F" };
+
+/** Short fixed-width code for a model id, reusing the PRND lettering
+ *  (trip-computer.js's gear selector) so a model breakdown row never has to
+ *  truncate a long id like "claude-haiku-4-5-20251001" (Page 1's history detail).
+ *  Non-Claude ids (e.g. a proxied "glm-5.2"/"glm-4.7" pair) keep their version
+ *  digits in the fallback — a plain 3-letter slice made every GLM model read
+ *  as the same "GLM" code, indistinguishable in the breakdown (D-review). */
+export function formatModelCode(modelId) {
+  const id = String(modelId || "").toLowerCase();
+  const key = Object.keys(MODEL_CODES).find((k) => id.includes(k));
+  if (key) return MODEL_CODES[key];
+  const compact = id.replace(/[^a-z0-9]/g, "");
+  return compact.slice(0, 4).toUpperCase() || "?";
+}

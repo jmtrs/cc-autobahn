@@ -15,7 +15,7 @@
       {
         "title": "cc-autobahn",
         "label": "cluster",
-        "width": 440,
+        "width": 550,
         "height": 150,
         "resizable": false,
         "decorations": false,

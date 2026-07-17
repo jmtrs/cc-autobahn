@@ -35,6 +35,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             engine::engine_status,
             engine::install::install_bun,
+            engine::history::history_daily,
             sensor::install::sensor_status,
             sensor::install::sensor_preview_install,
             sensor::install::install_sensor,

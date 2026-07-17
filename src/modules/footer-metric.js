@@ -8,6 +8,7 @@
 // (rate_limits does measure real quota consumption).
 
 import { formatHMin } from "./format.js";
+import { hintOnHover } from "./header-hint.js";
 import { state } from "./telemetry-state.js";
 
 const PACE_WINDOW_MS = 5 * 60 * 1000; // recent window for PACE
@@ -110,7 +111,9 @@ export function renderFooterMetric() {
 
 /** Clicking the footer toggles PACE/AUTO, persisted to localStorage. */
 export function wireFooterToggle() {
-  document.getElementById("footer-metric").onclick = () => {
+  const el = document.getElementById("footer-metric");
+  hintOnHover(el, "Click to switch PACE / AUTO");
+  el.onclick = () => {
     footerMetric = footerMetric === "pace" ? "autonomy" : "pace";
     localStorage.setItem("cc-autobahn.footerMetric", footerMetric);
     renderFooterMetric();

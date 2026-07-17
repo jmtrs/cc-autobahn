@@ -625,3 +625,61 @@ clean, `vite build` clean (19 modules transformed, no import errors), and the
 already-running `tauri dev` session (with its file watcher) auto-recompiled and
 restarted live across every Rust edit without crashing — confirming the split runs
 correctly, not just compiles.
+
+## D33 — MFD pages: cycle screens instead of adding more fields to Page 0 (Phase 6 + D23/D28 loose ends)
+
+**Decision**: instead of growing the single trip-computer readout with more fields
+(daily history, weekly rate-limit numbers, per-model cost, instant vs. average burn),
+the display is split into 4 pages cycled by one new button (`#mfd-btn`, header,
+forward-only, wraps around) — same UX as the W203's real stalk-mounted trip-computer
+button:
+
+- **Page 0** — the original trip computer, untouched.
+- **Page 1 (History, Phase 6)** — `ccusage claude daily --json` (last 30 days),
+  bar sparkline + 30-day total. **Not** `ccusage daily` (no source scope): the
+  top-level command mixes in every agent ccusage detects on the machine (Codex,
+  Gemini, etc.) if installed — confirmed by running both against real data.
+- **Page 2 (Limits)** — three fields that were already flowing into the frontend but
+  either reduced to a side-effect or never painted: `sevenDayPct`/`sevenDayResetsAt`
+  (D23 already computed these for the border-tint warning and threw the numbers away),
+  `burnRate.costPerHour` (D28 already parses it in `engine/blocks.rs`, never read in
+  JS), and an average $/h derived client-side from `costUsd / elapsed-since-startTime`
+  (no new backend field). Today's per-model cost split reuses Page 1's fetch (see
+  below) instead of a second call.
+- **Page 3 (Settings)** — front-end only, `localStorage` (same pattern as the D-review
+  nameplate override): default landing page, and whether History/Limits are in the
+  cycle. Explicitly **not** built: a project filter or cost-mode (auto/calculate/
+  display) toggle — both would need a mutable Rust poll-settings state shared with the
+  continuous `engine::start` loop, not justified for a first pass (YAGNI).
+
+**Backend**: one new module, `engine/history.rs` (`#[tauri::command] history_daily`),
+nested under `engine` (not a sibling top-level module) specifically so it can see
+`Engine::base_command`/`label`, which are module-private — Rust privacy rules make
+private items visible to descendant modules, not siblings. Date math (`since_date`,
+`civil_from_days`) is hand-rolled (Howard Hinnant's algorithm, same family as
+`burn::zulu::days_from_civil`) to stay `chrono`-free (D10 zero-new-deps spirit).
+Tried `blocks --breakdown` first for the per-model split, hoping to avoid a second
+report type — **verified against the real CLI that the flag is a no-op on `blocks`'
+JSON output in this ccusage version**; `claude daily`'s `modelBreakdowns` was the only
+place that data actually exists, so Page 2's breakdown rides on Page 1's fetch instead.
+
+**Cadence**: a 4th class alongside D13's three (slow poll / per-turn event / push) —
+**on-demand**. `history_daily` is not part of the continuous poll loop; it's called
+once when Page 1 or Page 2 opens and cached client-side for 5 minutes
+(`history-data.js`). Daily totals don't move within a few minutes, so polling them in
+the background would be a wasted process spawn for data nobody's looking at.
+
+**Reasoning**: explicit user direction against cramming more readouts onto the single
+screen ("no meter más info en la pantalla, hacer que sea customizable"); the W203's
+own real trip computer already solves this with a page-cycle button, so the fix was to
+follow the car metaphor rather than invent a new pattern.
+
+**Verified**: `cargo test` 31/31 (new: `engine::history` date-math + real-sample
+parsing tests), `cargo clippy` clean, `vite build` clean. No Tauri runtime available
+in this environment for a full native run, so the page-cycle logic, CSS, and
+graceful-no-IPC fallback (`history_daily` no-ops outside Tauri) were driven end-to-end
+with Playwright against the plain Vite dev server: full page-cycle (0→1→2→3→0),
+Page 3's "hide History" toggle correctly removing it from the cycle, zero console/page
+errors across the run. `history_daily`'s real IPC round-trip against a live Claude
+Code install is unverified — first `npm run tauri dev` should confirm Page 1/2 render
+real numbers, not just the empty-state fallback.
