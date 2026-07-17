@@ -143,9 +143,10 @@ export function wireNameplateEdit() {
   };
 }
 
-/** Segment count for `min` minutes remaining out of the 5h window — shared
- *  basis for both the estimated and official sources (D23/D39: both segments
- *  and the "autonomie" text must read the same unit, time, not a mix). */
+/** Segment count for `min` minutes remaining out of the 5h window — used only
+ *  by the estimated fallback (D40: official mode reads quota %, not time; see
+ *  onSensorUpdate()). Segments and the "autonomie" text must still read the
+ *  same unit within a source (D23). */
 function segmentsForMinutes(min) {
   return Math.max(0, Math.min(SEGMENT_COUNT, Math.round((SEGMENT_COUNT * min) / WINDOW_MIN)));
 }
@@ -158,10 +159,19 @@ export function applyEstimated(block) {
   setGear(block?.models);
 }
 
-/** Updates the autonomy countdown to the official 5h reset. Keeps counting
- *  even while `sensorConnected` is momentarily false — the known reset
- *  doesn't stop being valid just because the sensor is quiet for a while. */
+/** Re-paints the "autonomie" text on each clock tick (D40). In official mode
+ *  the quota % doesn't change with the clock — this just re-asserts it so the
+ *  tick never clobbers it with a time value. In estimated mode (no sensor
+ *  ever connected) falls back to the time-until-reset countdown, unchanged
+ *  from before D40: keeps counting even while `sensorConnected` is
+ *  momentarily false — the known reset doesn't stop being valid just because
+ *  the sensor is quiet for a while. */
 export function refreshAutonomie() {
+  if (state.everSensorConnected) {
+    document.getElementById("autonomie").textContent =
+      `${Math.round(100 - state.fiveHourPct)}%`;
+    return;
+  }
   if (state.fiveHourResetsAtMs <= 0) return;
   const remainMin = (state.fiveHourResetsAtMs - Date.now()) / 60000;
   document.getElementById("autonomie").textContent =
@@ -205,20 +215,21 @@ export function onBlocksUpdate(block) {
 export function onSensorUpdate(p) {
   state.sensorConnected = true;
   state.everSensorConnected = true;
-  const pct = Number.isFinite(p?.fiveHourPct) ? Math.max(0, Math.min(100, p.fiveHourPct)) : 0;
+  const pctFinite = Number.isFinite(p?.fiveHourPct);
+  const pct = pctFinite ? Math.max(0, Math.min(100, p.fiveHourPct)) : 0;
   state.fiveHourResetsAtMs = p?.fiveHourResetsAt ? Number(p.fiveHourResetsAt) * 1000 : 0;
-  // Segments = time remaining until reset, same basis as applyEstimated()
-  // and the "autonomie" text below — NOT the quota % (`pct`), which is a
-  // different axis from time and would disagree with the text under the
-  // same gauge (found in review). If `resetsAt` didn't arrive with this
-  // payload (a real, tolerated partial shape — see sensor::mod.rs's
-  // `tolerates_partial_rate_limits`), leave the segments as they were rather
-  // than forcing an empty tank on incomplete data — same "don't touch it"
-  // rule refreshAutonomie() already follows below for the text.
-  const remainMin =
-    state.fiveHourResetsAtMs > 0 ? (state.fiveHourResetsAtMs - Date.now()) / 60000 : 0;
-  if (remainMin > 0) buildSegments(segmentsForMinutes(remainMin));
-  refreshAutonomie();
+  // Segments + "autonomie" text now read QUOTA remaining (100 - pct), not
+  // time-until-reset (D40, supersedes D39): time is redundant with the clock
+  // already on screen, so it's demoted to the estimated-only fallback (see
+  // applyEstimated()). If `used_percentage` didn't arrive with this payload
+  // (a real, tolerated partial shape — see sensor::mod.rs's
+  // `tolerates_partial_rate_limits`), leave segments/text as they were rather
+  // than forcing a value on incomplete data.
+  if (pctFinite) {
+    state.fiveHourPct = pct;
+    buildSegments(Math.round((SEGMENT_COUNT * (100 - pct)) / 100));
+    document.getElementById("autonomie").textContent = `${Math.round(100 - pct)}%`;
+  }
   if (p?.modelId) setGear([p.modelId]);
   // Official 7d rate-limit window — full numbers live on Page 2 (limits-page.js);
   // the border tint here stays as the always-visible "check engine"-style warning.
@@ -260,7 +271,7 @@ export function onSensorState(p) {
  *  most-documented points of confusion (tok/s isn't live, cost is estimated). */
 export function wireTripComputerHints() {
   hintOnHover(document.getElementById("gear"), "Active mod: Opus / Sonnet / Haiku / Fable");
-  hintOnHover(document.querySelector(".row.gauge"), "5h billing window remaining");
+  hintOnHover(document.querySelector(".row.gauge"), "5h quota remaining");
   hintOnHover(
     document.getElementById("burn"),
     "Per-response rate"

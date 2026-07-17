@@ -928,3 +928,43 @@ existing "don't touch it on incomplete data" rule).
 should hold the official reading with no flicker; disconnect the sensor mid-
 session and confirm the ring stays on the last official value instead of
 reverting to the time-based one).
+
+## D40 — Both 5h gauges show quota, not time, once the official sensor is connected (supersedes D39's frontend half)
+
+**Decision**: `#segments` and the `#autonomie` text now read the 5h **quota
+remaining** (`100 - used_percentage`) in official mode, not time-until-reset.
+Time is redundant with the on-screen clock and only ccusage (the estimated
+source) actually needs a time-based gauge, since it has no concept of quota
+at all. `onSensorUpdate()` (`trip-computer.js`) sets both from `fiveHourPct`;
+`refreshAutonomie()` (called by `clock.js` on every tick) re-paints the same
+quota text in official mode instead of recomputing a countdown, and only
+falls back to the time countdown once `state.everSensorConnected` is false.
+`applyEstimated()` (no sensor ever connected) is untouched — it still shows
+`EST 3h12`-style time, the correct fallback when quota simply isn't known.
+
+**Supersedes**: D39 fixed segments/text disagreeing by making *both* read
+time, on the reasoning that time was the only axis available to both sources
+uniformly. That traded a within-gauge contradiction for a cross-gauge one:
+the tray ring (fixed in the same D39 entry) reads quota in official mode,
+so the panel's segment bar and the tray icon meant different things while
+both claimed to represent "the 5h window." Re-litigated here: since quota
+only exists with the sensor connected, and time is always available
+independent of the sensor, the correct fix is sensor-connected → quota
+everywhere (ring + bar + text), no sensor → time everywhere (ring + bar +
+text) — never a forced quota value when the sensor never reported one.
+
+**Consequence**: `state.fiveHourPct` is new (`telemetry-state.js`), tracked
+separately from `state.fiveHourResetsAtMs` so the clock tick can re-render
+quota without needing a fresh sensor payload. `state.fiveHourResetsAtMs` is
+now read only by the estimated-fallback path. The partial-payload safeguard
+from D39 (don't touch segments/text if the field is missing from this push)
+carries over unchanged, just keyed on `fiveHourPct` instead of `resetsAt`.
+The `#segments` aria-label and the `.row.gauge` hover hint were reworded from
+"5h window autonomy"/"5h billing window remaining" to "5h quota remaining" to
+match.
+
+**Verified**: `npm run build` (frontend compiles). Manual check pending (with
+the official sensor connected, confirm the segment bar and `#autonomie` text
+move with consumed quota, not with wall-clock time, and that they now agree
+with the tray ring's meaning; with no sensor, confirm both still show the
+`EST …` time fallback unchanged).

@@ -13,7 +13,8 @@ export const state = {
   // absurd: official "0h17" → ccusage's "EST 4h31").
   sensorConnected: false, // is official data arriving from the statusLine?
   everSensorConnected: false, // did it ever connect? (sticky, see above)
-  fiveHourResetsAtMs: 0, // epoch-ms of the 5h reset (countdown, refreshed by the clock)
+  fiveHourResetsAtMs: 0, // epoch-ms of the 5h reset (fallback countdown, estimated-only)
+  fiveHourPct: 0, // official used_percentage of the 5h quota, re-read by the clock tick
   sevenDayPct: 0, // official 7d rate-limit window used%, read by limits-page (Page 2)
   sevenDayResetsAtMs: 0, // epoch-ms of the 7d reset, read by limits-page (Page 2)
   recentTicks: [], // { recvAt, tokens } — fed by onBurnTick, read by footer-metric's PACE
