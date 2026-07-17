@@ -6,6 +6,14 @@
 > dot-matrix VFD display: `tok/s` per response, remaining 5h window autonomy,
 > cost, and active model.
 
+<p align="center">
+  <img src="docs/screenshots/hero.png" alt="cc-autobahn — trip computer, history, and limits pages" width="100%" />
+</p>
+<p align="center">
+  <img src="docs/screenshots/dynamic-range.png" alt="PACE spike vs. AUTO estimate, same 5h window" width="49%" />
+  <img src="docs/screenshots/history-limits.png" alt="30-day cost history and weekly rate-limit window" width="49%" />
+</p>
+
 ## Install
 
 ```sh
