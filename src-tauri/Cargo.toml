@@ -1,6 +1,6 @@
 [package]
 name = "cc-autobahn"
-version = "0.5.1"
+version = "0.5.2"
 description = "Mercedes W203 amber trip-computer for Claude Code token usage"
 authors = ["jmtrs"]
 edition = "2021"
