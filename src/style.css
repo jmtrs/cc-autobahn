@@ -282,6 +282,7 @@ body {
 .gauge {
   gap: 6px;
   margin-top: 2px;
+  cursor: pointer; /* click toggles quota % <-> reset time, D40-toggle */
 }
 
 .fuel {

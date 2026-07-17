@@ -159,23 +159,54 @@ export function applyEstimated(block) {
   setGear(block?.models);
 }
 
-/** Re-paints the "autonomie" text on each clock tick (D40). In official mode
- *  the quota % doesn't change with the clock — this just re-asserts it so the
- *  tick never clobbers it with a time value. In estimated mode (no sensor
- *  ever connected) falls back to the time-until-reset countdown, unchanged
- *  from before D40: keeps counting even while `sensorConnected` is
- *  momentarily false — the known reset doesn't stop being valid just because
- *  the sensor is quiet for a while. */
+/** Paints the bar + text for quota mode, from the last known official data
+ *  (no fresh payload needed — click-toggle and the clock tick both just
+ *  repaint what's already in `state`). Default view is quota remaining
+ *  (D40); `state.autonomieShowTime` (click-toggle, D40-toggle) swaps both to
+ *  the reset time instead, since D40 demoted it to "redundant with the
+ *  clock" but users still want an on-demand way to see it without losing
+ *  the quota view permanently. Falls back to quota if the toggle is on but
+ *  `resetsAt` never arrived (partial payload) — same "don't force a value
+ *  that isn't known" rule as everywhere else in this file. */
+function paintQuotaGauge() {
+  if (state.autonomieShowTime && state.fiveHourResetsAtMs > 0) {
+    const remainMin = (state.fiveHourResetsAtMs - Date.now()) / 60000;
+    document.getElementById("autonomie").textContent =
+      remainMin > 0 ? formatHMin(remainMin) : "—";
+    buildSegments(segmentsForMinutes(Math.max(0, remainMin)));
+    return;
+  }
+  const pct = state.fiveHourPct;
+  buildSegments(Math.round((SEGMENT_COUNT * (100 - pct)) / 100));
+  document.getElementById("autonomie").textContent = `${Math.round(100 - pct)}%`;
+}
+
+/** Re-paints the "autonomie" row on each clock tick (D40). In official mode
+ *  neither view changes on its own between pushes — this just re-asserts
+ *  whichever one is toggled on so the tick never clobbers it. In estimated
+ *  mode (no sensor ever connected) falls back to the time-until-reset
+ *  countdown, unchanged from before D40: keeps counting even while
+ *  `sensorConnected` is momentarily false — the known reset doesn't stop
+ *  being valid just because the sensor is quiet for a while. */
 export function refreshAutonomie() {
   if (state.everQuotaConnected) {
-    document.getElementById("autonomie").textContent =
-      `${Math.round(100 - state.fiveHourPct)}%`;
+    paintQuotaGauge();
     return;
   }
   if (state.fiveHourResetsAtMs <= 0) return;
   const remainMin = (state.fiveHourResetsAtMs - Date.now()) / 60000;
   document.getElementById("autonomie").textContent =
     remainMin > 0 ? formatHMin(remainMin) : "—";
+}
+
+/** Click-toggle for the quota gauge (D40-toggle): flips between quota
+ *  remaining and time-until-reset, both bar and text together (never a mix,
+ *  D40). No-op in estimated mode — there's no quota to toggle to, so the
+ *  row is left showing ccusage's time projection either way. */
+export function toggleAutonomieView() {
+  if (!state.everQuotaConnected) return;
+  state.autonomieShowTime = !state.autonomieShowTime;
+  paintQuotaGauge();
 }
 
 /** Paints the ccusage active block's data. odo/trip/avg always; the
@@ -232,8 +263,7 @@ export function onSensorUpdate(p) {
   if (pctFinite) {
     state.everQuotaConnected = true;
     state.fiveHourPct = pct;
-    buildSegments(Math.round((SEGMENT_COUNT * (100 - pct)) / 100));
-    document.getElementById("autonomie").textContent = `${Math.round(100 - pct)}%`;
+    paintQuotaGauge();
   }
   if (p?.modelId) setGear([p.modelId]);
   // Official 7d rate-limit window — full numbers live on Page 2 (limits-page.js);
@@ -276,7 +306,9 @@ export function onSensorState(p) {
  *  most-documented points of confusion (tok/s isn't live, cost is estimated). */
 export function wireTripComputerHints() {
   hintOnHover(document.getElementById("gear"), "Active mod: Opus / Sonnet / Haiku / Fable");
-  hintOnHover(document.querySelector(".row.gauge"), "5h quota remaining");
+  const gaugeRow = document.querySelector(".row.gauge");
+  hintOnHover(gaugeRow, "5h quota remaining — click for reset time");
+  gaugeRow.onclick = toggleAutonomieView;
   hintOnHover(
     document.getElementById("burn"),
     "Per-response rate"

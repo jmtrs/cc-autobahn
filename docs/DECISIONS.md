@@ -1006,3 +1006,30 @@ pending for both the quota path (Pro/Max, sensor connected) and this fallback
 path (simulate a `rate_limits`-less statusLine payload and confirm the
 segment bar/text keep tracking ccusage's projection instead of freezing on
 "100%").
+
+## D40-toggle — Click the quota gauge to peek at the reset time
+
+**Decision**: D40 demoted reset-time to "redundant with the clock, estimated-
+fallback only" — but with the sensor connected the reset time is genuinely
+gone from the panel with no way to check it (found in review: the clock
+tells you the current time, not how far the 5h window's own boundary is).
+Added a click toggle on `.row.gauge` (`toggleAutonomieView()`,
+`trip-computer.js`): clicking flips `state.autonomieShowTime` and repaints
+both `#segments` and `#autonomie` together from whichever data source is
+toggled on. Quota mode and time mode are still never mixed within the row
+(D40's core rule) — the toggle swaps the row's whole meaning, not one half
+of it.
+
+**Consequence**: `onSensorUpdate()` and `refreshAutonomie()` both now paint
+through a shared `paintQuotaGauge()` instead of each hardcoding the quota
+render — the toggle state lives in one place and every repaint path (fresh
+payload, clock tick, click) reads it consistently. No-op in estimated mode
+(`!state.everQuotaConnected`): there's no quota to toggle to, so clicking
+does nothing and the row keeps showing ccusage's time projection either way.
+`.gauge`'s CSS gained `cursor: pointer`; the hover hint was reworded to "5h
+quota remaining — click for reset time" so the affordance is discoverable.
+
+**Verified**: `npm run build` (frontend compiles). Manual check pending
+(with the sensor connected, click the gauge row and confirm both the bar and
+the text swap to the reset countdown, then back to quota % on a second
+click; confirm clicking does nothing in estimated-only mode).

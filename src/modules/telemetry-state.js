@@ -21,6 +21,7 @@ export const state = {
   // users' gauge freeze on a fabricated "100%" forever, since fiveHourPct
   // never gets a real value to replace its 0 default (found in review).
   everQuotaConnected: false, // did a payload with a real `fiveHourPct` ever arrive? (sticky)
+  autonomieShowTime: false, // click-toggle: show reset time instead of quota (quota mode only)
   fiveHourResetsAtMs: 0, // epoch-ms of the 5h reset (fallback countdown, estimated-only)
   fiveHourPct: 0, // official used_percentage of the 5h quota, re-read by the clock tick
   sevenDayPct: 0, // official 7d rate-limit window used%, read by limits-page (Page 2)
