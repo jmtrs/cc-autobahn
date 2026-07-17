@@ -1,7 +1,11 @@
 name: Release
 
-# Push a `v*` tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) to build the
-# unsigned universal macOS bundle and attach it to a draft GitHub Release.
+# Cut a release locally with `npm run release -- <patch|minor|major|X.Y.Z>`
+# (scripts/release.mjs). It bumps the version everywhere, tags and pushes;
+# the pushed `v*` tag triggers this workflow: backend tests → unsigned
+# universal macOS build → published GitHub Release → Homebrew cask bump
+# (jmtrs/homebrew-tap). The cask step needs the HOMEBREW_TAP_TOKEN secret
+# (same PAT pattern as jmtrs/no-coAuthor) and skips gracefully without it.
 on:
   push:
     tags:
@@ -13,6 +17,8 @@ permissions:
 jobs:
   release:
     runs-on: macos-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +32,9 @@ jobs:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
 
       - uses: swatinem/rust-cache@v2
+
+      - name: Backend tests (release gate)
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Install frontend dependencies
         run: npm ci
@@ -43,6 +52,36 @@ jobs:
             ```sh
             xattr -dr com.apple.quarantine /Applications/cc-autobahn.app
             ```
-          releaseDraft: true
+
+            Homebrew: `brew install --cask jmtrs/tap/cc-autobahn`
+          releaseDraft: false
           prerelease: false
           args: --target universal-apple-darwin
+
+      - name: Update Homebrew cask
+        if: env.HOMEBREW_TAP_TOKEN != ''
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME#v}"
+          DMG="cc-autobahn_${VERSION}_universal.dmg"
+          URL="https://github.com/jmtrs/cc-autobahn/releases/download/${GITHUB_REF_NAME}/${DMG}"
+
+          # The release was just published; the asset CDN can lag a few
+          # seconds, so retry briefly (same pattern as jmtrs/no-coAuthor).
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsSL -o /tmp/ccab.dmg "$URL"; then break; fi
+            sleep 5
+          done
+          SHA256=$(shasum -a 256 /tmp/ccab.dmg | cut -d' ' -f1)
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/jmtrs/homebrew-tap.git" /tmp/homebrew-tap
+          cd /tmp/homebrew-tap
+          sed -i '' -E "s#^  version \".*\"#  version \"$VERSION\"#" Casks/cc-autobahn.rb
+          sed -i '' -E "s#^  sha256 \".*\"#  sha256 \"$SHA256\"#" Casks/cc-autobahn.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/cc-autobahn.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "cc-autobahn v$VERSION"
+            git push
+          fi

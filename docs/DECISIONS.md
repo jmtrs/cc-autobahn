@@ -701,4 +701,33 @@ the $99 is deferred until there's real traction (unknown users hitting the
 warning, a homebrew-cask official submission, or a Tauri auto-updater, which
 would want signing anyway).
 
-**Verified**: workflow not yet exercised — first tag push (`v0.1.0`) is the test.
+**Verified**: workflow green on `v0.1.0` (6m19s); the downloaded dmg mounted
+and its binary checked out as a real universal fat file (`x86_64 arm64`).
+
+## D35 — Release automation: one local command, CI does the rest (incl. Homebrew cask)
+
+**Decision**: releasing is `npm run release -- <patch|minor|major|X.Y.Z>`
+(`scripts/release.mjs`). It refuses a dirty tree / non-main branch / existing
+tag, runs `cargo test` as a local gate, bumps the version in the four files
+that carry it (`package.json`, `tauri.conf.json`, `Cargo.toml`, `Cargo.lock`)
+so they can't drift, then commits, tags and pushes. From the tag,
+`release.yml` re-gates on tests, builds the unsigned universal dmg,
+**publishes** the GitHub Release (no longer a draft — the cask's download URL
+must be live when the tap update lands, unlike D34's original draft flow) and
+updates the cask in the **existing** `jmtrs/homebrew-tap` repo
+(`Casks/cc-autobahn.rb`, same tap as `no-coauthor`) via the
+`HOMEBREW_TAP_TOKEN` secret — the same PAT pattern no-coAuthor's workflow
+already uses. The step skips cleanly when the secret is absent, so a missing
+token never fails the release itself.
+
+**Reasoning**: three hand-edited version files + manual tag + manual cask
+sha256 is exactly the kind of process that drifts and fails silently; one
+command + CI removes the failure modes. Own tap rather than homebrew-cask
+official (notability threshold not met yet); **cask**, not formula, because
+it's a GUI `.app`. The Gatekeeper caveat ships via the cask's `caveats`
+stanza (Homebrew ≥ 5 quarantines all casks; `--no-quarantine` is gone).
+
+**Verified**: `brew fetch --cask jmtrs/tap/cc-autobahn` green on v0.1.0
+(downloads the dmg and validates the sha256); `scripts/release.mjs` syntax
+checked and its four version-bump regexes matched against the real files. The
+cask-update step itself first runs on the next tag.

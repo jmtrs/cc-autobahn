@@ -28,7 +28,7 @@ npx @tauri-apps/cli icon scripts/source-icon.png  # derives all sizes
 
 Backend: `cargo test` (26 tests, in `src-tauri/`) + `cargo clippy` clean. Frontend: no tests or linter configured.
 
-Releases: push a `v*` tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) → `.github/workflows/release.yml` (tauri-action) builds the **unsigned** universal (arm64+x86_64) `.dmg`/`.app` on `macos-latest` and attaches it to a **draft** GitHub Release — publish the draft manually. No signing secrets configured (D34).
+Releases: `npm run release -- <patch|minor|major|X.Y.Z>` (scripts/release.mjs) — bumps the version in `package.json`/`tauri.conf.json`/`Cargo.toml`/`Cargo.lock` in sync, runs `cargo test`, commits, tags `vX.Y.Z`, pushes. The tag triggers `.github/workflows/release.yml`: re-gates on tests, builds the **unsigned** universal (arm64+x86_64) dmg on `macos-latest`, **publishes** the GitHub Release (not a draft — the Homebrew cask URL must be live when the tap update lands) and bumps the cask in `jmtrs/homebrew-tap` (`Casks/cc-autobahn.rb`, skipped if the `HOMEBREW_TAP_TOKEN` secret is unset). No signing (D34); process rationale in D35.
 
 ## Architecture (two layers)
 
