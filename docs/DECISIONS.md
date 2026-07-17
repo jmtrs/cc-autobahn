@@ -968,3 +968,41 @@ the official sensor connected, confirm the segment bar and `#autonomie` text
 move with consumed quota, not with wall-clock time, and that they now agree
 with the tray ring's meaning; with no sensor, confirm both still show the
 `EST …` time fallback unchanged).
+
+## D40-fix — Non-Pro/Max users: gate quota gauges on `everQuotaConnected`, not `everSensorConnected`
+
+**Bug found (post-release, v0.5.1)**: D40 gated the quota gauges on
+`state.everSensorConnected`, which only means "the statusLine file has
+connected" — it says nothing about whether that file ever actually carried
+`rate_limits`. A non-Pro/Max subscriber's Claude Code never emits
+`rate_limits` on stdin at all (real, tolerated shape — see
+`sensor::mod.rs`'s `tolerates_missing_rate_limits` test), yet the sensor file
+still updates on every prompt, so `sensor-update` still fires and
+`onSensorUpdate()` still flips `everSensorConnected` to `true` — permanently,
+since it's sticky. From that point on, `refreshAutonomie()`'s official
+branch ran forever with `state.fiveHourPct` stuck at its `0` default,
+painting a fabricated **"100%"** on every clock tick, and `onBlocksUpdate()`'s
+`!state.everSensorConnected` gate permanently blocked ccusage's time estimate
+from ever serving as the fallback it was supposed to be for these users.
+
+**Fix**: added `state.everQuotaConnected` (`telemetry-state.js`) — set only
+inside `onSensorUpdate()`'s existing `if (pctFinite)` branch, i.e. only when a
+payload actually carried a usable `fiveHourPct`. All three gates that D40 had
+tied to `everSensorConnected` now use `everQuotaConnected` instead:
+`refreshAutonomie()`'s quota-vs-time branch, `onBlocksUpdate()`'s ccusage
+fallback gate, and `onSensorState()`'s disconnect-freeze check.
+`everSensorConnected` itself is untouched and still means what it always
+meant (statusLine file connected at least once) — nothing else in the
+codebase reads it for gauge purposes anymore.
+
+**Consequence**: a non-Pro/Max user now gets ccusage's `EST 3h12`-style time
+estimate as a permanent, live-updating fallback — exactly the "no sensor →
+time" rule from D40, correctly extended to "sensor connected but no quota →
+still time." A Pro/Max user's behavior is unchanged, since their first
+payload does carry `fiveHourPct` and both flags flip true together.
+
+**Verified**: `npm run build` (frontend compiles). Manual check still
+pending for both the quota path (Pro/Max, sensor connected) and this fallback
+path (simulate a `rate_limits`-less statusLine payload and confirm the
+segment bar/text keep tracking ccusage's projection instead of freezing on
+"100%").

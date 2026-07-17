@@ -167,7 +167,7 @@ export function applyEstimated(block) {
  *  momentarily false — the known reset doesn't stop being valid just because
  *  the sensor is quiet for a while. */
 export function refreshAutonomie() {
-  if (state.everSensorConnected) {
+  if (state.everQuotaConnected) {
     document.getElementById("autonomie").textContent =
       `${Math.round(100 - state.fiveHourPct)}%`;
     return;
@@ -204,9 +204,13 @@ export function onBlocksUpdate(block) {
   const perMtok = tokens > 0 ? (costUsd / tokens) * 1e6 : 0;
   document.getElementById("avg").textContent = `$${perMtok.toFixed(2)}`;
 
-  // Only if there was NEVER an official sensor — once there was one, a
-  // momentary pause shouldn't let ccusage override the official data (D-review).
-  if (!state.everSensorConnected) applyEstimated(block);
+  // Only if quota data NEVER arrived — once it did, a momentary pause
+  // shouldn't let ccusage override the official data (D-review). Gated on
+  // `everQuotaConnected`, not `everSensorConnected` (D40-fix): a non-Pro/Max
+  // user's sensor connects but never carries quota, so ccusage's time
+  // estimate must keep serving as the permanent fallback for them, not just
+  // until the sensor's first (quota-less) payload.
+  if (!state.everQuotaConnected) applyEstimated(block);
   // Lets Page 2 (limits-page.js) keep its instant/avg burn rate live while visible.
   document.dispatchEvent(new Event("telemetry-tick"));
 }
@@ -226,6 +230,7 @@ export function onSensorUpdate(p) {
   // `tolerates_partial_rate_limits`), leave segments/text as they were rather
   // than forcing a value on incomplete data.
   if (pctFinite) {
+    state.everQuotaConnected = true;
     state.fiveHourPct = pct;
     buildSegments(Math.round((SEGMENT_COUNT * (100 - pct)) / 100));
     document.getElementById("autonomie").textContent = `${Math.round(100 - pct)}%`;
@@ -254,7 +259,7 @@ export function onSensorUpdate(p) {
 export function onSensorState(p) {
   state.sensorConnected = !!p?.connected;
   if (state.sensorConnected) return;
-  if (state.everSensorConnected) return; // frozen: don't touch anything
+  if (state.everQuotaConnected) return; // frozen: don't touch anything
   document.querySelector(".screen").classList.remove("warn");
   if (state.lastBlock) applyEstimated(state.lastBlock);
   else {
