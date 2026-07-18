@@ -3,15 +3,16 @@
 // (D11: official data is never presented as estimated). Wired in Phase 3
 // Track A/B.
 
-import { formatDurationMs, formatHMin, formatTokens } from "./format.js";
+import { formatDurationMs, formatHMin, formatModelCode, formatTokens } from "./format.js";
 import { renderFooterMetric } from "./footer-metric.js";
-import { hintOnHover } from "./header-hint.js";
+import { hintOnHover, setHeaderHint } from "./header-hint.js";
 import { state } from "./telemetry-state.js";
 
 export const SEGMENT_COUNT = 12;
 const WINDOW_MIN = 300; // 5h billing window, in minutes
 
 let lastGearHit = null; // last active model painted, to know if the "gear changed"
+let lastCustomLabel = ""; // sticky: last detected non-Claude code, for the "C" slot's hover hint
 
 // Model badge, Mercedes trim-nameplate style — one per active model (D-review naming session).
 // User-editable (click the badge); custom text persists per model in localStorage.
@@ -21,6 +22,9 @@ const NAMEPLATES = {
   haiku: "CC 220 CDI",
   fable: "CC 63 AMG",
 };
+// Per-slot hover labels for the gear column (wireTripComputerHints) — plain
+// model names, "custom" resolved dynamically at hover time instead (varies).
+const GEAR_LABELS = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable" };
 const NAMEPLATE_STORAGE_KEY = "cc-autobahn.nameplates";
 let currentGearHit = null; // which model key the visible nameplate belongs to, for saving edits
 
@@ -47,29 +51,40 @@ export function buildSegments(filled) {
   }
 }
 
-/** Lights up the PRND selector gear according to the active model (O/S/H/F).
- *  Slides the marker to the active letter and, if it changed gear relative
- *  to the previous one, triggers a glow pulse (D-review: animate the change
- *  instead of just switching color abruptly). */
+/** Lights up the PRND selector gear according to the active model (O/S/H/F,
+ *  plus a 5th "C" slot for anything that isn't one of the 4 — e.g. a
+ *  Claude-compatible proxy like GLM-5, D-review). Slides the marker to the
+ *  active letter and, if it changed gear relative to the previous one,
+ *  triggers a glow pulse (D-review: animate the change instead of just
+ *  switching color abruptly). */
 export function setGear(models) {
   if (!Array.isArray(models) || models.length === 0) return;
   const order = ["opus", "sonnet", "haiku", "fable"];
   const hit = order.find((m) =>
     models.some((id) => String(id).toLowerCase().includes(m))
   );
-  if (!hit) return;
+  // No known model matched: fall back to the "custom" slot, identified by
+  // the first model id reported (same "first match wins" rule as `hit`,
+  // not a per-session breakdown — one physical selector, one value).
+  const customId = hit ? null : models.find((id) => id);
+  if (!hit && !customId) return;
+  const gearKey = hit || "custom";
+  if (customId) lastCustomLabel = formatModelCode(customId);
 
-  currentGearHit = hit;
+  currentGearHit = gearKey;
   const nameplateEl = document.getElementById("nameplate");
   // Don't overwrite mid-edit — the user is typing (D-review: a live model
   // tick landing while editing would clobber the in-progress text).
   if (nameplateEl && nameplateEl.contentEditable !== "true") {
-    nameplateEl.textContent = getNameplate(hit);
+    // Custom slot shows the real detected model code (e.g. "GLM5") instead
+    // of a decorative trim name — "custom" isn't a fixed model identity like
+    // the other 4, so there's no stable NAMEPLATES entry for it.
+    nameplateEl.textContent = hit ? getNameplate(hit) : formatModelCode(customId);
   }
 
   let activeEl = null;
   document.querySelectorAll(".gear .g").forEach((el) => {
-    const isActive = el.dataset.model === hit;
+    const isActive = el.dataset.model === gearKey;
     el.classList.toggle("active", isActive);
     if (isActive) activeEl = el;
   });
@@ -83,7 +98,7 @@ export function setGear(models) {
     marker.style.transform = `translateY(${targetY}px)`;
   }
 
-  if (hit !== lastGearHit && lastGearHit !== null && activeEl) {
+  if (gearKey !== lastGearHit && lastGearHit !== null && activeEl) {
     activeEl.classList.remove("pulse");
     // Force reflow so the animation can re-trigger if it returns to the same letter.
     void activeEl.offsetWidth;
@@ -94,7 +109,7 @@ export function setGear(models) {
       { once: true }
     );
   }
-  lastGearHit = hit;
+  lastGearHit = gearKey;
 }
 
 /** Click the nameplate badge to rewrite it for the current model. Empty
@@ -109,6 +124,10 @@ export function wireNameplateEdit() {
   // header-hint.js replaces it.
   hintOnHover(el, "Click to rename this model's badge");
   el.onclick = () => {
+    // The "custom" slot isn't one fixed model identity (D-review) — it can
+    // be a different proxy from one block to the next, so a saved rename
+    // would go stale exactly where accuracy matters most. Not editable.
+    if (currentGearHit === "custom") return;
     el.contentEditable = "true";
     el.focus();
     const range = document.createRange();
@@ -305,7 +324,19 @@ export function onSensorState(p) {
  *  get one despite already having a unit label: D8/D11 are this project's
  *  most-documented points of confusion (tok/s isn't live, cost is estimated). */
 export function wireTripComputerHints() {
-  hintOnHover(document.getElementById("gear"), "Active mod: Opus / Sonnet / Haiku / Fable");
+  // Per-letter hints (not one static hintOnHover on the whole .gear): each
+  // slot names its own model even when it isn't the active one, and the
+  // active slot is called out explicitly. "custom" has no fixed identity
+  // (D-review) so its label is resolved live from the last detected id.
+  document.querySelectorAll(".gear .g").forEach((el) => {
+    const model = el.dataset.model;
+    el.addEventListener("mouseenter", () => {
+      const label =
+        model === "custom" ? lastCustomLabel || "Custom (non-Claude model)" : GEAR_LABELS[model];
+      setHeaderHint(currentGearHit === model ? `Active model: ${label}` : label);
+    });
+    el.addEventListener("mouseleave", () => setHeaderHint(""));
+  });
   const gaugeRow = document.querySelector(".row.gauge");
   hintOnHover(gaugeRow, "5h quota remaining — click for reset time");
   gaugeRow.onclick = toggleAutonomieView;
