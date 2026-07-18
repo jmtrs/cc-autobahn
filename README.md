@@ -7,7 +7,7 @@
 > cost, and active model.
 
 <p align="center">
-  <video src="https://github.com/jmtrs/cc-autobahn/releases/download/v0.7.1/cc-autobahn-demo.mp4" controls width="100%"></video>
+  <img src="docs/screenshots/demo.gif" alt="cc-autobahn demo — dragging the panel, MFD pages, live gauges" width="100%" />
 </p>
 <p align="center">
   <img src="docs/screenshots/hero.png" alt="cc-autobahn — trip computer, history, and limits pages" width="100%" />
