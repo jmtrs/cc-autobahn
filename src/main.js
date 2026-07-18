@@ -5,6 +5,7 @@
 // NOT instantaneous — the JSONL only reports usage when the turn closes (see D8/D11).
 
 import { tickClock } from "./modules/clock.js";
+import { wireCursor } from "./modules/cursor.js";
 import { wireEngineOverlay } from "./modules/engine-overlay.js";
 import { renderFooterMetric, wireFooterToggle } from "./modules/footer-metric.js";
 import { wireHistoryPage } from "./modules/history-page.js";
@@ -26,6 +27,7 @@ import {
 
 function init() {
   initTheme();
+  wireCursor();
   // Autonomy bar empty until the first blocks-update (no data yet).
   buildSegments(0);
   tickClock();

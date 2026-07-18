@@ -119,6 +119,57 @@ function hexToRgbTriplet(hex) {
   return `${r}, ${g}, ${b}`;
 }
 
+/** App cursors: a VFD triangle + text-beam (same glyph language as ▸/▲ in
+ *  the UI) baked into SVG data-URIs, since CSS cursor images/background-
+ *  images can't read CSS vars. Used as the background-image of the
+ *  synthetic .fake-cursor element (cursor.js) — not the native `cursor:`
+ *  property. That's deliberate everywhere, not just for the z-index trick
+ *  (sitting below the screen's scanline grid): WebKit's UA stylesheet gives
+ *  native form controls their own cursor that plain CSS can't always beat,
+ *  and the same turned out true for the nameplate's `cursor: text` while
+ *  renaming — so every visual state, including the text-beam, is rendered
+ *  by us rather than relying on any native cursor showing up at all.
+ *  Both shapes share one two-layer draw: a wide `--bg`-colored halo behind
+ *  (rounded joins, so it never spikes past the canvas) then the crisp
+ *  amber shape on top (sharp miter joins for the arrow — a true triangle,
+ *  no rounding). Without the halo the cursor could blend into same-hue UI
+ *  (an active dropdown row, a themed accent) since it shares the theme's
+ *  amber; the dark backdrop guarantees contrast against any surface color.
+ *  22x22 canvas for both. Re-baked on every applyColors so they re-tint
+ *  with the theme. */
+function svgCursorUrl(inner) {
+  return `url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 22 22'>${inner}</svg>")`;
+}
+
+/** Arrow: tilted -25° (leans like the system arrow). Hotspot at the
+ *  rotated apex (8,6). */
+function arrowCursor(fill, stroke, bg) {
+  const f = fill === "none" ? "none" : fill.replace("#", "%23");
+  const s = stroke.replace("#", "%23");
+  const b = bg.replace("#", "%23");
+  const d = "M11 5 L17 17 L5 17 Z";
+  const rotate = "rotate(-25 11 11)";
+  return svgCursorUrl(
+    `<path d='${d}' transform='${rotate}' fill='none' stroke='${b}' stroke-width='3.5' stroke-linejoin='round'/>` +
+      `<path d='${d}' transform='${rotate}' fill='${f}' stroke='${s}' stroke-width='1.5' stroke-linejoin='miter'/>`,
+  );
+}
+
+/** Text-beam for in-place editing (nameplate rename): a plain thin vertical
+ *  stick — a serif I-beam (tried first) and even open strokes with serifs
+ *  both read as too busy for something this small; a minimal caret line is
+ *  the actual VFD-simple answer. Centered on the (8,6) hotspot so it lines
+ *  up with the arrow state it swaps with. */
+function beamCursor(color, bg) {
+  const c = color.replace("#", "%23");
+  const b = bg.replace("#", "%23");
+  const d = "M8 1 V11";
+  return svgCursorUrl(
+    `<path d='${d}' fill='none' stroke='${b}' stroke-width='3' stroke-linecap='round'/>` +
+      `<path d='${d}' fill='none' stroke='${c}' stroke-width='1.2' stroke-linecap='round'/>`,
+  );
+}
+
 export function applyColors(colors) {
   const root = document.documentElement.style;
   root.setProperty("--amber", colors.amber);
@@ -129,6 +180,9 @@ export function applyColors(colors) {
   root.setProperty("--amber-rgb", hexToRgbTriplet(colors.amber));
   root.setProperty("--amber-glow-rgb", hexToRgbTriplet(colors.amberGlow));
   root.setProperty("--bg-rgb", hexToRgbTriplet(colors.bg));
+  root.setProperty("--cursor-base", arrowCursor("none", colors.amberDim, colors.bg));
+  root.setProperty("--cursor-click", arrowCursor(colors.amber, colors.amber, colors.bg));
+  root.setProperty("--cursor-text", beamCursor(colors.amber, colors.bg));
 }
 
 export function applyTheme(themeId) {

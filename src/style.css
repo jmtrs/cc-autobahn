@@ -15,6 +15,25 @@
   --amber-rgb: 255, 154, 31;
   --amber-glow-rgb: 255, 179, 71;
   --bg-rgb: 10, 7, 5;
+  /* App cursors: VFD triangle (two states) + text-beam. Static amber
+     defaults for the first paint; theme.js's applyColors() re-bakes all
+     three per theme. Rendered by cursor.js as a synthetic element, not the
+     native `cursor:` property, everywhere including the nameplate rename
+     state — WebKit's native cursor didn't reliably show there either, same
+     as the form-control override below.
+     --cursor-base: dim outline, resting cursor everywhere in the cluster.
+     --cursor-click: solid fill, stroke matches fill (no brighter accent —
+     read as a stray white outline at this size), only over clickable
+     elements.
+     --cursor-text: thin caret line, shown while renaming the nameplate.
+     All draw a wide --bg-colored halo behind the shape so the cursor keeps
+     contrast even over same-hue UI (an active dropdown row, a themed
+     accent) instead of blending in. 22x22 canvas; the arrow is tilted -25°
+     (leans like the system arrow) with sharp miter corners, hotspot at the
+     rotated apex (8 6). */
+  --cursor-base: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 22 22'><path d='M11 5 L17 17 L5 17 Z' transform='rotate(-25 11 11)' fill='none' stroke='%230a0705' stroke-width='3.5' stroke-linejoin='round'/><path d='M11 5 L17 17 L5 17 Z' transform='rotate(-25 11 11)' fill='none' stroke='%237a3d08' stroke-width='1.5' stroke-linejoin='miter'/></svg>");
+  --cursor-click: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 22 22'><path d='M11 5 L17 17 L5 17 Z' transform='rotate(-25 11 11)' fill='none' stroke='%230a0705' stroke-width='3.5' stroke-linejoin='round'/><path d='M11 5 L17 17 L5 17 Z' transform='rotate(-25 11 11)' fill='%23ff9a1f' stroke='%23ff9a1f' stroke-width='1.5' stroke-linejoin='miter'/></svg>");
+  --cursor-text: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 22 22'><path d='M8 1 V11' fill='none' stroke='%230a0705' stroke-width='3' stroke-linecap='round'/><path d='M8 1 V11' fill='none' stroke='%23ff9a1f' stroke-width='1.2' stroke-linecap='round'/></svg>");
 }
 
 * {
@@ -22,7 +41,18 @@
   padding: 0;
   box-sizing: border-box;
   user-select: none;
-  cursor: default;
+  /* Native cursor hidden everywhere — cursor.js renders our own .fake-cursor
+     element instead, given a z-index below .screen::after's scanline grid
+     so it reads as tucked inside the display glass, not floating above the
+     whole window like a native OS cursor always does. Set on `*` rather
+     than left to inherit from html/body: WebKit's UA stylesheet gives
+     <button>/<input>/<select> their own explicit cursor, which inheritance
+     alone can't beat — an explicit author rule on the element itself is
+     the only thing that outranks it. No inheritance hazard this time
+     (unlike the old per-state cursor bug): every element gets the exact
+     same value, `none`, with a single deliberate exception below for
+     in-place nameplate editing. */
+  cursor: none;
 }
 
 html,
@@ -111,6 +141,36 @@ body {
   mix-blend-mode: multiply;
 }
 
+/* Synthetic cursor (cursor.js): the native OS cursor always paints above the
+   entire window, so it looked like it floated outside the display glass no
+   matter what. This element is positioned by JS on every mousemove instead,
+   given a z-index above popups (.vfd-dropdown-list, 6) — an open dropdown's
+   solid background used to fully occlude the cursor, not just dim it, which
+   made it vanish while navigating a list — but still below .screen::after's
+   scanline (20), so the horizontal/vertical dot-matrix lines still mask it
+   and it reads as tucked inside the glass rather than layered on top. */
+.fake-cursor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 22px;
+  height: 22px;
+  pointer-events: none;
+  background-image: var(--cursor-base);
+  background-repeat: no-repeat;
+  opacity: 0;
+  z-index: 10;
+  will-change: transform;
+}
+
+.fake-cursor.click {
+  background-image: var(--cursor-click);
+}
+
+.fake-cursor.text {
+  background-image: var(--cursor-text);
+}
+
 .row {
   display: flex;
   align-items: baseline;
@@ -181,7 +241,6 @@ body {
   font-weight: 700;
   letter-spacing: 0.28em;
   opacity: 0.8;
-  cursor: pointer;
 }
 
 .nameplate:hover {
@@ -189,7 +248,9 @@ body {
 }
 
 .nameplate[contenteditable="true"] {
-  cursor: text;
+  /* No native `cursor: text` here — cursor.js swaps .fake-cursor to its
+     "text" state instead (see the --cursor-text comment in :root); the
+     native beam wasn't reliably showing in this webview either. */
   user-select: text;
   opacity: 1;
   outline: 1px dashed var(--amber-dim);
@@ -212,7 +273,11 @@ body {
   border: 1px solid var(--amber-dim);
   border-radius: 3px;
   padding: 1px 5px;
-  cursor: pointer;
+}
+
+.pin-btn:hover {
+  color: var(--amber);
+  border-color: var(--amber);
 }
 
 .pin-btn.on {
@@ -264,25 +329,17 @@ body {
   opacity: 0.8;
 }
 
-.footer-metric {
-  cursor: pointer;
-}
-
-.footer-metric:hover {
-  opacity: 0.8;
-}
-
 .footer .clock {
   font-size: 16px;
   font-weight: 700;
   color: var(--amber-glow);
 }
 
-/* segment gauge (autonomie / 5h window) */
+/* segment gauge (autonomie / 5h window) — click toggles quota % <-> reset
+   time, D40-toggle (cursor.js drives the clickable-cursor state, not CSS) */
 .gauge {
   gap: 6px;
   margin-top: 2px;
-  cursor: pointer; /* click toggles quota % <-> reset time, D40-toggle */
 }
 
 .fuel {
@@ -562,7 +619,10 @@ body {
   border: 0;
   border-radius: 3px;
   padding: 4px 10px;
-  cursor: pointer;
+}
+
+.sensor-btn:hover:not(:disabled) {
+  box-shadow: 0 0 8px rgba(var(--amber-rgb), 0.7);
 }
 
 .sensor-btn.ghost {
@@ -571,13 +631,18 @@ body {
   box-shadow: inset 0 0 0 1px var(--amber-dim);
 }
 
+.sensor-btn.ghost:hover:not(:disabled) {
+  box-shadow:
+    inset 0 0 0 1px var(--amber),
+    0 0 6px rgba(var(--amber-rgb), 0.5);
+}
+
 /* D36-review: a disabled .sensor-btn kept the exact same look as enabled —
    the label text swap in JS was the only signal, and it read as "did my
    click even register?" at a glance. Dim it and kill the pointer cursor so
    "busy" is unmistakable without depending on the label being read. */
 .sensor-btn:disabled {
   opacity: 0.55;
-  cursor: default;
   background: var(--amber-dim);
 }
 
@@ -679,7 +744,6 @@ body {
   border-radius: 3px;
   padding: 1px 5px;
   line-height: 1;
-  cursor: pointer;
 }
 
 .mfd-btn:hover {
@@ -841,7 +905,6 @@ body {
   border: 1px solid var(--amber-dim);
   border-radius: 3px;
   padding: 2px 6px;
-  cursor: pointer;
 }
 
 .vfd-dropdown-btn:hover,
@@ -877,7 +940,6 @@ body {
   padding: 3px 6px;
   font-size: 11px;
   color: var(--amber);
-  cursor: pointer;
 }
 
 .vfd-dropdown-list li:hover {
@@ -895,7 +957,14 @@ body {
   align-items: center;
   gap: 6px;
   font-size: 11px;
-  cursor: pointer;
+}
+
+.vfd-check:hover {
+  color: var(--amber-glow);
+}
+
+.vfd-check:hover input:not(:checked) {
+  border-color: var(--amber);
 }
 
 /* Custom checkbox, no native browser chrome (accent-color still rendered a
@@ -912,7 +981,6 @@ body {
   background: var(--bg);
   border: 1px solid var(--amber-dim);
   border-radius: 2px;
-  cursor: pointer;
 }
 
 .vfd-check input:checked {
@@ -944,7 +1012,6 @@ body {
   border: 1px solid var(--amber-dim);
   border-radius: 3px;
   padding: 1px 4px;
-  cursor: pointer;
 }
 
 .vfd-reorder-btn:hover:not(:disabled) {
@@ -954,7 +1021,6 @@ body {
 
 .vfd-reorder-btn:disabled {
   opacity: 0.3;
-  cursor: default;
 }
 
 /* Page 3 (Settings) two-column layout — same trick as Page 2's .limits-cols:
@@ -1004,7 +1070,6 @@ body {
   border: 1px solid var(--amber-dim);
   border-radius: 3px;
   background: transparent;
-  cursor: pointer;
 }
 
 .vfd-theme-accent input[type="color"]::-webkit-color-swatch-wrapper {
