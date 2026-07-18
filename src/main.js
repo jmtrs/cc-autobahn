@@ -24,6 +24,7 @@ import {
   wireNameplateEdit,
   wireTripComputerHints,
 } from "./modules/trip-computer.js";
+import { wireResetPositionButton, wireWindowDrag } from "./modules/window-drag.js";
 
 function init() {
   initTheme();
@@ -36,6 +37,8 @@ function init() {
   wireEngine();
   wireSensorUi();
   wirePinButton();
+  wireWindowDrag();
+  wireResetPositionButton();
   wireRedlineTray();
   wireFooterToggle();
   wireNameplateEdit();

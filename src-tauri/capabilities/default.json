@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Base capabilities for the cluster window: listen to engine events. Window show/hide/position is handled entirely in Rust (tray click / blur), never via IPC (D24).",
+  "description": "Base capabilities for the cluster window: listen to engine events. Window show/hide/position logic lives entirely in Rust (tray click / blur / D41 drag override) — the only window-related frontend surface is the native data-tauri-drag-region, not a custom IPC command.",
   "windows": ["cluster"],
-  "permissions": ["core:default", "core:event:default"]
+  "permissions": ["core:default", "core:event:default", "core:window:allow-start-dragging"]
 }

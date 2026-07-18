@@ -44,6 +44,7 @@ fn main() {
             sensor::install::install_sensor,
             sensor::install::uninstall_sensor,
             window::set_pinned,
+            window::reset_position,
             tray_icon::set_tray_alert,
         ])
         .manage::<PinnedState>(Arc::new(Mutex::new(false)))
@@ -66,8 +67,17 @@ fn main() {
                 .get_webview_window("cluster")
                 .expect("cc-autobahn: missing the 'cluster' window declared in tauri.conf.json");
 
-            let last_blur_hide = window::wire(app, &win)?;
-            let tray_handle = tray::build(app, last_blur_hide)?;
+            // D41: restores the drag-to-move override, if the user left one
+            // saved from a previous session; `None` keeps the D24 default
+            // (anchored under the tray icon).
+            let position_state: window::PositionState =
+                Arc::new(Mutex::new(window::load_position(&app.handle().clone())));
+            app.manage(position_state.clone());
+
+            let (last_blur_hide, auto_reposition_guard) =
+                window::wire(app, &win, position_state.clone())?;
+            app.manage(auto_reposition_guard.clone());
+            let tray_handle = tray::build(app, last_blur_hide, auto_reposition_guard, position_state)?;
 
             // Initial state: full ring (100%) until the first real data from
             // engine::poll or sensor::tail (D-review: tray icon as a

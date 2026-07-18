@@ -1033,3 +1033,85 @@ quota remaining — click for reset time" so the affordance is discoverable.
 (with the sensor connected, click the gauge row and confirm both the bar and
 the text swap to the reset countdown, then back to quota % on a second
 click; confirm clicking does nothing in estimated-only mode).
+
+## D41 — Drag-to-move with a persisted override (partially supersedes D24)
+
+**Decision**: D24 dropped manual dragging in favor of the menu-bar model
+("no longer a draggable floating window"). The user asked to have both: the
+default stays anchored under the tray icon (D24's `position_under_tray`,
+untouched), but the panel can also be dragged elsewhere, and that spot is
+remembered across opens/restarts instead of the panel snapping back under
+the icon every time.
+
+**Implementation**: `data-tauri-drag-region` is back on `<main class="cluster">`
+(`index.html`) — the same element it lived on pre-D24 — with the single new
+permission `core:window:allow-start-dragging` in `capabilities/default.json`.
+This alone turned out to be unusable in practice: `.cluster`'s bezel is
+`padding: 2px` (near-zero, edge-to-edge — a later, unrelated D-review pass
+after D24's comment was written), so the actual bare/grabbable area is a
+2px sliver, effectively unhittable with a mouse.
+
+First fix attempt required holding Option while dragging (to avoid fighting
+the instrument's own click handlers) — round-tripped with the user, who
+found it too fiddly for something they'll do occasionally without
+remembering a modifier. Second attempt dropped the modifier and allowed
+click-and-drag anywhere in the window (excluding interactive elements) —
+round-tripped again: the user wanted the grab area confined to two
+recognizable zones instead of the whole panel, so a click on the dense trip
+computer readouts is never ambiguous with a drag attempt.
+
+The shipped version, `src/modules/window-drag.js` (`wireWindowDrag`): a
+`mousedown` listener on `document` calls `getCurrentWindow().startDragging()`
+only when the target is inside `.row.header` (nameplate/page-label/MFD/PIN
+strip) or `.gear` (the PRND selector) — `DRAG_ZONE_SELECTOR`. Within those
+two zones it still excludes, by `e.target.closest(...)`, `button` (the
+MFD/PIN buttons) and `#nameplate` specifically (click-to-rename, marked
+`data-no-drag` — the only non-button click target that lives inside a drag
+zone; `#footer-metric` and `.row.gauge`'s click-toggles are both outside the
+two zones now, so they don't need the marker). `data-tauri-drag-region` is
+left on
+`<main class="cluster">` as a harmless no-op along the 2px bezel; the JS
+listener is what actually works.
+
+**Resetting the override, and making it instant**: the tray menu's "Reset
+position" originally only called `clear_position` — the panel still showed
+in the dragged spot until the next open/close cycle, since nothing
+re-painted it. `window::reset_position_now` (`window.rs`) fixes that: it
+clears the override and, if the panel is currently visible, immediately
+re-anchors it under the tray icon using `TrayIcon::rect()` (fetched from
+app-managed state — the tray icon itself is `app.manage()`d in `main.rs`
+right after `tray::build`). The tray menu item and a new "Reset position"
+button on the Settings page (Page 3, next to THEME) both call this same
+function — the button through a new `#[tauri::command] reset_position`
+(`window.rs`), the same one-command exception to "no window IPC" that
+`set_pinned` already established for the PIN button.
+
+`window.rs` gained a `PositionState` (`Arc<Mutex<Option<(f64, f64)>>>`,
+`None` = D24 default) persisted to a small JSON file under
+`app.path().app_data_dir()` (first use of that Tauri API in this codebase —
+justified because, unlike every other user preference (D33, `localStorage`),
+window placement is decided in Rust before the frontend exists, per D24).
+`position_under_tray`'s own reposition on every tray click also fires
+`WindowEvent::Moved`; to keep that from being mistaken for a user drag and
+clobbering the override, an `AutoRepositionGuard` timestamp (same idiom as
+`tray.rs`'s `REOPEN_GUARD`) is stamped right before every programmatic
+`set_top_left` call, and the `Moved` handler in `wire()` ignores events that
+land inside that short window. Real drags update `PositionState` in memory
+on every `Moved` event and flush to disk on a throttle (150 ms) plus
+unconditionally on blur-hide, so the final position always survives even if
+a mid-drag write was skipped.
+
+Showing the panel (`tray.rs`'s click handler) now branches: `PositionState`
+set → `position_at` (new, clamps the saved point to whichever monitor
+currently contains it, in case the screen layout changed since the drag) —
+`PositionState` empty → `position_under_tray`, unchanged. A new tray-menu
+item, "Reset position", clears the override (memory + deletes the file) so
+the next open goes back to anchoring under the icon.
+
+**Consequence**: D24's "no longer draggable" is superseded only for the
+drag gesture itself; its actual architecture principle — window
+show/hide/position is decided in Rust, not via custom IPC — holds:
+`data-tauri-drag-region` is a native webview affordance, not a command the
+frontend calls.
+
+**Verified**: `cargo test` 38/38, `cargo clippy` clean.

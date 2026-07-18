@@ -7,13 +7,13 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <main class="cluster">
+    <main class="cluster" data-tauri-drag-region>
       <div class="screen">
         <div class="display">
           <!-- Top band: model nameplate badge (editable), header-hint (what's under
                the cursor, replaces native title tooltips, D-review), page label + MFD/PIN. -->
           <div class="row header">
-            <span class="nameplate" id="nameplate"></span>
+            <span class="nameplate" id="nameplate" data-no-drag></span>
             <span class="header-hint" id="header-hint"></span>
             <span class="header-right">
               <span class="label" id="page-label">SINCE START</span>
@@ -172,6 +172,11 @@
                     <span class="label">ACCENT COLOR</span>
                     <input type="color" id="theme-accent-input" />
                   </div>
+
+                  <!-- D41: undoes a manual drag (click-and-drag anywhere,
+                       window-drag.js) without needing the tray's right-click menu. -->
+                  <div class="row header-sub"><span class="label">WINDOW</span></div>
+                  <button type="button" class="sensor-btn" id="reset-position-btn">Reset position</button>
                 </div>
               </div>
             </div>
