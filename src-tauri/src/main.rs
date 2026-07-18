@@ -77,7 +77,8 @@ fn main() {
             let (last_blur_hide, auto_reposition_guard) =
                 window::wire(app, &win, position_state.clone())?;
             app.manage(auto_reposition_guard.clone());
-            let tray_handle = tray::build(app, last_blur_hide, auto_reposition_guard, position_state)?;
+            let tray_handle =
+                tray::build(app, last_blur_hide, auto_reposition_guard, position_state)?;
 
             // Initial state: full ring (100%) until the first real data from
             // engine::poll or sensor::tail (D-review: tray icon as a

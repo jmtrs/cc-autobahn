@@ -47,7 +47,11 @@ pub fn build(
             if event.id() == "quit" {
                 app.exit(0);
             } else if event.id() == "reset_position" {
-                crate::window::reset_position_now(app, &position_state_for_menu, &auto_guard_for_menu);
+                crate::window::reset_position_now(
+                    app,
+                    &position_state_for_menu,
+                    &auto_guard_for_menu,
+                );
             }
         })
         .on_tray_icon_event(move |tray, event| {

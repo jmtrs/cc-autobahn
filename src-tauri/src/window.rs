@@ -89,7 +89,11 @@ pub fn clear_position(app: &AppHandle, state: &PositionState) {
 /// under the tray icon right away — otherwise the change was invisible until
 /// the next open/close cycle (D-review: the user shouldn't have to close and
 /// reopen the panel just to see the reset take effect).
-pub fn reset_position_now(app: &AppHandle, state: &PositionState, auto_guard: &AutoRepositionGuard) {
+pub fn reset_position_now(
+    app: &AppHandle,
+    state: &PositionState,
+    auto_guard: &AutoRepositionGuard,
+) {
     clear_position(app, state);
     let Some(window) = app.get_webview_window("cluster") else {
         return;
