@@ -7,6 +7,9 @@
 > cost, and active model.
 
 <p align="center">
+  <video src="https://github.com/jmtrs/cc-autobahn/releases/download/v0.7.1/cc-autobahn-demo.mp4" controls width="100%"></video>
+</p>
+<p align="center">
   <img src="docs/screenshots/hero.png" alt="cc-autobahn — trip computer, history, and limits pages" width="100%" />
 </p>
 <p align="center">
@@ -51,8 +54,12 @@ cluster. With no engine detected, the **CHECK ENGINE** overlay has an
 
 cc-autobahn **is not a token meter: it's a visual skin**. All the usage math
 — log parsing, pricing, billing windows — is delegated to
-[`ccusage`](https://ccusage.com), run as a child process. The one thing
-computed in-house is `tok/s` **per response**, which no existing tool offers.
+[**ccusage**](https://ccusage.com) by [**@ryoppippi**](https://github.com/ryoppippi),
+run as a child process via its `--json` output. It is not forked or
+reimplemented: ccusage does the hard, error-prone part (parsing JSONL,
+pricing, deduplicating the shared 5h block, the Opus multiplier) and does it
+well — this project's only job is the dashboard on top. The one thing
+computed in-house is `tok/s` **per response**, which ccusage doesn't offer.
 
 ## Features
 
@@ -169,6 +176,16 @@ settings pages). The real, up-to-date checklist lives in
 of sync. Only two optional/future items remain: packaging Bun as a Tauri
 sidecar, and Windows/Linux support (tray API is cross-platform except
 `set_activation_policy`, untested outside macOS so far).
+
+## Credits
+
+cc-autobahn exists because [**ccusage**](https://github.com/ryoppippi/ccusage)
+by [**@ryoppippi**](https://github.com/ryoppippi) already solved the hard
+problem — parsing Claude Code's JSONL logs, pricing, deduplicating billing
+blocks — correctly and reliably. This project doesn't touch any of that; it
+just skins ccusage's own `--json` output as a Mercedes instrument cluster. If
+you find this useful, go star [ccusage](https://github.com/ryoppippi/ccusage)
+too, it's doing all the real work.
 
 ## License
 
