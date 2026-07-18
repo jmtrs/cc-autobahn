@@ -79,16 +79,22 @@ pub fn position_under_tray(window: &WebviewWindow, tray_rect: &Rect) {
     // rect with a given scale (closure so it can be retried with the
     // correct scale below — D-review: the WINDOW's scale isn't reliable if
     // the tray lives on a monitor with a different DPI in multi-monitor setups).
+    // Both axes must match: with displays stacked vertically the x-ranges
+    // overlap, so an x-only check can pick the wrong monitor.
     let find_host = |scale: f64| {
         let pos = tray_rect.position.to_physical::<f64>(scale);
         let size = tray_rect.size.to_physical::<f64>(scale);
         let center_x = pos.x + size.width / 2.0;
+        let center_y = pos.y + size.height / 2.0;
         monitors
             .iter()
             .find(|m| {
                 let mp = m.position();
                 let ms = m.size();
-                (mp.x as f64) <= center_x && center_x <= mp.x as f64 + ms.width as f64
+                (mp.x as f64) <= center_x
+                    && center_x <= mp.x as f64 + ms.width as f64
+                    && (mp.y as f64) <= center_y
+                    && center_y <= mp.y as f64 + ms.height as f64
             })
             .cloned()
     };
@@ -98,7 +104,9 @@ pub fn position_under_tray(window: &WebviewWindow, tray_rect: &Rect) {
     // Second pass: if the monitor has its own scale, that one is used for
     // the final calculation (matches the window's in the common case of
     // a single monitor or uniform DPI).
-    let scale = find_host(guess_scale)
+    let host = find_host(guess_scale);
+    let scale = host
+        .as_ref()
         .map(|m| m.scale_factor())
         .unwrap_or(guess_scale);
 
@@ -108,7 +116,7 @@ pub fn position_under_tray(window: &WebviewWindow, tray_rect: &Rect) {
     let mut x = tray_center_x - (win_size.width as f64) / 2.0;
     let y = tray_pos.y + tray_size.height + PANEL_GAP;
 
-    if let Some(m) = find_host(scale) {
+    if let Some(m) = host {
         let mp = m.position();
         let ms = m.size();
         let min_x = mp.x as f64 + PANEL_GAP;
@@ -116,5 +124,46 @@ pub fn position_under_tray(window: &WebviewWindow, tray_rect: &Rect) {
         x = x.clamp(min_x, max_x.max(min_x));
     }
 
+    set_top_left(window, x, y, scale);
+}
+
+/// Places the window's top-left corner at physical (x, y).
+///
+/// On macOS this is done natively instead of via `window.set_position`:
+/// tao's `set_outer_position` flips the Y axis with
+/// `CGDisplay::main().pixels_high()` — the display with KEYBOARD focus, in
+/// physical pixels, mixed with logical points. With a second display stacked
+/// above the built-in one, the panel landed a full screen-height off
+/// (observed: window server placed it at Y=-1048, invisible, while tao
+/// believed it was at y=70). `NSScreen` frames share one consistent
+/// bottom-left global coordinate space, so flipping against the primary
+/// screen (`screens[0]`, the one whose top-left is (0,0) in the global
+/// top-left space) is exact for any display arrangement.
+#[cfg(target_os = "macos")]
+fn set_top_left(window: &WebviewWindow, x: f64, y: f64, scale: f64) {
+    use objc2_app_kit::NSScreen;
+    use objc2_foundation::NSPoint;
+
+    let native = (|| {
+        let mtm = objc2::MainThreadMarker::new()?;
+        let primary = NSScreen::screens(mtm).firstObject()?;
+        let ns_window = window.ns_window().ok()?;
+        let ns_window: &objc2_app_kit::NSWindow = unsafe { &*ns_window.cast() };
+        // setFrameTopLeftPoint takes the window's TOP-LEFT in bottom-left
+        // global coordinates: flip Y against the primary screen's height.
+        let primary_h = primary.frame().size.height;
+        let point = NSPoint::new(x / scale, primary_h - y / scale);
+        ns_window.setFrameTopLeftPoint(point);
+        Some(())
+    })();
+
+    if native.is_none() {
+        let _ = window.set_position(PhysicalPosition::new(x as i32, y as i32));
+    }
+}
+
+/// Non-macOS platforms go through tao's positioning, which is correct there.
+#[cfg(not(target_os = "macos"))]
+fn set_top_left(window: &WebviewWindow, x: f64, y: f64, _scale: f64) {
     let _ = window.set_position(PhysicalPosition::new(x as i32, y as i32));
 }

@@ -286,7 +286,9 @@ dependencies = [
 name = "cc-autobahn"
 version = "0.5.2"
 dependencies = [
+ "objc2",
  "objc2-app-kit",
+ "objc2-foundation",
  "objc2-quartz-core",
  "serde",
  "serde_json",
@@ -1995,6 +1997,7 @@ checksum = "e3e0adef53c21f888deb4fa59fc59f7eb17404926ee8a6f59f5df0fd7f9f3272"
 dependencies = [
  "bitflags 2.13.1",
  "block2",
+ "libc",
  "objc2",
  "objc2-core-foundation",
 ]
