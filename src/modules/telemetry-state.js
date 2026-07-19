@@ -68,6 +68,7 @@ export function recordModelActivity(activity) {
     provider,
     modelKey: activity.modelKey ?? null,
     label: activity.label,
+    sessionOrThreadId: activity.sessionOrThreadId ?? null,
     observedAtMs,
     sequence,
   };

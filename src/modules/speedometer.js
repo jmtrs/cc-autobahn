@@ -73,15 +73,16 @@ export function onBurnTick(payload, view = claudeView) {
   const burn = burnFor(view);
   const state = view.state;
   // payload = { tokPerS, turnOutputTokens, turnDurationMs, messageId, timestamp, isPartial }
-  const tps = Number(payload?.tokPerS) || 0;
+  const tps = Number(payload?.tokensPerSecond ?? payload?.tokPerS) || 0;
   burn.target = tps;
   burn.lastTickAt = performance.now();
   // Sliding buffer for the footer's PACE metric (see footer-metric.js).
   // Only final (non-partial) ticks are counted: a partial tick's tokens are
   // already re-included in the aggregate of the turn-closing tick (D27), so
   // pushing both would double-count them.
-  const tokens = Number(payload?.turnOutputTokens) || 0;
-  if (tokens > 0 && !payload?.isPartial) {
+  const tokens = Number(payload?.outputTokens ?? payload?.turnOutputTokens) || 0;
+  const partial = payload?.partial ?? payload?.isPartial;
+  if (tokens > 0 && !partial) {
     state.recentTicks.push({ recvAt: Date.now(), tokens });
   }
   renderFooterMetric(view);

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { setProviderIssue } from "./provider-status.js";
+import { setProviderAvailability, setProviderIssue } from "./provider-status.js";
 
 function providerRoot(provider, available = true) {
   const label = { textContent: "" };
@@ -38,4 +38,16 @@ test("provider issues remain local and compose without hiding identity", () => {
 
   setProviderIssue("claude", "engine", "CHECK ENGINE", false, documentRoot);
   assert.equal(claude.label.textContent, "CLAUDE · SENSOR OFFLINE");
+});
+
+test("Codex availability replaces the bootstrap unavailable label", () => {
+  const codex = providerRoot("codex", false);
+  const documentRoot = { querySelector: () => codex };
+
+  assert.equal(setProviderAvailability("codex", true, documentRoot), true);
+  assert.equal(codex.dataset.providerAvailable, "true");
+  assert.equal(codex.label.textContent, "CODEX");
+
+  setProviderAvailability("codex", false, documentRoot);
+  assert.equal(codex.label.textContent, "CODEX · UNAVAILABLE");
 });

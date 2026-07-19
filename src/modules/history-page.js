@@ -73,7 +73,7 @@ function render(days, view) {
 }
 
 async function refresh(view, isMounted) {
-  if (view.root().dataset.providerAvailable === "false") {
+  if (view.root().dataset.providerAvailable === "false" || view.provider !== "claude") {
     view.element("history-bars").innerHTML = "";
     view.element("history-total").textContent = "—";
     showMessage("data source unavailable", view);

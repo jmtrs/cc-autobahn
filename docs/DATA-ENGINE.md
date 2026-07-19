@@ -55,6 +55,14 @@ an "instantaneous, reacts to every generated token" needle remains impossible
 from this source. The honest output is a stepwise per-response rate. True
 streaming would require another telemetry source such as OTEL.
 
+Codex uses a separate defensive decoder over recent rollout JSONL beneath
+`CODEX_HOME` (`~/.codex` by default), including recursive `sessions/` and
+`archived_sessions/`. `session_meta.id` supplies thread identity,
+`turn_context.model` supplies model activity, and each non-duplicate
+`token_count.info.last_token_usage.output_tokens` supplies one response-rate
+step. Reads, lines, recursion and active file count are bounded; unknown
+formats fail closed without affecting Claude telemetry.
+
 ## Source 3 — Claude Code statusline JSON (self-installing sensor)
 
 Claude Code passes, via stdin to a **configured statusline script**, a JSON with
@@ -122,7 +130,7 @@ Docs: <https://code.claude.com/docs/en/monitoring-usage>
 | Sensor | Cadence | Why |
 | ------ | -------- | ------- |
 | `ccusage blocks` | **10–30 s** (or a persistent process) | the 5h block doesn't change every second; running `npx` every 1–2 s is wasteful |
-| JSONL tail (`tok/s`) | **200 ms file follow + 5 s discovery** | low-latency partial/final ticks across concurrent sessions |
+| JSONL tails (`tok/s`) | **200 ms file follow + 5 s discovery** | independent Claude/Codex ticks across concurrent sessions/threads |
 | Statusline (`rate_limits`, model) | **push** | arrives whenever Claude Code renders |
 | `ccusage claude daily` (History/Limits) | **on-demand** (D33) | daily totals barely move within a day; fetched only when that MFD page opens, cached client-side ~5 min |
 

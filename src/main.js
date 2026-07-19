@@ -68,7 +68,7 @@ async function init() {
   if (claudeView.root().hidden === false) {
     setGear(["opus"], claudeView); // positions Claude's default marker
   }
-  startBurnAnimation(claudeView); // starts idle (pos=0), true to the car
+  providerViews.forEach((view) => startBurnAnimation(view)); // independent provider springs
 }
 
 window.addEventListener("DOMContentLoaded", init);

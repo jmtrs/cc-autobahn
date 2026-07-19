@@ -56,7 +56,7 @@ function renderBurnRates(view) {
 
 async function renderBreakdown(view, isMounted) {
   const list = view.element("breakdown-list");
-  if (view.root().dataset.providerAvailable === "false") {
+  if (view.root().dataset.providerAvailable === "false" || view.provider !== "claude") {
     list.innerHTML = `<div class="ghost">data source unavailable</div>`;
     return;
   }

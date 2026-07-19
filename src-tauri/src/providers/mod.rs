@@ -2,6 +2,7 @@
 //! the rest of the application consumes these discriminated domain shapes.
 
 pub mod claude;
+pub mod codex;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -12,7 +13,8 @@ use tauri::{AppHandle, Emitter, Manager};
 /// Starts every enabled provider adapter. The native shell calls this registry
 /// once; adapters remain responsible for their own worker topology.
 pub fn start_enabled(app: AppHandle) {
-    claude::start(app);
+    claude::start(app.clone());
+    codex::start(app);
 }
 
 #[derive(
@@ -152,9 +154,29 @@ pub struct PermissionRequest {
 }
 
 pub type ProviderHealthState = Arc<Mutex<HashMap<(ProviderId, ProviderComponent), ProviderHealth>>>;
+pub type ProviderActivityState = Arc<Mutex<HashMap<ProviderId, ModelActivity>>>;
 
 pub fn new_health_state() -> ProviderHealthState {
     Arc::new(Mutex::new(HashMap::new()))
+}
+
+pub fn new_activity_state() -> ProviderActivityState {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+fn record_activity(
+    state: &ProviderActivityState,
+    activity: ModelActivity,
+) -> Option<ModelActivity> {
+    let mut activities = state.lock().unwrap();
+    let is_newer = activities.get(&activity.provider).is_none_or(|current| {
+        (activity.observed_at_ms, activity.sequence) > (current.observed_at_ms, current.sequence)
+    });
+    if !is_newer {
+        return None;
+    }
+    activities.insert(activity.provider, activity.clone());
+    Some(activity)
 }
 
 fn record_health(state: &ProviderHealthState, mut health: ProviderHealth) -> ProviderHealth {
@@ -176,6 +198,19 @@ fn health_snapshot(state: &ProviderHealthState) -> Vec<ProviderHealth> {
 pub fn provider_health_snapshot(app: AppHandle) -> Vec<ProviderHealth> {
     let state = app.state::<ProviderHealthState>();
     health_snapshot(&state)
+}
+
+#[tauri::command]
+pub fn provider_activity_snapshot(app: AppHandle) -> Vec<ModelActivity> {
+    let mut snapshot: Vec<_> = app
+        .state::<ProviderActivityState>()
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect();
+    snapshot.sort_by_key(|activity| (activity.observed_at_ms, activity.sequence));
+    snapshot
 }
 
 pub fn now_epoch_ms() -> i64 {
@@ -202,6 +237,13 @@ pub fn emit_health(
     let state = app.state::<ProviderHealthState>();
     let health = record_health(&state, health);
     let _ = app.emit("provider-health", health);
+}
+
+pub fn emit_model_activity(app: &AppHandle, activity: ModelActivity) {
+    let state = app.state::<ProviderActivityState>();
+    if let Some(activity) = record_activity(&state, activity) {
+        let _ = app.emit("model-activity", activity);
+    }
 }
 
 #[cfg(test)]
@@ -277,5 +319,27 @@ mod tests {
         assert_eq!(snapshot.len(), 1);
         assert_eq!(snapshot[0].status, HealthStatus::Degraded);
         assert_eq!(snapshot[0].observed_at_ms, 11);
+    }
+
+    #[test]
+    fn activity_registry_rejects_delayed_provider_events() {
+        let state = new_activity_state();
+        let newer = ModelActivity {
+            provider: ProviderId::Codex,
+            model_id: "gpt-new".into(),
+            session_or_thread_id: "thread-new".into(),
+            observed_at_ms: 200,
+            sequence: 1,
+        };
+        assert_eq!(record_activity(&state, newer.clone()), Some(newer.clone()));
+        let delayed = ModelActivity {
+            provider: ProviderId::Codex,
+            model_id: "gpt-old".into(),
+            session_or_thread_id: "thread-old".into(),
+            observed_at_ms: 199,
+            sequence: 99,
+        };
+        assert_eq!(record_activity(&state, delayed), None);
+        assert_eq!(state.lock().unwrap().get(&ProviderId::Codex), Some(&newer));
     }
 }

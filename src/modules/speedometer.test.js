@@ -6,13 +6,15 @@ globalThis.localStorage = {
   setItem() {},
 };
 
-const { startBurnAnimation } = await import("./speedometer.js");
+const { onBurnTick, startBurnAnimation } = await import("./speedometer.js");
 
 function fakeView(provider) {
-  const burn = { textContent: "" };
+  const burn = { textContent: "", classList: { toggle() {} } };
+  const root = { classList: { toggle() {} } };
   return {
     provider,
     state: { recentTicks: [] },
+    root: () => root,
     element: () => burn,
   };
 }
@@ -42,4 +44,25 @@ test("burn animation is idempotent and restartable per provider", () => {
 
   startBurnAnimation(view, requestFrame, cancelFrame);
   assert.equal(callbacks.length, 3);
+});
+
+test("normalized Codex turn rates feed only their provider buffer", () => {
+  const codex = fakeView("codex");
+  const claude = fakeView("claude");
+
+  onBurnTick(
+    {
+      provider: "codex",
+      sessionOrThreadId: "thread-1",
+      outputTokens: 75,
+      elapsedMs: 3_000,
+      tokensPerSecond: 25,
+      partial: false,
+    },
+    codex,
+  );
+
+  assert.equal(codex.state.recentTicks.length, 1);
+  assert.equal(codex.state.recentTicks[0].tokens, 75);
+  assert.deepEqual(claude.state.recentTicks, []);
 });

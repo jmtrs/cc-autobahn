@@ -62,6 +62,7 @@ fn main() {
             permission::permission_deny,
             permission::permission_pending_snapshot,
             providers::provider_health_snapshot,
+            providers::provider_activity_snapshot,
             permission::install::permission_status,
             permission::install::permission_preview_install,
             permission::install::install_permission_hook,
@@ -75,6 +76,7 @@ fn main() {
         .manage::<window::DisplayModeTransition>(Arc::new(Mutex::new(())))
         .manage::<PathState>(Arc::new(Mutex::new(None)))
         .manage::<providers::ProviderHealthState>(providers::new_health_state())
+        .manage::<providers::ProviderActivityState>(providers::new_activity_state())
         .setup(|app| {
             pathfix::apply(&app.handle().clone());
             sensor::install::refresh_if_stale();

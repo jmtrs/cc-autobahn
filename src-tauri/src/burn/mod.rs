@@ -20,7 +20,7 @@
 
 mod parser;
 mod tail;
-mod zulu;
+pub(crate) mod zulu;
 
 use std::path::PathBuf;
 use std::thread;

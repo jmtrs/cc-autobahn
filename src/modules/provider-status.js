@@ -22,3 +22,11 @@ export function setProviderIssue(provider, key, label, active, documentRoot = do
   else issues.delete(key);
   render(provider, documentRoot);
 }
+
+export function setProviderAvailability(provider, available, documentRoot = document) {
+  const root = documentRoot.querySelector(`[data-provider-module="${provider}"]`);
+  if (!root) return false;
+  root.dataset.providerAvailable = String(Boolean(available));
+  render(provider, documentRoot);
+  return true;
+}

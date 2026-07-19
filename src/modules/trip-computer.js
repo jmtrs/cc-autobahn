@@ -86,6 +86,7 @@ export function setGear(models, view = claudeView, activity = {}) {
     provider: view.provider,
     modelKey: gearKey,
     label,
+    sessionOrThreadId: activity.sessionOrThreadId,
     observedAtMs: activity.observedAtMs ?? Date.now(),
     sequence: activity.sequence ?? 0,
   });

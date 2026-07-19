@@ -34,6 +34,7 @@ test("delayed model activity cannot roll the shared nameplate backwards", () => 
       provider: "codex",
       modelKey: "gpt-5",
       label: "GPT 5",
+      sessionOrThreadId: "thread-1",
       observedAtMs: 200,
       sequence: 2,
     }),
@@ -62,6 +63,7 @@ test("delayed model activity cannot roll the shared nameplate backwards", () => 
   assert.equal(state.global.lastActiveModel.provider, "codex");
   assert.equal(state.global.lastActiveModel.label, "GPT 5");
   assert.equal(state.providers.codex.nameplateLabel, "GPT 5");
+  assert.equal(state.providers.codex.lastModelActivity.sessionOrThreadId, "thread-1");
 
   assert.equal(
     reconcileNameplateEdit(

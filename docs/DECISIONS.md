@@ -1402,3 +1402,33 @@ adversarial reviewer found startup hydration, recovery, spoofing, replay,
 event-naming and camelCase defects across three passes; all were fixed and the
 final review reported no remaining concrete bug. Codex transport and
 provider-scoped UI remain separate later cuts.
+
+## D46 — Bounded Codex rollout telemetry before App Server
+
+**Source boundary**: Codex live telemetry comes from a dedicated local rollout
+adapter, not branches in Claude's parser. `CODEX_HOME` may contain one path,
+comma-separated homes, or direct JSONL directories; absent configuration falls
+back to `~/.codex`. Home roots expand to `sessions/` and
+`archived_sessions/`, then recurse without following symlinks.
+
+**Decoder contract**: only `session_meta.id`, `task_started`,
+`turn_context.model`, and `token_count.info.last_token_usage.output_tokens`
+have meaning. Each rollout owns its decoder, response clock, cumulative-token
+dedupe and read offset. A response rate is `last output tokens / elapsed since
+the previous response (or task start)`. Unknown, null, malformed,
+non-monotonic, zero-token and duplicate records emit nothing. Discovery depth,
+active file count, line size, bootstrap window and bytes per pump are bounded.
+
+**Startup and honesty**: new tails bootstrap thread/model/token baselines from
+bounded head/tail reads at EOF, so startup never replays historical speed.
+Model activity is stored in Rust and exposed through both a live event and a
+snapshot, closing the pre-WebView subscription race. Codex is marked available
+only while a recent local rollout exists. History/model-cost breakdown remains
+explicitly unavailable until `ccusage codex daily/session` lands; local rollout
+availability is not presented as an official quota or billing source.
+
+**Verification**: anonymized decoder/tail/discovery fixtures, malformed and
+duplicate records, normalized frontend routing, provider buffer isolation, and
+a privacy-preserving bootstrap against a real local rollout pass. Full baseline:
+87 Rust tests, 28 frontend tests, Rustfmt, strict Clippy, Vite production build,
+and whitespace validation.

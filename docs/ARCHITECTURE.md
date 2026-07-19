@@ -148,9 +148,11 @@ IPC/events.
    statusline sensor (D12) if not installed.
 2. Backend timer **every 10–30 s** (D13) → `ccusage blocks --active --json` → `blocks-update`
    event with average burn, projection, cost.
-3. JSONL tails in parallel → eligible intermediate writes and final turn
-   closure emit `burn-tick` with partial/final `tok/s` **per response** →
-   needle that jumps and decays (not token-stream telemetry, D8/D27).
+3. Provider-owned JSONL tails run in parallel. Claude eligible intermediate
+   writes/final closures and Codex rollout `token_count` responses emit a
+   discriminated `burn-tick` with `tok/s` **per response** → independent
+   needles that jump and decay (not token-stream telemetry, D8/D27/D46).
+   Codex `session_meta` + `turn_context` also emit thread/model activity.
 4. Statusline sensor (push) → `sensor-update` event with `rate_limits.five_hour`
    (**official** autonomy), `seven_day` (border tint at 80%), `model.id`
    (PRND selector), cost. `effort.level` arrives in the payload but is no longer
@@ -181,18 +183,20 @@ IPC/events.
 
 **Phases 0–7 done** (see [ROADMAP.md](./ROADMAP.md)). One executable dispatches
 to three modes: GUI, `statusline`, or `permission-hook`. GUI mode starts hidden
-behind the tray, runs three continuous telemetry sensors plus on-demand daily
+behind the tray, runs the Claude engine/transcript/status sensors plus the Codex
+rollout sensor and on-demand daily
 history, and hosts the event-driven permission listener. The four-page MFD
 contains Trip, History, Limits, and shared Settings; redline feedback, dynamic
 tray states, themes, permission sound/consent, and manual position reset are
 wired. Default placement remains under the tray, with D41's persisted drag
 override available when wanted.
 
-Current verified baseline: **80 Rust tests**, **26 frontend tests**, Rustfmt
+Current verified baseline: **87 Rust tests**, **28 frontend tests**, Rustfmt
 check, strict Clippy (`-D warnings`), and the Vite production build all pass.
 Frontend linting is not yet configured. Future work is tracked in the roadmap:
 Codex provider foundation and the complete dual-provider chassis are implemented;
-Codex data adapters remain.
+local rollout speed/model/thread telemetry is implemented; Codex history and
+App Server account data remain.
 Bun sidecar and
 Windows/Linux are optional, and permission request identity/native Claude
 permission suggestions are hardened; mixed-provider permission routing remains.

@@ -11,9 +11,21 @@ import {
 import { onPermissionPending, onPermissionResolved } from "./permission-gate.js";
 import { onBurnTick } from "./speedometer.js";
 import { onBlocksUpdate, onSensorState, onSensorUpdate } from "./trip-computer.js";
-import { claudeView } from "./provider-view.js";
+import { claudeView, codexView } from "./provider-view.js";
 import { hydrateProviderHealth, routeClaudePayload } from "./provider-routing.js";
-import { updateProviderHealth } from "./telemetry-state.js";
+import { providerIdFromPayload, updateProviderHealth } from "./telemetry-state.js";
+import { setProviderAvailability } from "./provider-status.js";
+import { setGear } from "./trip-computer.js";
+
+const providerViews = { claude: claudeView, codex: codexView };
+
+function applyHealth(payload) {
+  if (!updateProviderHealth(payload)) return false;
+  if (payload.provider === "codex" && payload.component === "transcript") {
+    setProviderAvailability("codex", payload.status === "connected");
+  }
+  return true;
+}
 
 export async function wireEngine() {
   if (!("__TAURI_INTERNALS__" in window)) return; // running outside Tauri
@@ -21,7 +33,7 @@ export async function wireEngine() {
   const { invoke } = await import("@tauri-apps/api/core");
 
   await listen("provider-health", (e) => {
-    if (updateProviderHealth(e.payload)) {
+    if (applyHealth(e.payload)) {
       console.info("[provider] health:", e.payload);
     }
   });
@@ -42,9 +54,21 @@ export async function wireEngine() {
     });
   });
   await listen("burn-tick", (e) => {
-    routeClaudePayload(e.payload, (payload) => {
-      console.info("[burn] tok/s per response:", payload);
-      onBurnTick(payload, claudeView);
+    const provider = providerIdFromPayload(e.payload);
+    const view = providerViews[provider];
+    if (!view) return;
+    console.info("[burn] tok/s per response:", e.payload);
+    onBurnTick(e.payload, view);
+  });
+  await listen("model-activity", (e) => {
+    const provider = providerIdFromPayload(e.payload);
+    const view = providerViews[provider];
+    if (!view || typeof e.payload?.modelId !== "string") return;
+    console.info("[provider] model activity:", e.payload);
+    setGear([e.payload.modelId], view, {
+      observedAtMs: e.payload.observedAtMs,
+      sequence: e.payload.sequence,
+      sessionOrThreadId: e.payload.sessionOrThreadId,
     });
   });
   await listen("sensor-update", (e) => {
@@ -73,9 +97,30 @@ export async function wireEngine() {
   });
 
   try {
-    hydrateProviderHealth(await invoke("provider_health_snapshot"));
+    const snapshot = await invoke("provider_health_snapshot");
+    hydrateProviderHealth(snapshot);
+    snapshot?.forEach((health) => {
+      if (health.provider === "codex" && health.component === "transcript") {
+        setProviderAvailability("codex", health.status === "connected");
+      }
+    });
   } catch (e) {
     console.error("[provider] health snapshot:", e);
+  }
+  try {
+    const activities = await invoke("provider_activity_snapshot");
+    activities?.forEach((activity) => {
+      const view = providerViews[providerIdFromPayload(activity)];
+      if (view && typeof activity?.modelId === "string") {
+        setGear([activity.modelId], view, {
+          observedAtMs: activity.observedAtMs,
+          sequence: activity.sequence,
+          sessionOrThreadId: activity.sessionOrThreadId,
+        });
+      }
+    });
+  } catch (e) {
+    console.error("[provider] activity snapshot:", e);
   }
   try {
     const snapshot = await invoke("sensor_snapshot");
