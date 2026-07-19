@@ -91,7 +91,8 @@ behavior and the optional Claude Code permission bridge.
   both and starts polling, no terminal required.
 
 Current verified baseline: `cargo test` **80/80**, `npm run test:frontend`
-**11/11**, four Playwright layout/snapshot baselines at **550×150**, `cargo fmt --check`,
+**26/26**, 36 pixel-compared Playwright baselines across Claude, Codex and
+Both in amber, emerald and magenta at **550×150 / 550×290**, `cargo fmt --check`,
 `cargo clippy --all-targets --all-features -- -D warnings`, and
 `npm run build` all pass.
 
@@ -191,7 +192,7 @@ The full per-file breakdown lives in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.
 - [docs/DATA-ENGINE.md](./docs/DATA-ENGINE.md) — ccusage, statusline, OTEL, comparison.
 - [docs/DECISIONS.md](./docs/DECISIONS.md) — decision log (ADR) and rationale.
 - [docs/ROADMAP.md](./docs/ROADMAP.md) — implementation phases.
-- [docs/CODEX-INTEGRATION-ASSESSMENT.md](./docs/CODEX-INTEGRATION-ASSESSMENT.md) — verified Claude/Codex plan; provider contracts, isolated state and discriminated events are implemented, while Codex data adapters/UI remain pending.
+- [docs/CODEX-INTEGRATION-ASSESSMENT.md](./docs/CODEX-INTEGRATION-ASSESSMENT.md) — verified Claude/Codex plan; provider contracts, isolated state and the dual-provider UI are implemented, while Codex data adapters remain pending.
 
 ## Roadmap
 
@@ -200,7 +201,7 @@ statusline sensor, zero friction, tray/menu-bar, polish, MFD history/limits/
 settings pages, redline feedback, movable positioning, and the permission
 gate). The real, up-to-date checklist lives in
 [docs/ROADMAP.md](./docs/ROADMAP.md) — don't duplicate it here, it gets out
-of sync. Future work includes the assessed but unimplemented Codex provider,
+of sync. Future work includes the assessed Codex data adapters,
 packaging Bun as a Tauri sidecar, Windows/Linux validation, and modernizing
 permission-request identity/Claude-native permission suggestions.
 

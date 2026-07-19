@@ -24,26 +24,27 @@ function cycleOrder() {
   return [0, ...shown, 3];
 }
 
-function activate(page) {
+export function activateMfdPage(page, documentRoot = document) {
   current = page;
   setCurrentPage(page);
-  document.querySelectorAll(".page").forEach((el) => {
+  documentRoot.querySelectorAll(".page").forEach((el) => {
     el.classList.toggle("active", Number(el.dataset.page) === page);
   });
-  document.getElementById("page-label").textContent = PAGE_LABELS[page];
-  document.dispatchEvent(new CustomEvent("mfd-page-changed", { detail: { page } }));
+  documentRoot.getElementById("page-label").textContent = PAGE_LABELS[page];
+  documentRoot.querySelector("[data-app-chassis]").dataset.currentPage = String(page);
+  documentRoot.dispatchEvent(new CustomEvent("mfd-page-changed", { detail: { page } }));
 }
 
 export function wireMfdNav() {
   const settings = loadMfdSettings();
   const order = cycleOrder();
-  activate(order.includes(settings.defaultPage) ? settings.defaultPage : 0);
+  activateMfdPage(order.includes(settings.defaultPage) ? settings.defaultPage : 0);
 
   const btn = document.getElementById("mfd-btn");
   hintOnHover(btn, "Cycle to the next screen");
   btn.onclick = () => {
     const order = cycleOrder();
     const idx = order.indexOf(current);
-    activate(order[idx === -1 ? 0 : (idx + 1) % order.length]);
+    activateMfdPage(order[idx === -1 ? 0 : (idx + 1) % order.length]);
   };
 }

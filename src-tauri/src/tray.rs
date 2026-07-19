@@ -83,7 +83,7 @@ pub fn build(
             } else {
                 let saved = *crate::window::lock(&position_state);
                 if let Some((x, y)) = saved {
-                    position_at(&window, x, y, &auto_reposition_guard);
+                    let _ = position_at(&window, x, y, &auto_reposition_guard);
                 } else {
                     position_under_tray(&window, &rect, &auto_reposition_guard);
                 }

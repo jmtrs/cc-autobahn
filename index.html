@@ -8,24 +8,30 @@
   </head>
   <body>
     <main class="cluster" data-app-chassis data-tauri-drag-region>
-      <div class="screen" data-provider-module="claude">
-        <div class="display">
+      <div class="screen">
+        <div class="display chassis-display">
           <!-- Top band: model nameplate badge (editable), header-hint (what's under
                the cursor, replaces native title tooltips, D-review), page label + MFD/PIN. -->
           <div class="row header">
             <span class="nameplate" id="nameplate" data-chassis-role="nameplate" data-no-drag></span>
+            <span class="provider-tag" id="active-provider-tag" data-chassis-role="active-provider-tag">CLAUDE</span>
             <span class="header-hint" id="header-hint"></span>
             <span class="header-right">
+              <span class="clock" id="clock" data-chassis-role="clock">--:--</span>
               <span class="label" id="page-label">SINCE START</span>
               <button class="mfd-btn" id="mfd-btn">&#9656;</button>
               <button class="pin-btn" id="pin-btn">PIN</button>
             </span>
           </div>
 
-          <!-- MFD pages (D-review: real trip computers cycle screens with a
-               stalk button instead of cramming everything into one readout).
-               Page 0 is the untouched original trip computer. -->
-          <div class="pages" id="pages">
+          <!-- Provider module template. provider-layout.js clones it once for
+               Claude and once for Codex, rewrites IDs to provider-local roles,
+               and keeps both roots mounted across display-mode changes. -->
+          <template id="provider-module-template">
+            <section class="provider-module">
+              <span class="provider-label"></span>
+              <div class="provider-display">
+                <div class="pages provider-pages">
             <!-- Page 0: live trip computer (default) -->
             <div class="page active" data-page="0" id="page-0">
               <div class="grid">
@@ -51,13 +57,12 @@
                 </div>
               </div>
 
-              <!-- Bottom line: avg cost (demoted, D-review) + clock, like "106 Km/h   16:57" (D8) -->
+              <!-- Bottom line: avg cost. Clock moved to the shared header. -->
               <div class="row footer">
                 <span class="ghost" id="avg-metric">
                   <span class="ghost-label">AVG</span>
                   <span id="avg">$0.42</span><span class="unit">/Mtok</span>
                 </span>
-                <span class="clock" id="clock">--:--</span>
               </div>
 
               <!-- Autonomie segment bar (5h window), like the coolant gauge -->
@@ -126,6 +131,20 @@
               </div>
             </div>
 
+                </div>
+              </div>
+              <div class="gear" data-provider-role="gear">
+                <span class="gear-marker" id="gear-marker" aria-hidden="true"></span>
+                <span class="g active" data-model="opus">O</span>
+                <span class="g" data-model="sonnet">S</span>
+                <span class="g" data-model="haiku">H</span>
+                <span class="g" data-model="fable">F</span>
+                <span class="g" data-model="custom">C</span>
+              </div>
+            </section>
+          </template>
+
+          <div class="pages shared-pages" id="pages">
             <!-- Page 3: MFD settings — front-end only, localStorage. Three
                  columns (same trick as Page 2's .limits-cols): the window is
                  550x150, wide and short, so a single vertical stack (or even
@@ -179,6 +198,18 @@
                        window-drag.js) without needing the tray's right-click menu. -->
                   <div class="row header-sub"><span class="label">WINDOW</span></div>
                   <button type="button" class="sensor-btn" id="reset-position-btn">Reset position</button>
+                  <div class="row header-sub"><span class="label">DISPLAY</span></div>
+                  <div class="vfd-dropdown" id="display-mode-dropdown">
+                    <button type="button" class="vfd-dropdown-btn" id="display-mode-btn">
+                      <span id="display-mode-value">CLAUDE</span>
+                      <span class="vfd-dropdown-arrow">&#9662;</span>
+                    </button>
+                    <ul class="vfd-dropdown-list" id="display-mode-list" hidden>
+                      <li data-value="claude">CLAUDE</li>
+                      <li data-value="codex">CODEX</li>
+                      <li data-value="both">BOTH</li>
+                    </ul>
+                  </div>
                 </div>
 
                 <div class="settings-col">
@@ -209,7 +240,7 @@
                   <!-- D42: opens the opt-in consent overlay for the
                        PermissionRequest hook (approve/deny CC tool calls
                        from this window instead of the terminal). -->
-                  <div class="row header-sub"><span class="label">PERMISSION HOOK</span></div>
+                  <div class="row header-sub"><span class="label">CLAUDE PERMISSION HOOK</span></div>
                   <button type="button" class="sensor-btn" id="permission-settings-btn">Connect</button>
                 </div>
               </div>
@@ -270,7 +301,7 @@
           <div class="sensor-overlay permission-gate" id="permission-gate" hidden>
             <div class="sensor-card">
               <div class="sensor-title">
-                PERMISSION REQUEST
+                <span id="permission-provider">CLAUDE</span> · PERMISSION REQUEST
                 <span class="permission-tool" id="permission-tool">—</span>
                 <span class="permission-badge" id="permission-badge" hidden></span>
                 <span class="permission-context" id="permission-context"></span>
@@ -303,16 +334,7 @@
             </div>
           </div>
         </div>
-
-        <!-- PRND-style selector: active model lit, rest dimmed, integrated into the screen -->
-        <div class="gear" id="gear">
-          <span class="gear-marker" id="gear-marker" aria-hidden="true"></span>
-          <span class="g active" data-model="opus">O</span>
-          <span class="g" data-model="sonnet">S</span>
-          <span class="g" data-model="haiku">H</span>
-          <span class="g" data-model="fable">F</span>
-          <span class="g" data-model="custom">C</span>
-        </div>
+        <div class="provider-stack" id="provider-stack"></div>
       </div>
     </main>
 

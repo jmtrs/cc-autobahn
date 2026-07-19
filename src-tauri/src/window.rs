@@ -57,16 +57,41 @@ pub fn set_display_mode(
     let current = window
         .outer_position()
         .map_err(|error| format!("read window position: {error}"))?;
+    let previous_size = window
+        .outer_size()
+        .map_err(|error| format!("read window size: {error}"))?;
+    let previous_scale = window
+        .scale_factor()
+        .map_err(|error| format!("read window scale: {error}"))?;
     let (width, height) = display_mode_size(mode);
     window
         .set_size(LogicalSize::new(width, height))
         .map_err(|error| format!("resize window: {error}"))?;
-    position_at(
+    if let Err(error) = position_at(
         &window,
         f64::from(current.x),
         f64::from(current.y),
         &auto_guard,
-    );
+    ) {
+        let size_rollback = window.set_size(previous_size);
+        let position_rollback = set_top_left(
+            &window,
+            f64::from(current.x),
+            f64::from(current.y),
+            previous_scale,
+        );
+        return match (size_rollback, position_rollback) {
+            (Ok(()), Ok(())) => Err(error),
+            (size_result, position_result) => Err(format!(
+                "{error}; rollback failed (size: {}; position: {})",
+                size_result
+                    .err()
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "ok".into()),
+                position_result.err().unwrap_or_else(|| "ok".into())
+            )),
+        };
+    }
     Ok(())
 }
 
@@ -194,7 +219,7 @@ pub fn show_for_permission(app: &AppHandle) {
 
     let saved = *lock(&position_state);
     if let Some((x, y)) = saved {
-        position_at(&window, x, y, &auto_guard);
+        let _ = position_at(&window, x, y, &auto_guard);
     } else if let Some(tray) = app.try_state::<TrayIcon>() {
         if let Ok(Some(rect)) = tray.rect() {
             position_under_tray(&window, &rect, &auto_guard);
@@ -460,26 +485,41 @@ pub fn position_under_tray(
     }
 
     *lock(auto_guard) = Instant::now();
-    set_top_left(window, x, y, scale);
+    let _ = set_top_left(window, x, y, scale);
 }
 
 /// Places the panel at a saved drag override (D41), clamped to whichever
 /// monitor currently contains that point — the saved spot may no longer be
 /// on screen if a monitor was disconnected since it was dragged there.
-pub fn position_at(window: &WebviewWindow, x: f64, y: f64, auto_guard: &AutoRepositionGuard) {
-    let Ok(win_size) = window.outer_size() else {
-        return;
-    };
-    let monitors = window.available_monitors().unwrap_or_default();
+pub fn position_at(
+    window: &WebviewWindow,
+    x: f64,
+    y: f64,
+    auto_guard: &AutoRepositionGuard,
+) -> Result<(), String> {
+    let win_size = window
+        .outer_size()
+        .map_err(|error| format!("read window size: {error}"))?;
+    let monitors = window
+        .available_monitors()
+        .map_err(|error| format!("read monitors: {error}"))?;
+    if monitors.is_empty() {
+        return Err("no monitor is available for window placement".into());
+    }
 
-    let host = monitors.iter().find(|m| {
-        let mp = m.position();
-        let ms = m.size();
-        (mp.x as f64) <= x
-            && x <= mp.x as f64 + ms.width as f64
-            && (mp.y as f64) <= y
-            && y <= mp.y as f64 + ms.height as f64
-    });
+    let host = monitors
+        .iter()
+        .find(|m| {
+            let mp = m.position();
+            let ms = m.size();
+            (mp.x as f64) <= x
+                && x <= mp.x as f64 + ms.width as f64
+                && (mp.y as f64) <= y
+                && y <= mp.y as f64 + ms.height as f64
+        })
+        // Monitor removal: clamp an orphaned saved point to the primary
+        // monitor instead of preserving an invisible coordinate forever.
+        .or_else(|| monitors.first());
     // Same reasoning as `position_under_tray`: the host monitor's own scale,
     // not the window's current one — they can differ in multi-monitor setups
     // with mixed DPI, and the window may currently be on a different screen
@@ -501,7 +541,7 @@ pub fn position_at(window: &WebviewWindow, x: f64, y: f64, auto_guard: &AutoRepo
     }
 
     *lock(auto_guard) = Instant::now();
-    set_top_left(window, clamped_x, clamped_y, scale);
+    set_top_left(window, clamped_x, clamped_y, scale)
 }
 
 /// Places the window's top-left corner at physical (x, y).
@@ -517,7 +557,7 @@ pub fn position_at(window: &WebviewWindow, x: f64, y: f64, auto_guard: &AutoRepo
 /// screen (`screens[0]`, the one whose top-left is (0,0) in the global
 /// top-left space) is exact for any display arrangement.
 #[cfg(target_os = "macos")]
-fn set_top_left(window: &WebviewWindow, x: f64, y: f64, scale: f64) {
+fn set_top_left(window: &WebviewWindow, x: f64, y: f64, scale: f64) -> Result<(), String> {
     use objc2_app_kit::NSScreen;
     use objc2_foundation::NSPoint;
 
@@ -534,15 +574,20 @@ fn set_top_left(window: &WebviewWindow, x: f64, y: f64, scale: f64) {
         Some(())
     })();
 
-    if native.is_none() {
-        let _ = window.set_position(PhysicalPosition::new(x as i32, y as i32));
+    if native.is_some() {
+        return Ok(());
     }
+    window
+        .set_position(PhysicalPosition::new(x as i32, y as i32))
+        .map_err(|error| format!("set window position: {error}"))
 }
 
 /// Non-macOS platforms go through tao's positioning, which is correct there.
 #[cfg(not(target_os = "macos"))]
-fn set_top_left(window: &WebviewWindow, x: f64, y: f64, _scale: f64) {
-    let _ = window.set_position(PhysicalPosition::new(x as i32, y as i32));
+fn set_top_left(window: &WebviewWindow, x: f64, y: f64, _scale: f64) -> Result<(), String> {
+    window
+        .set_position(PhysicalPosition::new(x as i32, y as i32))
+        .map_err(|error| format!("set window position: {error}"))
 }
 
 #[cfg(test)]

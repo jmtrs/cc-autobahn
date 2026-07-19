@@ -26,6 +26,12 @@ function paintWeeklyBar(pct, view) {
 
 function renderWeeklyLimit(view) {
   const state = view.state;
+  if (view.root().dataset.providerAvailable === "false") {
+    view.element("limit-pct").textContent = "—";
+    paintWeeklyBar(0, view);
+    view.element("limit-reset").textContent = "data source unavailable";
+    return;
+  }
   const hasData = state.sevenDayResetsAtMs > 0;
   const pct = Number(state.sevenDayPct) || 0;
   view.element("limit-pct").textContent = hasData ? `${Math.round(pct)}%` : "—";
@@ -50,6 +56,10 @@ function renderBurnRates(view) {
 
 async function renderBreakdown(view, isMounted) {
   const list = view.element("breakdown-list");
+  if (view.root().dataset.providerAvailable === "false") {
+    list.innerHTML = `<div class="ghost">data source unavailable</div>`;
+    return;
+  }
   // Same cold-load gap as History (D-review): on a first, uncached
   // loadHistory() call this list otherwise stays empty/stale with no
   // indication anything is happening.

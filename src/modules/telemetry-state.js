@@ -29,7 +29,80 @@ export function createProviderState(provider) {
     sevenDayResetsAtMs: 0,
     recentTicks: [],
     recentPct: [],
+    nameplateLabel: provider === "claude" ? "CC 500" : null,
+    lastModelActivity: null,
   };
+}
+
+export function setDisplayModeState(displayMode) {
+  if (!["claude", "codex", "both"].includes(displayMode)) return false;
+  state.global.displayMode = displayMode;
+  return true;
+}
+
+export function recordModelActivity(activity) {
+  const provider = providerIdFromPayload(activity);
+  const observedAtMs = Number(activity?.observedAtMs);
+  const sequence = Number(activity?.sequence ?? 0);
+  if (
+    !provider ||
+    !Number.isFinite(observedAtMs) ||
+    observedAtMs < 0 ||
+    !Number.isInteger(sequence) ||
+    sequence < 0 ||
+    typeof activity?.label !== "string" ||
+    !activity.label
+  ) {
+    return { providerAccepted: false, globalAccepted: false };
+  }
+  const providerState = state.providers[provider];
+  const providerCurrent = providerState.lastModelActivity;
+  if (
+    providerCurrent &&
+    (observedAtMs < providerCurrent.observedAtMs ||
+      (observedAtMs === providerCurrent.observedAtMs && sequence <= providerCurrent.sequence))
+  ) {
+    return { providerAccepted: false, globalAccepted: false };
+  }
+  const accepted = {
+    provider,
+    modelKey: activity.modelKey ?? null,
+    label: activity.label,
+    observedAtMs,
+    sequence,
+  };
+  providerState.lastModelActivity = accepted;
+  providerState.nameplateLabel = accepted.label;
+
+  const current = state.global.lastActiveModel;
+  if (
+    current &&
+    (observedAtMs < current.observedAtMs ||
+      (observedAtMs === current.observedAtMs && sequence <= current.sequence))
+  ) {
+    return { providerAccepted: true, globalAccepted: false };
+  }
+  state.global.lastActiveModel = accepted;
+  return { providerAccepted: true, globalAccepted: true };
+}
+
+export function setLastActiveModel(activity) {
+  return recordModelActivity(activity).globalAccepted;
+}
+
+export function reconcileNameplateEdit(provider, modelKey, label) {
+  const providerState = state.providers[provider];
+  if (!providerState) return null;
+  const providerActivity = providerState.lastModelActivity;
+  if (providerActivity?.modelKey === modelKey) {
+    providerActivity.label = label;
+    providerState.nameplateLabel = label;
+  }
+  const globalActivity = state.global.lastActiveModel;
+  if (globalActivity?.provider === provider && globalActivity.modelKey === modelKey) {
+    globalActivity.label = label;
+  }
+  return globalActivity?.label ?? label;
 }
 
 export const state = {

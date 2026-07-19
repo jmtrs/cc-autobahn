@@ -40,6 +40,7 @@ function fakeView(provider) {
   return {
     provider,
     state: {},
+    root: () => ({ dataset: { providerAvailable: "true" } }),
     element: () => fakeElement(),
     query: () => fakeElement(),
   };

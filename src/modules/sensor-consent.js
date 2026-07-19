@@ -2,6 +2,9 @@
 // ~/.claude/settings.json from the backend; the overlay asks for confirmation
 // with a preview (backup + chain) before writing.
 
+import { setProviderIssue } from "./provider-status.js";
+import { state } from "./telemetry-state.js";
+
 let sensorInvoke = null;
 let sensorInstalled = false;
 
@@ -10,6 +13,7 @@ let sensorInstalled = false;
  * its initial state. Guarded: no-op outside Tauri.
  */
 export async function wireSensorUi() {
+  document.addEventListener("display-mode-changed", () => showSensorOverlay(!sensorInstalled));
   if (!("__TAURI_INTERNALS__" in window)) return; // outside Tauri, nothing to do
   const { invoke } = await import("@tauri-apps/api/core");
   sensorInvoke = invoke;
@@ -34,7 +38,8 @@ async function refreshSensorStatus() {
 }
 
 function showSensorOverlay(show) {
-  document.getElementById("sensor-overlay").hidden = !show;
+  setProviderIssue("claude", "sensor", "SENSOR OFFLINE", show);
+  document.getElementById("sensor-overlay").hidden = !(show && state.global.displayMode === "claude");
   if (!show) return;
   setSensorBody(
     "Connect the sensor for the official rate_limits (5h / 7d window).\n" +

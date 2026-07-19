@@ -122,6 +122,8 @@ async function resolve(command) {
 export function onPermissionPending(payload) {
   setPermissionHead(payload);
   currentId = payload.id;
+  document.getElementById("permission-provider").textContent =
+    String(payload.provider ?? "claude").toUpperCase();
   document.getElementById("permission-tool").textContent = payload.toolName;
   // Shell-prompt cue for Bash only — other tools show the raw field
   // (a file path reads fine on its own, "$ " would be misleading).

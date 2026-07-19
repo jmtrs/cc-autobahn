@@ -114,12 +114,12 @@ export function renderFooterMetric(view = claudeView) {
 }
 
 /** Clicking the footer toggles PACE/AUTO, persisted to localStorage. */
-export function wireFooterToggle(view = claudeView) {
+export function wireFooterToggle(view = claudeView, peerViews = [view]) {
   const el = view.element("footer-metric");
   hintOnHover(el, "PACE: rate/avg ⇄ AUTO: Range at this pace");
   el.onclick = () => {
     footerMetric = footerMetric === "pace" ? "autonomy" : "pace";
     saveGlobalSetting("footerMetric", footerMetric);
-    renderFooterMetric(view);
+    peerViews.forEach((peer) => renderFooterMetric(peer));
   };
 }

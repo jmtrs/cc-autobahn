@@ -768,7 +768,7 @@ Areas to improve as part of the expansion:
 
 - Frontend unit tests now cover provider state, routing, health hydration and
   replay rejection; a configured linter is still missing.
-- Live documentation is synchronized to 80 Rust and 17 frontend tests; lower counts in the
+- Live documentation is synchronized to 80 Rust and 26 frontend tests; lower counts in the
   decision log and completed roadmap phases are intentional point-in-time
   verification records.
 - Several visual behaviors rely on manual verification.
@@ -813,8 +813,8 @@ The following commands passed during the 2026-07-19 re-audit:
 
 ```text
 npm run build
-npm run test:frontend              # 17 passed
-npm run test:visual                # 4 screens at 550 × 150
+npm run test:frontend              # 26 passed
+npm run test:visual                # 3 modes × 3 themes × 4 screens
 cargo test                         # 80 passed
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
@@ -822,8 +822,8 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 Confirmed structural facts:
 
-- 158 tracked or newly added delivery files, including this assessment document.
-- One frontend entrypoint and 27 small frontend modules with global chassis
+- 196 tracked or newly added delivery files, including this assessment document.
+- One frontend entrypoint and 30 small frontend modules with global chassis
   state, isolated Claude/Codex provider state and a provider-root-scoped renderer
   boundary; only the Claude module is mounted so DOM presentation remains single-provider.
 - 23 Rust source files across providers, engine, burn, sensor, permission,
@@ -887,22 +887,22 @@ viewport with clipping/overflow checks and committed visual baselines.
 
 ### Phase 2 — Componentized and dual-provider UI
 
-**Status:** in progress on `develop`. The versioned settings boundary and
-idempotent legacy migration are implemented first: display mode, global
-preferences, provider namespaces and `provider:model` nameplate keys now live
-in schema v2 while old keys remain available for rollback. A serialized native
-transition now enforces 550 × 150 for single-provider modes and 550 × 290 for
-Both, preserving and monitor-clamping the top-left point. Telemetry, model
-selector, History, Limits, burn animation, warning state and history caches now
-resolve through an injected provider view; only Claude is mounted in this
-behavior-preserving cut. The dual layout and Settings display-mode control remain.
+**Status:** complete on `develop`. Settings schema v2 owns display mode, global
+preferences, provider namespaces and `provider:model` nameplate keys while
+retaining legacy keys for rollback. Claude and Codex roots mount once beneath a
+shared chassis; Claude-only and Codex-only stay 550 × 150, Both uses 550 × 290,
+and native resize/clamp completes before UI state is persisted. Header, clock,
+nameplate plus immutable provider tag, MFD, PIN, overlays and Settings appear
+once. Navigation is synchronized and warnings remain provider-local in Both.
+Until Phase 3 supplies transport, Codex is explicitly `UNAVAILABLE`, uses a
+neutral selector and never presents placeholder numbers as real telemetry.
 
 - [x] Convert telemetry, model selector, History and Limits into provider-scoped renderers.
-- Preserve the existing header and dynamic nameplate as shared chassis elements.
-- Add Claude, Codex and Both display modes.
-- Implement synchronized MFD navigation and one shared Settings page.
-- Add serialized vertical resize and position clamping.
-- Localize warning and degraded states to their provider modules.
+- [x] Preserve the existing header and dynamic nameplate as shared chassis elements.
+- [x] Add Claude, Codex and Both display modes.
+- [x] Implement synchronized MFD navigation and one shared Settings page.
+- [x] Add serialized vertical resize and position clamping.
+- [x] Localize warning and degraded states to their provider modules.
 
 At the end of this phase, the second provider may use fixtures, but the complete layout and state ownership are testable without coupling UI work to Codex transport work.
 
@@ -1023,8 +1023,8 @@ The integration is complete only when all of the following are true:
 
 The architecture is decided; these values still require implementation evidence rather than guesswork:
 
-1. Exact Both-mode height within the expected 285–295 px range.
-2. Exact provider-label placement and typography at native size.
+1. ~~Exact Both-mode height within the expected 285–295 px range.~~ Validated at 290 px.
+2. ~~Exact provider-label placement and typography at native size.~~ Validated as a compact vertical module-edge label plus immutable header origin tag.
 3. Codex model-selector symbols for the supported model catalog.
 4. Whether the tray's most-urgent summary is clearer with the existing ring alone or a second legible visual channel.
 5. The stale thresholds for App Server, local rollout tails and `ccusage` polling.

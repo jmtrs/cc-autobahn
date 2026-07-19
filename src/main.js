@@ -6,6 +6,7 @@
 
 import { tickClock } from "./modules/clock.js";
 import { wireCursor } from "./modules/cursor.js";
+import { changeDisplayMode, initializeDisplayMode } from "./modules/display-mode.js";
 import { wireEngineOverlay } from "./modules/engine-overlay.js";
 import { renderFooterMetric, wireFooterToggle } from "./modules/footer-metric.js";
 import { wireHistoryPage } from "./modules/history-page.js";
@@ -15,7 +16,8 @@ import { wireMfdNav } from "./modules/mfd-nav.js";
 import { wirePermissionConsent } from "./modules/permission-consent.js";
 import { wirePermissionGate } from "./modules/permission-gate.js";
 import { wirePinButton } from "./modules/pin-button.js";
-import { claudeView } from "./modules/provider-view.js";
+import { mountProviderLayout } from "./modules/provider-layout.js";
+import { claudeView, codexView } from "./modules/provider-view.js";
 import { wireRedlineTray } from "./modules/redline.js";
 import { wireSensorUi } from "./modules/sensor-consent.js";
 import { wireSettingsPage } from "./modules/settings-page.js";
@@ -30,12 +32,18 @@ import {
 import { wireResetPositionButton, wireWindowDrag } from "./modules/window-drag.js";
 
 async function init() {
+  mountProviderLayout();
+  try {
+    await initializeDisplayMode();
+  } catch (error) {
+    console.error("[display-mode] startup transition:", error);
+  }
+  const providerViews = [claudeView, codexView];
   initTheme();
   wireCursor();
-  // Autonomy bar empty until the first blocks-update (no data yet).
-  buildSegments(0, claudeView);
-  tickClock(claudeView);
-  setInterval(() => tickClock(claudeView), 1000);
+  providerViews.forEach((view) => buildSegments(0, view));
+  tickClock(providerViews);
+  setInterval(() => tickClock(providerViews), 1000);
   wireEngineOverlay();
   await wireEngine();
   wireSensorUi();
@@ -45,17 +53,21 @@ async function init() {
   wireWindowDrag();
   wireResetPositionButton();
   wireRedlineTray();
-  wireFooterToggle(claudeView);
-  wireNameplateEdit(claudeView);
+  providerViews.forEach((view) => wireFooterToggle(view, providerViews));
+  wireNameplateEdit(providerViews);
   wireTripComputerHints(claudeView);
   // Page listeners wired before wireMfdNav() so its initial activate() (which
   // may land on Page 1/2 if that's the saved default) is already observed.
-  wireHistoryPage(claudeView);
-  wireLimitsPage(claudeView);
-  wireSettingsPage();
+  providerViews.forEach((view) => {
+    wireHistoryPage(view);
+    wireLimitsPage(view);
+  });
+  wireSettingsPage({ onDisplayModeChange: changeDisplayMode });
   wireMfdNav();
-  renderFooterMetric(claudeView);
-  setGear(["opus"], claudeView); // positions the marker against the HTML's default gear
+  providerViews.forEach((view) => renderFooterMetric(view));
+  if (claudeView.root().hidden === false) {
+    setGear(["opus"], claudeView); // positions Claude's default marker
+  }
   startBurnAnimation(claudeView); // starts idle (pos=0), true to the car
 }
 

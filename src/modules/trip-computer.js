@@ -8,6 +8,11 @@ import { renderFooterMetric } from "./footer-metric.js";
 import { hintOnHover, setHeaderHint } from "./header-hint.js";
 import { loadGlobalSetting, saveGlobalSetting } from "./app-settings.js";
 import { claudeView } from "./provider-view.js";
+import {
+  reconcileNameplateEdit,
+  recordModelActivity,
+  state as appState,
+} from "./telemetry-state.js";
 
 export const SEGMENT_COUNT = 12;
 const WINDOW_MIN = 300; // 5h billing window, in minutes
@@ -61,7 +66,7 @@ export function buildSegments(filled, view = claudeView) {
  *  active letter and, if it changed gear relative to the previous one,
  *  triggers a glow pulse (D-review: animate the change instead of just
  *  switching color abruptly). */
-export function setGear(models, view = claudeView) {
+export function setGear(models, view = claudeView, activity = {}) {
   if (!Array.isArray(models) || models.length === 0) return;
   const local = runtime(view);
   const order = ["opus", "sonnet", "haiku", "fable"];
@@ -76,15 +81,26 @@ export function setGear(models, view = claudeView) {
   const gearKey = hit || "custom";
   if (customId) local.lastCustomLabel = formatModelCode(customId);
 
+  const label = hit ? getNameplate(hit, view) : formatModelCode(customId);
+  const accepted = recordModelActivity({
+    provider: view.provider,
+    modelKey: gearKey,
+    label,
+    observedAtMs: activity.observedAtMs ?? Date.now(),
+    sequence: activity.sequence ?? 0,
+  });
+  if (!accepted.providerAccepted) return;
   local.currentGearHit = gearKey;
   const nameplateEl = view.chassisElement("nameplate");
+  const providerTag = view.chassisElement("active-provider-tag");
+  if (accepted.globalAccepted && providerTag) providerTag.textContent = view.provider.toUpperCase();
   // Don't overwrite mid-edit — the user is typing (D-review: a live model
   // tick landing while editing would clobber the in-progress text).
-  if (nameplateEl && nameplateEl.contentEditable !== "true") {
+  if (accepted.globalAccepted && nameplateEl && nameplateEl.contentEditable !== "true") {
     // Custom slot shows the real detected model code (e.g. "GLM5") instead
     // of a decorative trim name — "custom" isn't a fixed model identity like
     // the other 4, so there's no stable NAMEPLATES entry for it.
-    nameplateEl.textContent = hit ? getNameplate(hit, view) : formatModelCode(customId);
+    nameplateEl.textContent = label;
   }
 
   let activeEl = null;
@@ -121,19 +137,32 @@ export function setGear(models, view = claudeView) {
  *  input reverts to the built-in default (D-review: needs an escape hatch,
  *  otherwise a typo is permanent). Persisted per model so switching gears
  *  doesn't lose the customization. */
-export function wireNameplateEdit(view = claudeView) {
-  const local = runtime(view);
-  const el = view.chassisElement("nameplate");
+export function wireNameplateEdit(views = [claudeView]) {
+  const candidates = Array.isArray(views) ? views : [views];
+  const el = candidates[0].chassisElement("nameplate");
+  let editContext = null;
+  const activeContext = () => {
+    const provider = appState.global.lastActiveModel?.provider;
+    const view = candidates.find((candidate) => candidate.provider === provider);
+    if (!view) return null;
+    const modelKey = runtime(view).currentGearHit;
+    return modelKey ? { view, modelKey } : null;
+  };
   // No `title` (D-review): a native browser tooltip is dark-gray/sans-serif
   // OS chrome, breaks the amber VFD look with no CSS-reachable fix — same
   // reason the MFD/PIN buttons and PACE/AUTO toggle don't have one either.
   // header-hint.js replaces it.
   hintOnHover(el, "Click to rename this model's badge");
   el.onclick = () => {
+    editContext = activeContext();
+    if (!editContext) return;
     // The "custom" slot isn't one fixed model identity (D-review) — it can
     // be a different proxy from one block to the next, so a saved rename
     // would go stale exactly where accuracy matters most. Not editable.
-    if (local.currentGearHit === "custom") return;
+    if (editContext.modelKey === "custom") {
+      editContext = null;
+      return;
+    }
     el.contentEditable = "true";
     el.focus();
     const range = document.createRange();
@@ -145,16 +174,22 @@ export function wireNameplateEdit(view = claudeView) {
   const commit = () => {
     if (el.contentEditable !== "true") return;
     el.contentEditable = "false";
-    if (!local.currentGearHit) return;
+    if (!editContext) return;
+    const { view, modelKey } = editContext;
     const overrides = loadNameplateOverrides();
     const value = el.textContent.trim().toUpperCase();
-    if (!value || value === NAMEPLATES[local.currentGearHit]) {
-      delete overrides[`${view.provider}:${local.currentGearHit}`];
+    if (!value || value === NAMEPLATES[modelKey]) {
+      delete overrides[`${view.provider}:${modelKey}`];
     } else {
-      overrides[`${view.provider}:${local.currentGearHit}`] = value;
+      overrides[`${view.provider}:${modelKey}`] = value;
     }
     saveGlobalSetting("nameplates", overrides);
-    el.textContent = getNameplate(local.currentGearHit, view);
+    const label = getNameplate(modelKey, view);
+    // A newer provider/model may have arrived while contentEditable prevented
+    // its normal repaint. Persist the old override, but never roll the shared
+    // header back over that newer activity.
+    el.textContent = reconcileNameplateEdit(view.provider, modelKey, label);
+    editContext = null;
   };
   el.onblur = commit;
   el.onkeydown = (e) => {
@@ -162,7 +197,7 @@ export function wireNameplateEdit(view = claudeView) {
       e.preventDefault();
       el.blur();
     } else if (e.key === "Escape") {
-      el.textContent = getNameplate(local.currentGearHit, view);
+      el.textContent = appState.global.lastActiveModel?.label ?? el.textContent;
       el.blur();
     }
   };
@@ -181,7 +216,10 @@ export function applyEstimated(block, view = claudeView) {
   const remaining = Number(block?.projection?.remainingMinutes);
   view.element("autonomie").textContent = `EST ${formatHMin(remaining)}`;
   buildSegments(Number.isFinite(remaining) ? segmentsForMinutes(remaining) : 0, view);
-  setGear(block?.models, view);
+  setGear(block?.models, view, {
+    observedAtMs: block?.observedAtMs,
+    sequence: block?.sequence ?? 0,
+  });
 }
 
 /** Paints the bar + text for quota mode, from the last known official data
@@ -295,7 +333,12 @@ export function onSensorUpdate(p, view = claudeView) {
     state.fiveHourPct = pct;
     paintQuotaGauge(view);
   }
-  if (p?.modelId) setGear([p.modelId], view);
+  if (p?.modelId) {
+    setGear([p.modelId], view, {
+      observedAtMs: p.observedAtMs,
+      sequence: p.sequence ?? 0,
+    });
+  }
   // Official 7d rate-limit window — full numbers live on Page 2 (limits-page.js);
   // the border tint here stays as the always-visible "check engine"-style warning.
   const sevenDayPct = Number(p?.sevenDayPct) || 0;

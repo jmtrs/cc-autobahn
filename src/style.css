@@ -96,7 +96,7 @@ body {
   /* .display (readouts) + .gear (selector) share this same amber container
      so the selector stops looking like a separate box (D-review feedback)
      — the background, glow, and scanline texture (::after) cover both. */
-  flex-direction: row;
+  flex-direction: column;
   box-shadow: inset 0 0 24px rgba(var(--amber-rgb), 0.06),
     inset 0 0 0 1px rgba(var(--amber-rgb), 0.08);
   color: var(--amber);
@@ -113,6 +113,88 @@ body {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* Shared chassis header/settings/overlays participate directly in .screen's
+   column layout; provider instruments live in the persistent stack below. */
+.chassis-display {
+  display: contents;
+}
+
+.chassis-display > .header {
+  flex-shrink: 0;
+  height: 16px;
+  margin: 8px 40px 0 12px;
+}
+
+.provider-stack {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.provider-module {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.provider-module[hidden] {
+  display: none;
+}
+
+.provider-module[data-provider-degraded="true"] {
+  box-shadow: inset 0 0 18px rgba(255, 80, 20, 0.14);
+}
+
+[data-display-mode="both"] .provider-module + .provider-module {
+  border-top: 1px solid rgba(var(--amber-rgb), 0.18);
+}
+
+.provider-display {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 4px 12px 8px;
+  display: flex;
+}
+
+.provider-pages {
+  flex: 1;
+}
+
+.provider-label {
+  position: absolute;
+  z-index: 2;
+  top: 3px;
+  right: 2px;
+  max-height: calc(100% - 6px);
+  writing-mode: vertical-rl;
+  overflow: hidden;
+  font-size: 6px;
+  letter-spacing: 0.14em;
+  color: var(--amber);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+[data-app-chassis] .shared-pages {
+  display: none;
+  flex: 1;
+  min-height: 0;
+  margin: 4px 40px 8px 12px;
+}
+
+[data-current-page="3"] .provider-stack {
+  display: none;
+}
+
+[data-app-chassis][data-current-page="3"] .shared-pages {
+  display: flex;
 }
 
 /* faint scanline / dot-matrix texture */
@@ -348,6 +430,20 @@ body {
   color: var(--amber-glow);
 }
 
+.header .clock {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--amber-glow);
+  font-variant-numeric: tabular-nums;
+}
+
+.provider-tag {
+  flex-shrink: 0;
+  font-size: 7px;
+  letter-spacing: 0.12em;
+  opacity: 0.65;
+}
+
 /* segment gauge (autonomie / 5h window) — click toggles quota % <-> reset
    time, D40-toggle (cursor.js drives the clickable-cursor state, not CSS) */
 .gauge {
@@ -399,14 +495,14 @@ body {
 }
 
 /* Reserve tint: seven_day > 80% → the display tints red (W203 warning light). */
-.screen.warn {
+.provider-module.warn {
   box-shadow: inset 0 0 24px rgba(255, 51, 0, 0.22),
     inset 0 0 0 1px rgba(255, 51, 0, 0.4);
 }
 
 /* Redline: PACE far above the block average, or AUTO about to run out
    (redline.js) — the whole instrument reacts, not just the footer text. */
-.screen.redline {
+.provider-module.redline {
   animation: redlinePulse 1.6s ease-in-out infinite;
 }
 
@@ -427,7 +523,7 @@ body {
    would silently swallow .warn's tint whenever both are active at once.
    This higher-specificity rule (3 classes) layers both tints into the same
    keyframe instead of letting one hide the other. */
-.screen.warn.redline {
+.provider-module.warn.redline {
   animation: redlinePulseWarn 1.6s ease-in-out infinite;
 }
 
@@ -445,7 +541,7 @@ body {
 /* One-shot flash the instant redline is entered. Animates `filter`, not
    `box-shadow` — redlinePulse above already owns that property, and both
    classes can be present on .screen at the same time. */
-.screen.redline-enter {
+.provider-module.redline-enter {
   animation: redlineFlash 0.3s ease-out;
 }
 

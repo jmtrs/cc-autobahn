@@ -188,11 +188,11 @@ tray states, themes, permission sound/consent, and manual position reset are
 wired. Default placement remains under the tray, with D41's persisted drag
 override available when wanted.
 
-Current verified baseline: **80 Rust tests**, **17 frontend tests**, Rustfmt
+Current verified baseline: **80 Rust tests**, **26 frontend tests**, Rustfmt
 check, strict Clippy (`-D warnings`), and the Vite production build all pass.
 Frontend linting is not yet configured. Future work is tracked in the roadmap:
-Codex provider foundation and provider-scoped renderer boundary are implemented;
-the dual-provider layout and Codex data adapters remain.
+Codex provider foundation and the complete dual-provider chassis are implemented;
+Codex data adapters remain.
 Bun sidecar and
 Windows/Linux are optional, and permission request identity/native Claude
 permission suggestions are hardened; mixed-provider permission routing remains.

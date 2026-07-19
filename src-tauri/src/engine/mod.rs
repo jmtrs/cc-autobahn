@@ -178,8 +178,9 @@ pub fn start(app: AppHandle) {
 
         loop {
             match blocks::poll_once(engine, path.as_deref()) {
-                Ok(Some(block)) => {
+                Ok(Some(mut block)) => {
                     consecutive_failures = 0;
+                    block.observed_at_ms = crate::providers::now_epoch_ms();
                     if take_recovered(&mut engine_degraded) {
                         crate::providers::emit_health(
                             &app,

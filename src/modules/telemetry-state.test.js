@@ -5,8 +5,10 @@ import {
   claudeState,
   createProviderState,
   providerIdFromPayload,
+  reconcileNameplateEdit,
   setCurrentPage,
   setPermissionHead,
+  setLastActiveModel,
   state,
   updateProviderHealth,
 } from "./telemetry-state.js";
@@ -21,6 +23,75 @@ test("Claude and Codex provider state never share mutable buffers", () => {
   assert.deepEqual(codex.health, {});
   assert.notStrictEqual(claude.recentTicks, codex.recentTicks);
   assert.notStrictEqual(claude.health, codex.health);
+});
+
+test("delayed model activity cannot roll the shared nameplate backwards", () => {
+  state.global.lastActiveModel = null;
+  state.providers.codex.lastModelActivity = null;
+  state.providers.claude.lastModelActivity = null;
+  assert.equal(
+    setLastActiveModel({
+      provider: "codex",
+      modelKey: "gpt-5",
+      label: "GPT 5",
+      observedAtMs: 200,
+      sequence: 2,
+    }),
+    true,
+  );
+  assert.equal(
+    setLastActiveModel({
+      provider: "claude",
+      modelKey: "opus",
+      label: "CC 500",
+      observedAtMs: 199,
+      sequence: 99,
+    }),
+    false,
+  );
+  assert.equal(
+    setLastActiveModel({
+      provider: "codex",
+      modelKey: "old-model",
+      label: "OLD",
+      observedAtMs: 198,
+      sequence: 9,
+    }),
+    false,
+  );
+  assert.equal(state.global.lastActiveModel.provider, "codex");
+  assert.equal(state.global.lastActiveModel.label, "GPT 5");
+  assert.equal(state.providers.codex.nameplateLabel, "GPT 5");
+
+  assert.equal(
+    reconcileNameplateEdit(
+      "claude",
+      "opus",
+      "EDITED CLAUDE",
+    ),
+    "GPT 5",
+  );
+  assert.equal(state.global.lastActiveModel.label, "GPT 5");
+
+  assert.equal(
+    setLastActiveModel({
+      provider: "claude",
+      modelKey: "sonnet",
+      label: "CC 320",
+      observedAtMs: 201,
+      sequence: 0,
+    }),
+    true,
+  );
+  assert.equal(
+    reconcileNameplateEdit(
+      "claude",
+      "opus",
+      "STALE OPUS EDIT",
+    ),
+    "CC 320",
+  );
+  assert.equal(state.providers.claude.nameplateLabel, "CC 320");
 });
 
 test("legacy renderers are explicitly bound to Claude state", () => {

@@ -60,3 +60,4 @@ export function createProviderView({
 }
 
 export const claudeView = createProviderView({ provider: "claude" });
+export const codexView = createProviderView({ provider: "codex" });

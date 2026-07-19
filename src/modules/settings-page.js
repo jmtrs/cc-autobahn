@@ -5,6 +5,7 @@
 // continuous blocks poll — not justified for a first pass).
 
 import { hintOnHover } from "./header-hint.js";
+import { state } from "./telemetry-state.js";
 import { loadMfdSettings, saveMfdSettings } from "./mfd-settings.js";
 import {
   BUILTIN_SOUNDS,
@@ -20,6 +21,66 @@ const PAGE_OPTIONS = [
   { value: 1, label: "HISTORY" },
   { value: 2, label: "LIMITS" },
 ];
+
+const DISPLAY_MODE_OPTIONS = [
+  { value: "claude", label: "CLAUDE" },
+  { value: "codex", label: "CODEX" },
+  { value: "both", label: "BOTH" },
+];
+
+function wireDisplayModeSection(onDisplayModeChange) {
+  const root = document.getElementById("display-mode-dropdown");
+  const btn = document.getElementById("display-mode-btn");
+  const valueEl = document.getElementById("display-mode-value");
+  const list = document.getElementById("display-mode-list");
+  hintOnHover(btn, "Show Claude, Codex, or both provider instruments");
+
+  function paint(value) {
+    const option = DISPLAY_MODE_OPTIONS.find((item) => item.value === value) ?? DISPLAY_MODE_OPTIONS[0];
+    valueEl.textContent = option.label;
+    list.querySelectorAll("li").forEach((li) => {
+      li.classList.toggle("active", li.dataset.value === option.value);
+    });
+  }
+
+  function close() {
+    list.hidden = true;
+    root.classList.remove("open");
+  }
+
+  btn.onclick = (event) => {
+    event.stopPropagation();
+    const wasOpen = !list.hidden;
+    close();
+    if (!wasOpen) {
+      list.hidden = false;
+      root.classList.add("open");
+    }
+  };
+
+  list.querySelectorAll("li").forEach((li) => {
+    li.onclick = async () => {
+      const previous = state.global.displayMode;
+      const mode = li.dataset.value;
+      close();
+      btn.disabled = true;
+      try {
+        await onDisplayModeChange?.(mode);
+        paint(mode);
+      } catch (error) {
+        paint(previous);
+        console.error("[display-mode] transition:", error);
+      } finally {
+        btn.disabled = false;
+      }
+    };
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!root.contains(event.target)) close();
+  });
+  paint(state.global.displayMode);
+}
 
 // Metadata for the reorderable "SHOW SCREENS" rows (screenOrder, mfd-nav.js).
 const SCREEN_META = {
@@ -281,9 +342,10 @@ function wirePermissionSoundSection() {
   if (settings.soundId === "custom" && settings.customDataUrl) filenameEl.textContent = "custom sound";
 }
 
-export function wireSettingsPage() {
+export function wireSettingsPage({ onDisplayModeChange } = {}) {
   wireDefaultPageDropdown();
   renderScreenList();
   wireThemeSection();
   wirePermissionSoundSection();
+  wireDisplayModeSection(onDisplayModeChange);
 }

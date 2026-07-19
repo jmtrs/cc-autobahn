@@ -2,7 +2,11 @@
 // no data. Same pattern as the sensor overlay: initial state via command
 // (avoids racing against the event) + a button that triggers the install.
 
+import { setProviderIssue } from "./provider-status.js";
+import { state } from "./telemetry-state.js";
+
 let engineInvoke = null;
+let engineMissing = false;
 
 const ENGINE_DEFAULT_BODY =
   "ccusage was not found (neither global, npx, nor bunx) in PATH.\n" +
@@ -24,7 +28,9 @@ const INSTALL_STAGE_BTN_LABEL = {
 };
 
 export function showEngineOverlay(show) {
-  document.getElementById("engine-overlay").hidden = !show;
+  engineMissing = show;
+  setProviderIssue("claude", "engine", "CHECK ENGINE", show);
+  document.getElementById("engine-overlay").hidden = !(show && state.global.displayMode === "claude");
   if (show) {
     setEngineBody(ENGINE_DEFAULT_BODY); // reset after a previous error
     resetInstallButton();
@@ -88,6 +94,7 @@ async function onInstallEngineClick() {
  * Guarded: under plain `vite` (no Tauri) there is no IPC, so we skip silently.
  */
 export async function wireEngineOverlay() {
+  document.addEventListener("display-mode-changed", () => showEngineOverlay(engineMissing));
   if (!("__TAURI_INTERNALS__" in window)) return;
   const { invoke } = await import("@tauri-apps/api/core");
   engineInvoke = invoke;

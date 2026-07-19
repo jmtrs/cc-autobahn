@@ -151,13 +151,13 @@ Implementation order, one layer at a time, verifying before moving forward.
       Always Allow, configurable built-in/custom/off alert sound.
 - [x] Themes, reorderable optional MFD screens, synthetic VFD cursor, and
       current Settings controls wired without changing the 550 × 150 panel.
-- [x] Current quality gate: 80 Rust tests, 17 frontend tests, Rustfmt, strict Clippy, and Vite
+- [x] Current quality gate: 80 Rust tests, 26 frontend tests, Rustfmt, strict Clippy, and Vite
       production build pass.
 
 ## Follow-up work
 
-- [ ] Codex support: architecture/research and provider foundation complete;
-      Codex data adapters and dual-provider UI remain. See
+- [ ] Codex support: architecture, provider foundation and dual-provider UI complete;
+      Codex local/App Server data adapters remain. See
       [CODEX-INTEGRATION-ASSESSMENT.md](./CODEX-INTEGRATION-ASSESSMENT.md).
 - [x] Permission identity: replace Claude `prompt_id` as queue identity with
       a generated per-hook-invocation ID; retain `prompt_id` as optional
@@ -173,8 +173,8 @@ Current automated baseline:
 
 ```bash
 npm run build
-npm run test:frontend # 11 tests
-npm run test:visual   # 4 Claude screens, exact 550 × 150 contract
+npm run test:frontend # 26 tests
+npm run test:visual   # 3 modes × 3 themes × 4 screens; exact 550 × 150/290 + pixel snapshots
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml # 80 tests

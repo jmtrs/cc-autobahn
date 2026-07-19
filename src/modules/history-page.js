@@ -73,6 +73,12 @@ function render(days, view) {
 }
 
 async function refresh(view, isMounted) {
+  if (view.root().dataset.providerAvailable === "false") {
+    view.element("history-bars").innerHTML = "";
+    view.element("history-total").textContent = "—";
+    showMessage("data source unavailable", view);
+    return;
+  }
   // Bars stay empty on a cold load (nothing rendered yet) — without this,
   // the whole page looks stuck for however long ccusage takes to spawn.
   view.element("history-bars").innerHTML = SPINNER_HTML;
