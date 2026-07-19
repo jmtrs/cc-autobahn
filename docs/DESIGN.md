@@ -48,7 +48,8 @@ indicate the **model in use**, by its initial:
 - Active model = `--amber-glow` at full brightness.
 - The rest = `--amber-dim`.
 - Data source: `model.id` from the statusline JSON / ccusage.
-- **Effort** below, like kickdown: `▪▪▪▪` (max = pedal to the floor).
+- Effort is intentionally not rendered (D29). Unknown/non-Claude model IDs use
+  a compact alphanumeric fallback instead of being mislabeled.
 
 ## Cluster layout
 
@@ -71,11 +72,12 @@ further; each is its own screen:
 
 1. Trip computer (above, unchanged since D8/D18/D23).
 2. History — 30-day cost sparkline + fixed detail readout (not a floating
-   tooltip, this window is 440-550×150, too short/narrow for one to not
+   tooltip, this window is 550×150, too short/narrow for one to not
    clip an edge).
 3. Limits — weekly (7d) rate-limit bar, today's cost per model, instant vs.
    average burn rate.
-4. Settings — default page + which pages are in the cycle.
+4. Settings — default page, optional-page order/visibility, theme,
+   permission sound/hook consent, and position reset.
 
 A docked "header-hint" line between the nameplate and the PIN/MFD buttons
 shows a one-line description of whatever's under the cursor, replacing
@@ -113,12 +115,14 @@ with no CSS-reachable fix).
 - Needle/speedometer easing curve: damped spring with overshoot
   (D18), not a linear interpolation.
 - 4-page MFD cycle, docked header-hint, custom checkbox/dropdown (D33).
+- PACE/AUTO redline feedback across display and tray (D37).
+- Built-in/custom color themes, permission overlays/sound, synthetic VFD
+  cursor, and controlled header/model-selector dragging with reset (D41/D42).
 
 ## Parked ideas (outside the active roadmap, see `docs/ROADMAP.md`)
 
 - **Real dot-matrix font** (currently: system monospace + glow). Candidate:
   a 5×7 dot font embedded as a local woff2 (no CDN, offline).
-- Red zone at the top of the speedometer for high burn rate.
 - Compact mode (speedometer + range only) for a narrow bar.
 
 These were dropped from the Phase 5 checklist without a documented decision

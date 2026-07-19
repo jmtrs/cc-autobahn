@@ -42,18 +42,18 @@ on a live mode that no longer exists.
 ## Source 2 — JSONL tail (tok/s per response)
 
 ccusage gives burn rate per **minute** (smoothed average). We give `tok/s`
-**per response**, by following the active session log at
-`~/.claude/projects/**/*.jsonl`: once a turn completes, `Δoutput / Δt_turn` →
-`tok/s`. The needle **jumps on completion** and decays with a spring back to idle.
+**per response**, by following fresh session logs concurrently under
+`~/.claude/projects/**/*.jsonl`. Eligible intermediate assistant/tool-use
+writes can produce a partial tick; final turn closure produces the completed
+`Δoutput / Δt_turn` tick. The needle jumps on writes and decays between them.
 
-**Physical limit (validated 2026-07-16).** The JSONL `usage` field is **not
-streamed**: it is stamped **identically** on every line of a turn and
-only appears **when the turn ends** (measured: a turn with 3008 output tokens
-lands all at once after 36 s of silence). The log **never sees the in-progress turn**. That's
-why an "instantaneous, reacts-as-you-type" needle is **impossible** from this source — the
-honest approach is the per-response average as a step function. It's still the differentiator
-(no competitor shows it), but under its true label (see D8/D11). Real
-streaming would need Source 4 (OTEL) — not planned, see below.
+**Physical limit (validated 2026-07-16).** JSONL is not a token stream. Some
+responses arrive only as one final write (a measured 3008-token response landed
+after 36 seconds); tool-using turns can expose intermediate message records,
+which D27 uses for partial ticks. No JSONL write means no new measurement, so
+an "instantaneous, reacts to every generated token" needle remains impossible
+from this source. The honest output is a stepwise per-response rate. True
+streaming would require another telemetry source such as OTEL.
 
 ## Source 3 — Claude Code statusline JSON (self-installing sensor)
 
@@ -63,8 +63,8 @@ Claude Code passes, via stdin to a **configured statusline script**, a JSON with
 **Wiring (see D12).** cc-autobahn **is** that script and installs itself: on first
 launch it writes the `statusLine` key to `~/.claude/settings.json` (with
 consent, backup, and rollback). On each invocation its binary (1) emits the normal
-statusline line to stdout (preserving the previous one or falling back to a default) and (2) dumps
-the full JSON to a socket/file that the window tails. This way the official data arrives
+statusline line to stdout (preserving the previous one or falling back to a default) and (2) atomically writes
+the full JSON to `~/.claude/cc-autobahn-status.json`, which the GUI tails. This way the official data arrives
 **without the user editing anything by hand**. Relevant fields:
 
 ```json
@@ -91,7 +91,7 @@ the full JSON to a socket/file that the window tails. This way the official data
 
 - `rate_limits.five_hour` → **range/autonomy** (official data, better than the estimate).
 - `rate_limits.seven_day` → **weekly needle** (ccusage doesn't frame it this way).
-- `model.id` → PRND selector. `effort.level` → kickdown.
+- `model.id` → PRND selector. `effort.level` is parsed but not rendered (D29).
 - `cost.total_cost_usd` → session price.
 
 Docs: <https://code.claude.com/docs/en/statusline>
@@ -122,13 +122,14 @@ Docs: <https://code.claude.com/docs/en/monitoring-usage>
 | Sensor | Cadence | Why |
 | ------ | -------- | ------- |
 | `ccusage blocks` | **10–30 s** (or a persistent process) | the 5h block doesn't change every second; running `npx` every 1–2 s is wasteful |
-| JSONL tail (`tok/s`) | **event-driven** (when the log is written) | no polling |
+| JSONL tail (`tok/s`) | **200 ms file follow + 5 s discovery** | low-latency partial/final ticks across concurrent sessions |
 | Statusline (`rate_limits`, model) | **push** | arrives whenever Claude Code renders |
 | `ccusage claude daily` (History/Limits) | **on-demand** (D33) | daily totals barely move within a day; fetched only when that MFD page opens, cached client-side ~5 min |
 
 ## Zero-friction strategy (the app wires itself up, D9)
 
-Two self-installing wires. The user only gives **one consent**.
+Telemetry has two setup wires. The statusline modification requires explicit
+consent; engine installation is offered only when no runtime is found.
 
 **Wire A — data engine** (`engine::detect`):
 
@@ -145,7 +146,14 @@ Two self-installing wires. The user only gives **one consent**.
 
 **Wire B — statusline sensor** (D12): the app writes the `statusLine` key to
 `~/.claude/settings.json` (backup + rollback) pointing at its own binary, which
-dumps the official JSON to a socket that the window tails. No manual editing.
+dumps the official JSON to `~/.claude/cc-autobahn-status.json`, which the
+window tails. No manual editing.
+
+**Independent permission wire** (D42): Settings can separately install an
+opt-in `hooks.PermissionRequest` entry. This is request/response, not usage
+telemetry: its short-lived hook process communicates with the GUI over
+`~/.claude/cc-autobahn/permission.sock` and fails open to Claude Code's own
+terminal prompt when the GUI is unavailable.
 
 ## Accuracy / honesty
 

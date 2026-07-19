@@ -2,7 +2,7 @@
 
 Implementation order, one layer at a time, verifying before moving forward.
 
-## Phase 0 — Chassis ✅ (current)
+## Phase 0 — Chassis ✅
 
 - [x] Scaffold Tauri v2 (frameless, always-on-top, transparent, draggable).
 - [x] `macOSPrivateApi: true` for real transparency on macOS (D14).
@@ -32,7 +32,8 @@ Implementation order, one layer at a time, verifying before moving forward.
       turn ends → an instantaneous needle is impossible; redefined to **per response** (D8).
 - [x] `engine::burn` (`burn/`, split into `mod.rs`/`zulu.rs`/`parser.rs`/`tail.rs` in D32) — tail of the most recent JSONL in
       `~/.claude/projects/**/*.jsonl`, EOF-start; `stat`+`read` of the active file
-      every 200 ms, re-scan of which file is active every 5 s (D17).
+      every 200 ms, re-scan of which file is active every 5 s (D17). D38 later
+      expanded this from one active file to concurrent fresh-session tails.
 - [x] `Δoutput / Δt_turn` calculation on turn close (`end_turn`/`stop_sequence`,
       dedup by `message.id`) → `burn-tick` event (D17). `cargo test` 25/25
       against real JSONL (case D8 = 55.0 tok/s verified).
@@ -45,7 +46,7 @@ Implementation order, one layer at a time, verifying before moving forward.
 
 - [x] **Track A — wire up `blocks-update`** (frontend only): `#odo`, `#session-time`,
       `#avg`, `#autonomie` (EST), `#segments` (projection), `.gear` from `models[]`.
-- [x] `engine::sensor` (`sensor/`, split into `mod.rs`/`statusline_bin.rs`/`install.rs` in D32) — dual binary mode (`statusline` →
+- [x] `engine::sensor` (`sensor/`, split into `mod.rs`/`statusline_bin.rs`/`install.rs` in D32) — introduced the second binary dispatch mode (`statusline` →
       early-return, 10 ms; D19), chaining the previous statusLine (D21), sensor
       file written atomically, tail in a dedicated thread every 2 s → `sensor-update`/
       `sensor-state`.
@@ -98,8 +99,9 @@ Implementation order, one layer at a time, verifying before moving forward.
 - [x] Hide-on-blur (`WindowEvent::Focused(false)`) + 300 ms anti-race guard
       (closing by clicking the icon doesn't reopen it).
 - [x] Context menu (right click) with "Quit cc-autobahn".
-- [x] `data-tauri-drag-region` removed; capabilities trimmed to
-      `core:default`/`core:event:default`.
+- [x] `data-tauri-drag-region` removed and capabilities initially trimmed to
+      `core:default`/`core:event:default`. D41 later restored controlled
+      dragging and `core:window:allow-start-dragging` in Phase 7.
 - [ ] (Future) Windows/Linux — the API is cross-platform except for
       `set_activation_policy` (macOS only), still to be tested on those OSes.
 
@@ -131,8 +133,50 @@ Implementation order, one layer at a time, verifying before moving forward.
       cost-mode toggle (would need mutable poll-settings state shared with
       the continuous `engine::start` loop — not justified yet).
 
+## Phase 7 — Runtime feedback, movable panel, and permissions ✅
+
+- [x] Redline response (D37): PACE/AUTO thresholds drive the screen tint,
+      segment/footer/speedometer kick, and blinking tray alert.
+- [x] Multi-session burn tracking (D38): fresh Claude JSONL files are tailed
+      concurrently instead of treating one file as globally active.
+- [x] Sticky official-vs-estimated arbitration (D39/D40), including the
+      no-quota fallback fix and click-to-view reset-time toggle.
+- [x] Drag-to-move override (D41): header/model-selector drag zones,
+      persisted and monitor-clamped position, plus Reset position in both
+      Settings and the tray menu. Default remains anchored under the tray.
+- [x] Opt-in Claude Code `PermissionRequest` hook (D42): stable binary copy,
+      settings merge/unmerge with backup/rollback, Unix socket, FIFO queue,
+      auto-open, pending tray state, and fail-open terminal fallback.
+- [x] Permission UI: provider/tool/context details, Approve, Deny, supported
+      Always Allow, configurable built-in/custom/off alert sound.
+- [x] Themes, reorderable optional MFD screens, synthetic VFD cursor, and
+      current Settings controls wired without changing the 550 × 150 panel.
+- [x] Current quality gate: 59 Rust tests, Rustfmt, strict Clippy, and Vite
+      production build pass.
+
+## Follow-up work
+
+- [ ] Codex support: architecture/research complete, implementation not
+      started. See [CODEX-INTEGRATION-ASSESSMENT.md](./CODEX-INTEGRATION-ASSESSMENT.md).
+- [ ] Permission identity: replace Claude `prompt_id` as queue identity with
+      a generated per-hook-invocation ID; retain `prompt_id` as optional
+      correlation metadata and include provider in future routing keys.
+- [ ] Prefer Claude-native `permission_suggestions`/`updatedPermissions`
+      over extending the current local Always Allow emulation.
+- [ ] Optional Bun sidecar and Windows/Linux validation remain open from
+      earlier phases; the current PermissionRequest socket is Unix-only.
+
 ## Verification per phase
 
-After each phase: `npm run tauri dev`, check that the cluster starts and the
-new data appears without breaking what came before. The first `cargo build` is slow (it compiles
-the webview); that's normal.
+Current automated baseline:
+
+```bash
+npm run build
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml # 59 tests
+```
+
+For interaction changes, also run `npm run tauri dev` and verify native tray,
+drag/reset, PIN, MFD navigation, statusline consent, and permission-gate flows.
+The first Rust build is slow because it compiles the webview integration.

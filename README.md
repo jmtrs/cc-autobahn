@@ -2,7 +2,7 @@
 
 > A **Mercedes W203 instrument cluster** for Claude Code's token consumption.
 > It lives as a menu-bar icon on macOS: left click shows/hides a frameless,
-> transparent, *always-on-top* panel anchored under the icon, with the amber
+> transparent, *always-on-top* panel anchored under the icon by default, with the amber
 > dot-matrix VFD display: `tok/s` per response, remaining 5h window autonomy,
 > cost, and active model.
 
@@ -52,14 +52,16 @@ cluster. With no engine detected, the **CHECK ENGINE** overlay has an
 
 ## What it is
 
-cc-autobahn **is not a token meter: it's a visual skin**. All the usage math
+cc-autobahn **does not reimplement a token meter: it's an instrument-cluster
+shell around trusted data sources**. All the usage math
 — log parsing, pricing, billing windows — is delegated to
 [**ccusage**](https://ccusage.com) by [**@ryoppippi**](https://github.com/ryoppippi),
 run as a child process via its `--json` output. It is not forked or
 reimplemented: ccusage does the hard, error-prone part (parsing JSONL,
 pricing, deduplicating the shared 5h block, the Opus multiplier) and does it
-well — this project's only job is the dashboard on top. The one thing
-computed in-house is `tok/s` **per response**, which ccusage doesn't offer.
+well. The usage-specific calculation kept in-house is `tok/s` **per
+response**, which ccusage doesn't offer. The app also owns native window/tray
+behavior and the optional Claude Code permission bridge.
 
 ## Features
 
@@ -73,11 +75,24 @@ computed in-house is `tok/s` **per response**, which ccusage doesn't offer.
   `statusLine` (with consent, backup, and rollback) so the autonomy shown is
   the real `rate_limits` window, not an estimate.
 - **Tray icon as a live gauge** — a progress ring for the remaining 5h
-  window, redrawn at runtime instead of a static icon.
+  window, redrawn at runtime instead of a static icon; critical usage and
+  pending permission requests switch it into an alert state.
+- **Permission decisions in the cluster** — an opt-in Claude Code
+  `PermissionRequest` hook queues concurrent requests and exposes Approve,
+  Deny, and supported Always Allow actions. It fails open to Claude Code's
+  own terminal prompt when the GUI is unavailable.
+- **Anchored or movable** — opens under the menu-bar icon by default; drag
+  the header or model selector to save a manual position, then reset it from
+  Settings or the tray menu.
+- **Configurable VFD** — built-in/custom themes, page order/default page,
+  permission sound, hook consent, and position reset live on the shared
+  Settings page.
 - **Zero setup** — no ccusage or Bun on the machine? one button installs
   both and starts polling, no terminal required.
 
-`cargo test` 34/34, `cargo clippy` clean.
+Current verified baseline: `cargo test` **59/59**, `cargo fmt --check`,
+`cargo clippy --all-targets --all-features -- -D warnings`, and
+`npm run build` all pass.
 
 ## Design (car → tokens mapping)
 
@@ -88,14 +103,14 @@ computed in-house is `tok/s` **per response**, which ccusage doesn't offer.
 | Range / fuel tank ⛽        | Remaining 5h window (segment bar)             |
 | Trip "AFTER START"          | Tokens/time since last reset                  |
 | Odometer                    | Total accumulated tokens                      |
-| PRND selector               | Active model (O/S/H/F) lit up + effort        |
+| PRND selector               | Active model (O/S/H/F or compact fallback) lit up |
 | Clock                       | Real time                                     |
 | Trip-computer stalk button  | MFD page cycle: trip / history / limits / settings |
 
 ## Philosophy
 
-- **Zero friction.** The app wires itself up (engine + statusline sensor)
-  with a single consent prompt.
+- **Zero friction.** Engine setup is one click when needed; statusline and
+  permission-hook changes are separate, explicit consent flows with rollback.
 - **Honest precision.** Cost under a subscription is *estimated*; the
   autonomy (`rate_limits`) is *official* data; actual billing is always the
   Claude Console.
@@ -105,12 +120,15 @@ computed in-house is `tok/s` **per response**, which ccusage doesn't offer.
 | Sensor | Cadence | What it provides |
 | ------ | -------- | ------ |
 | `ccusage blocks --active --json` | 10–30 s | average burn, projection, cost |
-| Tail of `~/.claude/projects/**/*.jsonl` | per turn (event) | `tok/s` per response |
+| Tail of `~/.claude/projects/**/*.jsonl` | 200 ms file follow + 5 s discovery | partial/final `tok/s` ticks per response |
 | Statusline JSON (auto-installed sensor) | push | official `rate_limits.five_hour`/`seven_day` |
+| `ccusage claude daily --json` | on demand | History/Limits totals and per-model cost |
+| `PermissionRequest` hook | event-driven request/response | queued tool approvals over a Unix socket |
 
-> **It's not instantaneous.** The JSONL only stamps `usage` when the turn
-> closes: the needle jumps on completion and decays, it doesn't react
-> mid-generation.
+> **It's not token-stream telemetry.** The tail can emit a partial tick when
+> Claude writes an intermediate assistant/tool-use message and a final tick
+> when the turn closes. Between JSONL writes the needle decays; it cannot
+> react to individual generated tokens.
 
 ## Development
 
@@ -126,7 +144,10 @@ npm run tauri build  # release binary
 Backend tests (Rust):
 
 ```bash
-cd src-tauri && cargo test
+cargo test --manifest-path src-tauri/Cargo.toml
+cargo fmt --manifest-path src-tauri/Cargo.toml --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
+npm run build
 ```
 
 Regenerate icons from another logo:
@@ -147,10 +168,11 @@ cc-autobahn/
 │   └── modules/        # one widget/concern per file (speedometer, MFD pages, overlays, IPC wiring...)
 ├── src-tauri/
 │   └── src/
-│       ├── main.rs     # dual entrypoint (GUI / statusline mode) + Tauri bootstrap
+│       ├── main.rs     # three modes: GUI / statusline / permission-hook
 │       ├── engine/     # ccusage detection, polling, Bun auto-install
 │       ├── burn/       # JSONL tail → tok/s per response
 │       ├── sensor/     # statusline auto-install + official rate_limits tail
+│       ├── permission/ # PermissionRequest install + Unix-socket approval queue
 │       ├── pathfix.rs, tray.rs, tray_icon.rs, window.rs
 │       └── ...
 ├── docs/                # architecture, design, decisions (ADR), roadmap — see below
@@ -166,26 +188,29 @@ The full per-file breakdown lives in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.
 - [docs/DATA-ENGINE.md](./docs/DATA-ENGINE.md) — ccusage, statusline, OTEL, comparison.
 - [docs/DECISIONS.md](./docs/DECISIONS.md) — decision log (ADR) and rationale.
 - [docs/ROADMAP.md](./docs/ROADMAP.md) — implementation phases.
+- [docs/CODEX-INTEGRATION-ASSESSMENT.md](./docs/CODEX-INTEGRATION-ASSESSMENT.md) — verified plan for future Claude/Codex dual-provider support; not implemented.
 
 ## Roadmap
 
-Phases 0–6 done (chassis, data engine, `tok/s` per response, official
+Phases 0–7 done (chassis, data engine, `tok/s` per response, official
 statusline sensor, zero friction, tray/menu-bar, polish, MFD history/limits/
-settings pages). The real, up-to-date checklist lives in
+settings pages, redline feedback, movable positioning, and the permission
+gate). The real, up-to-date checklist lives in
 [docs/ROADMAP.md](./docs/ROADMAP.md) — don't duplicate it here, it gets out
-of sync. Only two optional/future items remain: packaging Bun as a Tauri
-sidecar, and Windows/Linux support (tray API is cross-platform except
-`set_activation_policy`, untested outside macOS so far).
+of sync. Future work includes the assessed but unimplemented Codex provider,
+packaging Bun as a Tauri sidecar, Windows/Linux validation, and modernizing
+permission-request identity/Claude-native permission suggestions.
 
 ## Credits
 
 cc-autobahn exists because [**ccusage**](https://github.com/ryoppippi/ccusage)
 by [**@ryoppippi**](https://github.com/ryoppippi) already solved the hard
 problem — parsing Claude Code's JSONL logs, pricing, deduplicating billing
-blocks — correctly and reliably. This project doesn't touch any of that; it
-just skins ccusage's own `--json` output as a Mercedes instrument cluster. If
-you find this useful, go star [ccusage](https://github.com/ryoppippi/ccusage)
-too, it's doing all the real work.
+blocks — correctly and reliably. This project leaves that accounting intact,
+then adds per-response speed, native tray/window behavior, permission routing,
+and the Mercedes instrument-cluster presentation. If you find this useful, go
+star [ccusage](https://github.com/ryoppippi/ccusage) too; it remains the usage
+engine underneath.
 
 ## License
 

@@ -2,12 +2,12 @@
 
 ## Guiding principle
 
-**cc-autobahn is NOT a token meter: it's an instrument cluster.**
+**cc-autobahn does not reimplement a token meter: it is an instrument cluster.**
 Computing consumption, pricing, and billing windows is a problem already solved
 by [`ccusage`](https://ccusage.com). We don't reimplement it or fork it
-— we consume it as a data source. All the value of this project is in the
-**visual layer** (Mercedes W203 skin) and the **per-response** `tok/s` calculation
-(D8), which no existing tool offers.
+— we consume it as a data source. The project owns the Mercedes W203 visual
+layer, the **per-response** `tok/s` calculation (D8), native tray/window
+behavior, and an opt-in permission-decision bridge.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -33,6 +33,11 @@ by [`ccusage`](https://ccusage.com). We don't reimplement it or fork it
                  └──────────────┘          └───────────────────┘  └──────────────┘
 ```
 
+The permission path is intentionally separate from telemetry: Claude Code
+starts `cc-autobahn permission-hook`, that short-lived process connects to
+`~/.claude/cc-autobahn/permission.sock`, and the GUI's Rust listener queues
+the request until the user approves or denies it.
+
 ## Layers
 
 ### 1. Rust backend (`src-tauri/`)
@@ -57,11 +62,11 @@ Responsible for **all I/O**. Never blocks the UI.
   via `install-progress`/`install-succeeded`/`install-failed` events — the
   `#[tauri::command]` handler itself must return fast, since a plain sync
   command runs on the thread that also pumps the webview's event loop (D36).
-- **JSONL tail** (`burn::tail::Tail`, driven by `burn::start`): follows the active
-  session log, computes `tok/s` **per response** (`Δoutput / Δt_turn`) when each turn
-  completes via the pure turn-calc logic in `burn::parser` (Zulu timestamp parsing in
-  `burn::zulu`). This is the data ccusage doesn't provide — but it's **not
-  instantaneous**: the JSONL only reports when the turn finishes (see D8/DATA-ENGINE §Source 2).
+- **JSONL tail** (`burn::tail::TailSet`, driven by `burn::start`): discovers
+  fresh session logs and follows them concurrently. `burn::parser` emits a
+  partial `tok/s` tick on eligible intermediate assistant/tool-use writes and
+  a final tick at turn closure. This is not token-stream telemetry: no new
+  value exists between JSONL writes (D8/D27).
 - **Statusline sensor** (`sensor::install`): installs cc-autobahn as the
   `statusLine` command in `~/.claude/settings.json` (consent + backup + rollback, D12).
   `sensor::statusline_bin` is the CLI entrypoint invoked as that command (reads stdin,
@@ -77,6 +82,13 @@ Responsible for **all I/O**. Never blocks the UI.
   detects on the machine), fetched **on demand** (D33's 4th cadence class,
   alongside D13's three) — only when the History/Limits MFD page opens, not
   on a timer, cached client-side (`history-data.js`) for a few minutes.
+- **Permission hook** (`permission/`, D42): `install.rs` merges/unmerges the
+  Claude `hooks.PermissionRequest` array and refreshes its stable binary copy;
+  `hook_bin.rs` is the short-lived CLI mode; `mod.rs` owns the Unix-listener
+  thread, FIFO pending queue, Tauri commands, and events; `always_allow.rs`
+  owns the current exact-Bash-rule/session-memory behavior. The hook blocks,
+  never the UI thread, and fails open to Claude's terminal prompt when the
+  GUI/socket is unavailable.
 - **Window / tray**: split by concern — `window.rs` owns the native macOS
   `NSPanel` conversion/fullscreen-Space behavior, PIN state, hide-on-blur, and
   positioning under the icon; `tray.rs` owns the menu-bar icon
@@ -90,19 +102,21 @@ Responsible for **all I/O**. Never blocks the UI.
   `window::position_under_tray`); clicking outside hides it (hide-on-blur via
   `WindowEvent::Focused(false)` in `window::wire`, with a 300 ms anti-race guard
   in `tray.rs`, except when the PIN button is active, D26); right click
-  opens a menu with "Quit". The window itself remains frameless, transparent
+  opens a menu with "Reset position" and "Quit cc-autobahn". The window itself remains frameless, transparent
   (requires `macOSPrivateApi`, D14), `alwaysOnTop`, with native rounded
-  corners via `CALayer` (D25). No longer draggable (supersedes D6). Config
-  in `tauri.conf.json`; permissions in `capabilities/default.json` (trimmed to
-  just `core:default` + `core:event:default` — window control happens
-  100% in Rust, not via IPC).
+  corners via `CALayer` (D25). D41 restored dragging from the header and
+  model-selector zones; `window-position.json` stores a manual override,
+  clamps it after monitor changes, and Reset position returns to tray anchoring.
+  Config lives in `tauri.conf.json`; `capabilities/default.json` includes
+  `core:window:allow-start-dragging` for this narrow frontend bridge.
 
 ### 2. Frontend (webview, `index.html` + `src/`)
-**Presentation only**. No system I/O; receives data via IPC/events.
+Presentation plus narrowly scoped native window commands; receives data via
+IPC/events.
 
-- `index.html`: cluster structure — header (nameplate, header-hint, PIN/MFD
-  buttons) + a 4-page MFD (`.pages`, D33) + PRND selector + sensor/engine
-  consent overlays.
+- `index.html`: cluster structure — header (dynamic nameplate, header-hint,
+  PIN/MFD buttons) + a 4-page MFD (`.pages`, D33) + PRND selector +
+  sensor/engine/permission consent and decision overlays.
 - `src/style.css`: amber VFD W203 skin (see [DESIGN.md](./DESIGN.md)).
 - `src/main.js`: thin entrypoint, wires the widget modules under `src/modules/`
   on `DOMContentLoaded`. `speedometer.js` — physical spring (D18); `trip-computer.js`
@@ -117,8 +131,10 @@ Responsible for **all I/O**. Never blocks the UI.
   on-demand fetch, used by both Page 1 and Page 2), `history-page.js` (Page 1:
   cost sparkline), `limits-page.js` (Page 2: weekly window, cost/model, burn
   rate), `settings-page.js` (Page 3, incl. the custom dropdown replacing a
-  native `<select>`). `header-hint.js` is the shared "what's under the cursor"
-  line, replacing every native `title=` tooltip.
+  native `<select>`). Additional modules own the D37 redline/tray alert,
+  D41 window drag/reset, D42 permission gate/consent/sound, themes, and the
+  synthetic VFD cursor. `header-hint.js` is the shared "what's under the
+  cursor" line, replacing every native `title=` tooltip.
 
 ## Data flow
 
@@ -131,8 +147,9 @@ Responsible for **all I/O**. Never blocks the UI.
    statusline sensor (D12) if not installed.
 2. Backend timer **every 10–30 s** (D13) → `ccusage blocks --active --json` → `blocks-update`
    event with average burn, projection, cost.
-3. JSONL tail in parallel → when a turn completes, `burn-tick` event with `tok/s`
-   **per response** → needle that jumps and decays (not instantaneous, D8).
+3. JSONL tails in parallel → eligible intermediate writes and final turn
+   closure emit `burn-tick` with partial/final `tok/s` **per response** →
+   needle that jumps and decays (not token-stream telemetry, D8/D27).
 4. Statusline sensor (push) → `sensor-update` event with `rate_limits.five_hour`
    (**official** autonomy), `seven_day` (border tint at 80%), `model.id`
    (PRND selector), cost. `effort.level` arrives in the payload but is no longer
@@ -145,47 +162,34 @@ Responsible for **all I/O**. Never blocks the UI.
    Limits, the frontend calls the `history_daily` command — a one-off
    `ccusage claude daily --json` run, not part of the loop above — and
    caches the result client-side for a few minutes.
+7. **Permission requests** (D42) use an independent synchronous route:
+   Claude hook process → Unix socket → FIFO queue → `permission-pending` →
+   Approve/Deny/Always Allow command → socket response. A pending request
+   auto-opens the panel, alerts the tray, and can play the configured sound.
 
 ## Why Tauri (not Electron)
 
 - OS webview → ~5 MB binary vs ~150 MB for Electron.
 - Native Rust backend for exec/tail with no overhead.
 - `always-on-top` + frameless + transparent + native tray/menu-bar (D24).
-- Real cross-OS support (macOS / Windows / Linux).
+- Cross-platform foundation. Current release/support is macOS; native panel
+  behavior is macOS-specific, the permission transport is Unix-only, and
+  Windows/Linux remain unvalidated.
 
 ## Current status
 
-**Phases 0–6 done** (see the actual checklist in [ROADMAP.md](./ROADMAP.md);
-only two optional/future items remain — Bun sidecar, Windows/Linux). The
-backend starts hidden behind the tray icon (D24) and runs three continuous
-sensors on dedicated threads — `engine` (ccusage `blocks --active --json`
-every 15 s → cost/projection), `burn` (tail of the active JSONL → `tok/s`
-per response → `burn-tick`, D17, with a partial tick per intermediate
-message and a 200 ms cadence, D27), `sensor` (tail of the file the
-statusline dumps to → **official** `rate_limits` data → `sensor-update`,
-D12) — plus one on-demand fetch, `engine::history` (`ccusage claude daily
---json`, only when the History/Limits page opens, D33). The frontend is a
-4-page MFD (D33) cycled by a button next to PIN: Page 0 renders the
-speedometer with a physical spring (D18), a segment bar (estimated `blocks`
-marked "EST", or official `sensor` with priority and frozen on momentary
-disconnection, D23/D28), the PRND selector (D7), and the toggleable
-PACE/AUTO footer (D28); Page 1 is a 30-day cost history sparkline; Page 2
-surfaces the official weekly rate-limit window, per-model cost, and burn
-rate (data that was already flowing in but reduced to a border tint or
-never painted before D33); Page 3 is front-end-only settings
-(`localStorage`). A docked header-hint line (`header-hint.js`) replaces
-every native `title=` tooltip, and every form control (checkbox, dropdown)
-is custom-styled — WKWebView renders native form chrome as unstyleable OS
-elements that broke the amber skin (D33). The same binary is the
-`statusLine` command (dual mode, early-return, D19) with previous-statusLine
-chaining (D21) and consent/backup/rollback auto-installation (D20/D22). The
-always-visible floating window was replaced with a menu-bar icon with an
-on-demand panel (D24, macOS only for now), with native rounded corners
-(D25) and a PIN button to pin it (D26). That tray icon is now a progress
-ring redrawn at runtime, not a static PNG (D30). Kickdown (the effort
-indicator) was implemented and later removed for not adding visual value
-(D29). Post-launch hardening from testing an actual clean machine (D36): the
-process `PATH` is repaired at startup so a Finder/Dock launch still finds an
-already-installed engine, the Bun installer runs off the UI thread instead
-of freezing it, and the installed statusline binary quietly re-syncs itself
-against newer releases.
+**Phases 0–7 done** (see [ROADMAP.md](./ROADMAP.md)). One executable dispatches
+to three modes: GUI, `statusline`, or `permission-hook`. GUI mode starts hidden
+behind the tray, runs three continuous telemetry sensors plus on-demand daily
+history, and hosts the event-driven permission listener. The four-page MFD
+contains Trip, History, Limits, and shared Settings; redline feedback, dynamic
+tray states, themes, permission sound/consent, and manual position reset are
+wired. Default placement remains under the tray, with D41's persisted drag
+override available when wanted.
+
+Current verified baseline: **59 Rust tests**, Rustfmt check, strict Clippy
+(`-D warnings`), and the Vite production build all pass. Frontend unit tests
+and linting are not configured. Future work is tracked in the roadmap:
+Codex provider integration is assessed but not implemented, Bun sidecar and
+Windows/Linux are optional, and permission request identity/native Claude
+permission suggestions need modernization before cross-provider routing.

@@ -2,6 +2,10 @@
 
 Decisions made during design, with their reasoning. Lightweight format.
 
+> Test counts inside individual decisions are point-in-time verification
+> records for that change, not the current repository total. The current
+> automated baseline is 59 Rust tests; see `README.md` and `docs/ROADMAP.md`.
+
 ## D1 — Don't reinvent the data engine
 
 **Decision**: consume `ccusage` as the data source, don't reimplement log
