@@ -90,7 +90,8 @@ behavior and the optional Claude Code permission bridge.
 - **Zero setup** — no ccusage or Bun on the machine? one button installs
   both and starts polling, no terminal required.
 
-Current verified baseline: `cargo test` **59/59**, `cargo fmt --check`,
+Current verified baseline: `cargo test` **77/77**, `npm run test:frontend`
+**9/9**, `cargo fmt --check`,
 `cargo clippy --all-targets --all-features -- -D warnings`, and
 `npm run build` all pass.
 
@@ -188,7 +189,7 @@ The full per-file breakdown lives in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.
 - [docs/DATA-ENGINE.md](./docs/DATA-ENGINE.md) — ccusage, statusline, OTEL, comparison.
 - [docs/DECISIONS.md](./docs/DECISIONS.md) — decision log (ADR) and rationale.
 - [docs/ROADMAP.md](./docs/ROADMAP.md) — implementation phases.
-- [docs/CODEX-INTEGRATION-ASSESSMENT.md](./docs/CODEX-INTEGRATION-ASSESSMENT.md) — verified plan for future Claude/Codex dual-provider support; not implemented.
+- [docs/CODEX-INTEGRATION-ASSESSMENT.md](./docs/CODEX-INTEGRATION-ASSESSMENT.md) — verified Claude/Codex plan; provider contracts, isolated state and discriminated events are implemented, while Codex data adapters/UI remain pending.
 
 ## Roadmap
 

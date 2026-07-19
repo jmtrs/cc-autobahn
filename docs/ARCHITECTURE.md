@@ -56,7 +56,7 @@ Responsible for **all I/O**. Never blocks the UI.
   global → `npx` → `bunx` → none. See [DATA-ENGINE.md](./DATA-ENGINE.md).
 - **ccusage poll** (`engine::blocks::poll_once`, called from `engine::start`): runs
   `ccusage blocks --active --json` every **15 s** (D13, 10–30 s window), parses with
-  `serde_json`, emits `blocks-update` / `blocks-idle` / `engine-error` to the frontend.
+  `serde_json`, emits `blocks-update` / `blocks-idle` / `app-engine-error` to the frontend.
   `engine::install` holds the Bun auto-installer, which runs the actual
   `curl | bash` install on its own `std::thread` and reports progress/outcome
   via `install-progress`/`install-succeeded`/`install-failed` events — the
@@ -138,7 +138,7 @@ IPC/events.
 
 ## Data flow
 
-1. On startup, the backend detects the engine. If missing → `engine-missing`
+1. On startup, the backend detects the engine. If missing → `app-engine-missing`
    event (or the `engine_status` command, pull, for the first render without
    depending on winning the race against the event) → frontend shows the
    "CHECK ENGINE" overlay with an "Install engine" button (`engine::install::install_bun`:
@@ -187,9 +187,10 @@ tray states, themes, permission sound/consent, and manual position reset are
 wired. Default placement remains under the tray, with D41's persisted drag
 override available when wanted.
 
-Current verified baseline: **59 Rust tests**, Rustfmt check, strict Clippy
-(`-D warnings`), and the Vite production build all pass. Frontend unit tests
-and linting are not configured. Future work is tracked in the roadmap:
-Codex provider integration is assessed but not implemented, Bun sidecar and
+Current verified baseline: **77 Rust tests**, **9 frontend tests**, Rustfmt
+check, strict Clippy (`-D warnings`), and the Vite production build all pass.
+Frontend linting is not yet configured. Future work is tracked in the roadmap:
+Codex provider foundation is implemented; Codex data adapters and UI remain.
+Bun sidecar and
 Windows/Linux are optional, and permission request identity/native Claude
-permission suggestions need modernization before cross-provider routing.
+permission suggestions are hardened; mixed-provider permission routing remains.

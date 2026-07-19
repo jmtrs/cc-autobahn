@@ -50,7 +50,7 @@ Releases: `npm run release -- <patch|minor|major|X.Y.Z>` (scripts/release.mjs) �
 
 **Permission hook (D42) — approve/deny from the cluster:** unlike the statusLine sensor, a Claude Code hook is *synchronous* — Claude Code blocks the tool call until the hook process exits. The file+poll pattern above can't answer that, so this uses a real `std::os::unix::net::UnixListener` socket (`~/.claude/cc-autobahn/permission.sock`): the hook blocks on it waiting for a human's Approve/Deny click, and prints nothing (letting Claude Code fall back to its own terminal prompt) if cc-autobahn isn't running or nobody answers in time. Concurrent sessions queue FIFO. Opt-in from the Settings page, not auto-installed like the statusline sensor.
 
-Target flow: the backend emits events (`blocks-update`, `burn-tick`, `sensor-update`, `engine-missing`, `permission-pending`, `permission-resolved`) that the frontend listens to and renders. Details in `docs/ARCHITECTURE.md`.
+Target flow: the backend emits events (`blocks-update`, `burn-tick`, `sensor-update`, `app-engine-missing`, `permission-pending`, `permission-resolved`) that the frontend listens to and renders. Details in `docs/ARCHITECTURE.md`.
 
 ## Car → tokens mapping (domain language)
 

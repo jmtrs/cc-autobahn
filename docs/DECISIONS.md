@@ -4,7 +4,7 @@ Decisions made during design, with their reasoning. Lightweight format.
 
 > Test counts inside individual decisions are point-in-time verification
 > records for that change, not the current repository total. The current
-> automated baseline is 59 Rust tests; see `README.md` and `docs/ROADMAP.md`.
+> automated baseline is 77 Rust and 9 frontend tests; see `README.md` and `docs/ROADMAP.md`.
 
 ## D1 — Don't reinvent the data engine
 
@@ -1330,3 +1330,75 @@ remained blocked awaiting a decision and `CGWindowListCopyWindowInfo` with
 `optionOnScreenOnly` reported the cc-autobahn window in that active fullscreen
 Space at layer 1000 with its expected 550x150 bounds. `cargo test` 56/56 and
 `cargo clippy --all-targets -- -D warnings` clean.
+
+## D44 — Permission identity before provider expansion
+
+**Problem**: Claude's `prompt_id` correlates permission requests to a user
+prompt; it is optional and multiple tool approvals may share it. Using it as
+the queue key made independent requests collide and could remove or resolve the
+wrong entry. Codex has different native identifiers, so this could not remain
+the routing foundation for a dual-provider queue.
+
+**Decision**: every Claude hook invocation now generates a UUID v4
+`request_id`. The optional Claude `prompt_id` remains metadata only. Queue
+lookup, timeout cleanup and frontend commands use `request_id`; duplicate IDs
+are rejected without replacing the original entry. Provider becomes the next
+routing discriminator when Codex requests enter the same queue.
+
+**Native Always Allow**: current Claude `permission_suggestions` travel through
+the socket as opaque JSON. When exactly one suggestion exists, the hook echoes
+it unchanged as `decision.updatedPermissions`, matching Claude's official
+contract. The existing exact-rule/session-memory implementation remains only
+for older payloads with no native suggestion. Multiple suggestions are not
+guessed: the current single-action UI hides Always Allow until it can expose an
+explicit choice.
+
+**Failure semantics**: malformed input, duplicate identity, persistence failure
+or disconnected response channel produces no hook decision. Claude keeps its
+native permission UI. Fallback persistence, queue removal and response enqueue
+are serialized under the queue mutex so the timeout worker cannot observe an
+absent slot before the decision exists; a failed channel send is an error, not
+success. The response cap increased from 4 KiB to the 1 MiB request limit plus
+envelope headroom because a native suggestion may be large.
+
+**Verification**: 68/68 Rust tests, including same-prompt independence,
+duplicate rejection, optional `prompt_id`, exact native suggestion round-trip,
+payloads above 4 KiB, persistence failure, disconnected channel and a
+deterministic timeout/decision ordering test. Rustfmt, strict Clippy and Vite
+production build pass. A separate adversarial reviewer found four races/wire
+defects in the first implementation; all were fixed and the final directed
+review reported no remaining finding.
+
+## D45 — Provider-discriminated foundation before Codex transport
+
+**Boundary**: provider adapters own external wire formats and identity. Shared
+code consumes normalized contracts carrying `provider`; current Claude
+renderers explicitly reject Codex, unknown and missing discriminants. External
+`ccusage` JSON cannot choose its provider label: Claude DTO fields skip provider
+deserialization and the adapter assigns Claude.
+
+**State model**: frontend state is now `global` chassis state plus independent
+`providers.claude` and `providers.codex` objects. Existing renderers bind to the
+Claude object until provider-scoped DOM lands. Mutable health and rate buffers
+are never shared. MFD page and permission head live under global state.
+
+**Health and startup**: provider health is keyed by provider + component,
+stored authoritatively in Rust and exposed through both `provider-health`
+events and `provider_health_snapshot`. Backend timestamps are monotonic per
+component even if wall clock moves backwards; frontend rejects older replay.
+Engine recovery emits `connected` after a degraded poll succeeds. Sensor
+payloads expose camelCase `observedAtMs`; `sensor_snapshot` hydrates state lost
+before webview listeners exist. Live listeners register before snapshots, and
+an equal/older snapshot cannot overwrite a live event. Application-wide binary
+events use explicit `app-engine-*` names and are not provider events.
+
+**Testing and CI**: Node's built-in runner covers isolated buffers, strict
+routing, health hydration, replay/equal-timestamp rejection and global chassis
+updates. CI runs it on direct pushes to `main`/`develop` and on pull requests.
+
+**Verification**: 77/77 Rust tests and 9/9 frontend tests pass, plus Vite
+production build, Rustfmt, strict Clippy and `git diff --check`. A fresh
+adversarial reviewer found startup hydration, recovery, spoofing, replay,
+event-naming and camelCase defects across three passes; all were fixed and the
+final review reported no remaining concrete bug. Codex transport and
+provider-scoped UI remain separate later cuts.

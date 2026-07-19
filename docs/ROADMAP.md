@@ -20,8 +20,8 @@ Implementation order, one layer at a time, verifying before moving forward.
 - [x] `engine::poll_once` — `ccusage blocks --active --json`, serde parsing,
       `blocks-update` event every **15 s** (D13). Dedicated thread, no panics.
 - [x] Serde models against real ccusage v20 JSON (tokens, cost, burn, projection).
-- [x] Error handling: missing engine → `engine-missing`; one-off failure →
-      `engine-error`; no active block → `blocks-idle`.
+- [x] Error handling: missing engine → `app-engine-missing`; one-off failure →
+      `app-engine-error`; no active block → `blocks-idle`.
 - [x] Frontend listens to events (saved outside Tauri); logged in Phase 1.
 - [x] ~~Apply restrictive CSP and verify HMR in `tauri dev` (D15)~~ — done
       in Phase 3 (duplicate checkbox, see there).
@@ -65,8 +65,8 @@ Implementation order, one layer at a time, verifying before moving forward.
 ## Phase 4 — Zero friction (auto-wiring, D9)
 
 - [x] "CHECK ENGINE" screen when the engine is missing (overlay in `index.html`,
-      painted via `engine_status()` on startup + live `engine-missing`/
-      `engine-detected`/`blocks-update` events, without depending on winning the
+      painted via `engine_status()` on startup + live `app-engine-missing`/
+      `app-engine-detected`/`blocks-update` events, without depending on winning the
       race against the first event).
 - [x] "INSTALL ENGINE" button (`install_bun` in `engine/install.rs`: official Bun
       installer via `std::process::Command`, process `PATH` manually updated
@@ -151,17 +151,18 @@ Implementation order, one layer at a time, verifying before moving forward.
       Always Allow, configurable built-in/custom/off alert sound.
 - [x] Themes, reorderable optional MFD screens, synthetic VFD cursor, and
       current Settings controls wired without changing the 550 × 150 panel.
-- [x] Current quality gate: 59 Rust tests, Rustfmt, strict Clippy, and Vite
+- [x] Current quality gate: 77 Rust tests, 9 frontend tests, Rustfmt, strict Clippy, and Vite
       production build pass.
 
 ## Follow-up work
 
-- [ ] Codex support: architecture/research complete, implementation not
-      started. See [CODEX-INTEGRATION-ASSESSMENT.md](./CODEX-INTEGRATION-ASSESSMENT.md).
-- [ ] Permission identity: replace Claude `prompt_id` as queue identity with
+- [ ] Codex support: architecture/research and provider foundation complete;
+      Codex data adapters and dual-provider UI remain. See
+      [CODEX-INTEGRATION-ASSESSMENT.md](./CODEX-INTEGRATION-ASSESSMENT.md).
+- [x] Permission identity: replace Claude `prompt_id` as queue identity with
       a generated per-hook-invocation ID; retain `prompt_id` as optional
       correlation metadata and include provider in future routing keys.
-- [ ] Prefer Claude-native `permission_suggestions`/`updatedPermissions`
+- [x] Prefer Claude-native `permission_suggestions`/`updatedPermissions`
       over extending the current local Always Allow emulation.
 - [ ] Optional Bun sidecar and Windows/Linux validation remain open from
       earlier phases; the current PermissionRequest socket is Unix-only.
@@ -172,9 +173,10 @@ Current automated baseline:
 
 ```bash
 npm run build
+npm run test:frontend # 9 tests
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml # 59 tests
+cargo test --manifest-path src-tauri/Cargo.toml # 77 tests
 ```
 
 For interaction changes, also run `npm run tauri dev` and verify native tray,
