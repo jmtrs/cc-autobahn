@@ -144,11 +144,14 @@ body {
 /* Synthetic cursor (cursor.js): the native OS cursor always paints above the
    entire window, so it looked like it floated outside the display glass no
    matter what. This element is positioned by JS on every mousemove instead,
-   given a z-index above popups (.vfd-dropdown-list, 6) — an open dropdown's
-   solid background used to fully occlude the cursor, not just dim it, which
-   made it vanish while navigating a list — but still below .screen::after's
-   scanline (20), so the horizontal/vertical dot-matrix lines still mask it
-   and it reads as tucked inside the glass rather than layered on top. */
+   given a z-index above every full-screen overlay (.sensor-overlay 10 /
+   .engine-overlay 11 / .permission-gate 12, currently the highest) — an
+   overlay's solid background used to fully occlude the cursor, not just dim
+   it, which made it vanish right as the user aimed at a button inside one —
+   but still below .screen::after's scanline (20), so the horizontal/
+   vertical dot-matrix lines still mask it and it reads as tucked inside the
+   glass rather than layered on top. WHOEVER ADDS A NEW OVERLAY ABOVE 12 MUST
+   ALSO BUMP THIS z-index. */
 .fake-cursor {
   position: fixed;
   top: 0;
@@ -159,7 +162,7 @@ body {
   background-image: var(--cursor-base);
   background-repeat: no-repeat;
   opacity: 0;
-  z-index: 10;
+  z-index: 15;
   will-change: transform;
 }
 
@@ -175,6 +178,15 @@ body {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+}
+
+/* Author `display: flex` beats the UA stylesheet's `[hidden] { display: none }`
+   at equal specificity (author origin always wins over UA, regardless of
+   selector weight) — every conditionally-hidden `.row` (theme-accent-row,
+   permission-sound-custom-row) was rendering even while `.hidden = true`
+   until this override (D-review, real bug, not just this feature's). */
+.row[hidden] {
+  display: none;
 }
 
 /* Small caption label — the page name next to the MFD button ("SINCE
@@ -567,6 +579,209 @@ body {
   z-index: 11;
 }
 
+/* Permission gate (D42) — above every other overlay: a Claude Code session
+   literally blocked waiting on a human decision is the most urgent thing
+   the cluster can show. Uses the theme's --amber-glow accent (same var
+   .fake-cursor's z-index comment cross-references — stay under z-index 15,
+   see that comment) rather than a fixed color, so it reacts to the user's
+   theme/custom-accent picker like every other themed element instead of
+   staying a hardcoded cyan regardless of theme. */
+.permission-gate {
+  z-index: 12;
+  /* Fills the overlay's full height (D-review: centering it left the card
+     floating small with dead space top/bottom on a window this size) — the
+     default flex-row `stretch` already does this, no override needed. */
+  padding: 6px;
+}
+
+/* .sensor-body's base `white-space: pre-wrap` (below) exists for the other
+   consent overlays, which render one literal multi-line string via
+   `textContent` (sensor-consent.js/permission-consent.js embed real `\n`
+   chars). This card's body holds actual child elements instead
+   (.permission-summary/.permission-cwd) — pre-wrap was instead preserving
+   the source HTML's own indentation whitespace *between* those tags as
+   visible blank lines, a stray-scroll bug (D-review). Normal collapses that
+   whitespace; .permission-summary keeps its own pre-wrap for the command
+   text itself. Also centers the summary/cwd block within the body's now
+   full-height flex space (D-review: full height must not mean the text
+   floats pinned to the top with a dead gap before the buttons). */
+.permission-gate .sensor-body {
+  white-space: normal;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* Continuous glow pulse (D-review: reuses the redlinePulse idiom below — a
+   session blocked waiting on a human is just as attention-worthy as a PACE/
+   AUTO critical) — runs the whole time the card is visible, not just on
+   arrival, since a request left unanswered for a while shouldn't fade back
+   to looking passive. Amber-glow, not red: red stays reserved for budget
+   alerts specifically, this is a different urgency. */
+.permission-gate .sensor-card {
+  animation: permissionPulse 1.6s ease-in-out infinite;
+  border-radius: 4px;
+  padding: 6px 8px;
+  gap: 6px;
+}
+
+@keyframes permissionPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgba(var(--amber-glow-rgb), 0.45), 0 0 16px rgba(var(--amber-glow-rgb), 0.25);
+  }
+  50% {
+    box-shadow: 0 0 0 1px rgba(var(--amber-glow-rgb), 0.9), 0 0 26px rgba(var(--amber-glow-rgb), 0.6);
+  }
+}
+
+.permission-gate .sensor-title {
+  color: var(--amber-glow);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.permission-badge {
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0;
+  opacity: 0.7;
+}
+
+/* Context row, top-right of the gate card: "project · branch" of the
+   session's cwd (D42 follow-up). Pushed right, dimmer than the title. */
+.permission-context {
+  margin-left: auto;
+  font-size: 9px;
+  font-weight: 400;
+  letter-spacing: 0;
+  opacity: 0.55;
+  /* A long branch/project pair must shrink, not push the title around. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* Moved into .sensor-title (D-review: was its own stacked line in
+   .sensor-body, the single biggest reason the card overflowed a 150px-tall
+   window) — a small tag next to "PERMISSION REQUEST" instead of a full-width
+   line, freeing that line for the command text itself. */
+.permission-tool {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: var(--amber-glow);
+}
+
+/* No 120-char truncation on the backend anymore (D42 follow-up) — full text,
+   wrapped. No longer its OWN scroll region (D-review: was double-scrolling
+   with .sensor-body, and its 120px max-height alone exceeded the entire
+   window's 150px height) — .sensor-body is the single scroll container for
+   the whole card body now. */
+.permission-summary {
+  font-family: var(--font);
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: rgba(var(--bg-rgb), 0.5);
+  border-left: 2px solid var(--amber-dim);
+  padding: 4px 6px;
+  border-radius: 2px;
+  margin: 0;
+  flex-shrink: 0;
+}
+
+.permission-cwd {
+  opacity: 0.55;
+  font-size: 9px;
+  flex-shrink: 0;
+  /* Secondary info — shrink to one line with an ellipsis instead of wrapping
+     and eating more of the card's height. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Auto-clear countdown (D-review) — `margin-right: auto` pulls it to the
+   left edge of .sensor-actions regardless of that shared class's own
+   `justify-content: flex-end` (which stays untouched for the other overlays
+   that don't have this element). */
+.permission-timeout {
+  margin-right: auto;
+  align-self: center;
+  font-size: 8px;
+  opacity: 0.45;
+}
+
+/* Split Approve button (D42 follow-up): main action + chevron opening the
+   "Always Allow" menu. Joined corners read as ONE button with two zones;
+   the separator reuses --bg so it works under any theme accent (no
+   hardcoded color — same rule as the gate itself). The menu opens UPWARD
+   (bottom: 100%) because the gate's actions sit at the bottom edge of the
+   panel, where a downward list would clip. */
+.permission-split {
+  display: flex;
+}
+
+.permission-split .sensor-btn {
+  border-radius: 3px 0 0 3px;
+}
+
+.permission-split .permission-chevron {
+  border-radius: 0 3px 3px 0;
+  padding: 4px 6px;
+  border-left: 1px solid rgba(var(--bg-rgb), 0.45);
+  font-size: 8px;
+}
+
+.permission-split .vfd-dropdown-list {
+  top: auto;
+  bottom: calc(100% + 2px);
+  white-space: nowrap;
+  /* The base .vfd-dropdown-list pins left:0/right:0 — width of the split
+     group (~90px), which clipped "Always Allow" to "Always Allo…". Size to
+     content, anchored to the group's right edge instead. */
+  left: auto;
+  right: 0;
+  width: max-content;
+}
+
+/* One-shot flash on arrival, same idiom as .screen.redline-enter (filter
+   only, not box-shadow — permissionPulse above already owns that property,
+   same reasoning as .screen.redline/.screen.redline-enter coexisting). */
+.sensor-card.permission-gate-enter {
+  animation: permissionFlash 0.35s ease-out;
+}
+
+@keyframes permissionFlash {
+  0% {
+    filter: brightness(2.2) saturate(1.3);
+  }
+  100% {
+    filter: brightness(1) saturate(1);
+  }
+}
+
+/* Approve glows in the same pulse rhythm as the card (D-review) — the one
+   button a human actually needs to find fast, called out with color/motion
+   instead of relying on position alone. Deny/the chevron stay static so the
+   pulse doesn't read as "click anything here", just "click Approve". */
+.permission-split .sensor-btn:not(.permission-chevron) {
+  animation: permissionApprovePulse 1.6s ease-in-out infinite;
+}
+
+@keyframes permissionApprovePulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 rgba(var(--amber-rgb), 0);
+  }
+  50% {
+    box-shadow: 0 0 10px rgba(var(--amber-rgb), 0.9);
+  }
+}
+
 .sensor-card {
   display: flex;
   flex-direction: column;
@@ -587,7 +802,7 @@ body {
   min-height: 0;
   overflow-y: auto;
   font-size: 10px;
-  line-height: 1.4;
+  line-height: 1.3;
   white-space: pre-wrap;
   opacity: 0.9;
   font-variant-numeric: tabular-nums;
@@ -1023,15 +1238,21 @@ body {
   opacity: 0.3;
 }
 
-/* Page 3 (Settings) two-column layout — same trick as Page 2's .limits-cols:
-   the window is 440x150, wide and short, so a single vertical stack ran out
-   of height once THEME was added below SHOW SCREENS. Left column keeps the
-   screen-cycle config, right column is THEME. */
+/* Page 3 (Settings) column layout — same trick as Page 2's .limits-cols:
+   the window is 550x150, wide and short, so a single vertical stack ran out
+   of height. Split by topic: screens/navigation, appearance, permissions. */
 .settings-cols {
   flex: 1;
   min-height: 0;
   display: flex;
   gap: 16px;
+}
+
+/* Three columns need a tighter gap than two to leave enough width per
+   column at 550px (D-review: PERMISSION SOUND crowded THEME/WINDOW into one
+   column once it grew a dropdown + file picker, so it got its own column). */
+.settings-cols-3 {
+  gap: 10px;
 }
 
 .settings-col {
@@ -1079,4 +1300,21 @@ body {
 .vfd-theme-accent input[type="color"]::-webkit-color-swatch {
   border: none;
   border-radius: 2px;
+}
+
+/* "Choose file..." + its filename echo, below the dropdown and only shown
+   for the CUSTOM entry (same reveal-on-selection trick as #theme-accent-row). */
+.permission-sound-custom-row {
+  gap: 6px;
+  align-items: center;
+}
+
+/* Custom permission-sound upload's filename echo — same dim/small treatment
+   as .permission-timeout, just reused in a Page-3 settings row. */
+.permission-sound-filename {
+  font-size: 9px;
+  opacity: 0.55;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

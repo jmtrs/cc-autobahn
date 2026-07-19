@@ -119,6 +119,43 @@ pub fn reset_position(
     reset_position_now(&app, &position_state, &auto_guard);
 }
 
+/// Shows and focuses the panel if it isn't already visible — same
+/// positioning logic as the tray's left-click show branch (`tray.rs`).
+/// Called from `permission::mod.rs` (D42) when a NEW permission request
+/// arrives: without this, a request that comes in while the panel is
+/// hidden (the common case — hide-on-blur means it's hidden most of the
+/// time unless PINned) would only ever show up as a blinking tray icon,
+/// defeating the feature's whole point of approving without alt-tabbing.
+/// A no-op if the panel is already visible (doesn't steal focus from an
+/// unrelated, already-open panel) or if `PositionState`/`AutoRepositionGuard`
+/// aren't managed yet (only reachable in the ~impossible case of a hook
+/// connecting within milliseconds of app startup, before `.setup()` finishes).
+pub fn show_for_permission(app: &AppHandle) {
+    let Some(window) = app.get_webview_window("cluster") else {
+        return;
+    };
+    if window.is_visible().unwrap_or(false) {
+        return;
+    }
+    let Some(position_state) = app.try_state::<PositionState>() else {
+        return;
+    };
+    let Some(auto_guard) = app.try_state::<AutoRepositionGuard>() else {
+        return;
+    };
+
+    let saved = *lock(&position_state);
+    if let Some((x, y)) = saved {
+        position_at(&window, x, y, &auto_guard);
+    } else if let Some(tray) = app.try_state::<TrayIcon>() {
+        if let Ok(Some(rect)) = tray.rect() {
+            position_under_tray(&window, &rect, &auto_guard);
+        }
+    }
+    let _ = window.show();
+    let _ = window.set_focus();
+}
+
 /// Locks a mutex recovering from poison (a prior panic while held) instead of
 /// propagating it — a background menu-bar app has no supervisor to restart it.
 pub(crate) fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {

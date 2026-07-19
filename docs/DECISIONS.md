@@ -1115,3 +1115,197 @@ show/hide/position is decided in Rust, not via custom IPC — holds:
 frontend calls.
 
 **Verified**: `cargo test` 38/38, `cargo clippy` clean.
+
+## D42 — Self-installed `PermissionRequest` hook: approve/deny Claude Code sessions from the cluster
+
+**Decision**: cc-autobahn self-installs, opt-in from Settings, as a Claude
+Code `PermissionRequest` hook (matcher `"*"`, all tools). Any Claude Code
+session on the machine that hits a permission prompt now surfaces it in the
+cluster — tool name, a short input summary, cwd — with Approve/Deny buttons,
+instead of the user alt-tabbing to a terminal. Concurrent sessions queue FIFO
+(one visible at a time, a "+N more" badge for the rest).
+
+**Why a real socket, not the statusline sensor's file+poll pattern**: a
+Claude Code hook is synchronous — Claude Code blocks the whole tool call
+until the hook process exits (default 600s timeout, plenty of room for a
+human to click a button). The statusLine sensor (D12) is fire-and-forget: a
+short-lived CLI process writes a JSON file and exits immediately; the GUI
+polls that file later, at its own leisure, with no way to talk back. That's
+structurally insufficient here — the hook process must block waiting for an
+actual human decision. So this gets a real IPC primitive instead:
+`std::os::unix::net::UnixListener`/`UnixStream` (stdlib, zero new deps — D16
+spirit), bound at `~/.claude/cc-autobahn/permission.sock`. The GUI runs the
+listener on its own dedicated thread (same "one thread per concern" shape as
+`engine`/`burn`/`sensor`, D13); each hook invocation is one short-lived
+client connection: one JSON request line in, one JSON decision line out.
+
+**Fail-open is the load-bearing safety property**: a dead or never-started
+cc-autobahn must never hang a real coding session. The mechanism is
+deliberately simple — `hook_bin::run_permission_hook` prints Claude Code's
+`hookSpecificOutput` JSON to stdout only if it actually received a decision
+over the socket. On ANY failure (no socket file, connection refused, no
+response before its own 580s read-timeout, malformed input) it prints
+**nothing** and exits 0. That silence isn't a special case we detect and
+handle — it's Claude Code's own contract: no valid JSON on a hook's stdout
+already means "fall back to the normal terminal prompt." The hook never
+invents a decision on its own initiative; it only ever forwards one that
+came from a human via the socket. `UnixStream::connect` against a missing or
+listener-less path fails near-instantly (`ENOENT`/`ECONNREFUSED`) — there's
+no slow-handshake failure mode to guard against here like there would be for
+a network socket, so no manual connect-timeout wrapper was needed.
+
+**Settings.json merge — an array, not an object, and no "previous value" to
+chain**: `hooks.PermissionRequest` is a list of matcher-groups (other tools,
+or other cc-autobahn features under other event types, may already have
+entries there), unlike `statusLine`'s single object. `apply_install`
+appends a new `{"matcher":"*","hooks":[...]}` entry, or — idempotently, on
+reinstall — replaces its own entry in place by matching on the stable binary
+path in the `command` string, never touching any other entry. Unlike
+`statusLine` (D12), uninstall doesn't need a "previous value" chain: there's
+nothing to restore, `apply_uninstall` just removes the one matcher-group we
+added and cleans up an empty `PermissionRequest`/`hooks` key rather than
+leaving `[]`/`{}` litter. Same backup/atomic-write/rollback mechanics as
+`sensor::install` (0600 non-overwriting `settings.json.cc-autobahn.bak`,
+`serde_json::Value` round-trip — never a typed struct, Claude Code validates
+settings.json with a strict Zod schema and one bad field bricks it — atomic
+tmp+rename, post-write re-parse with rollback on failure).
+
+**Binary copy**: a second stable path, `~/.claude/cc-autobahn/cc-autobahn-permission-hook`
+(separate from the statusline sensor's own stable copy), for the same reason
+as D12: an unnotarized macOS `.app` runs from an ephemeral Gatekeeper-
+translocation path, so `current_exe()` can't be written into settings.json
+directly. Kept as its own copy rather than unifying with the statusline
+binary — smaller diff against existing `sensor::install` code, at the cost
+of two `refresh_if_stale` self-heals instead of one; revisit if a third
+hook-style feature makes the duplication worth collapsing.
+
+**Tray badge**: `TrayState` gained its own `pending_permission` bool
+alongside the existing `alert` (D37/D-review), rather than reusing `alert`
+for both — the two urgencies mean different things at a glance (PACE/AUTO
+budget pressure vs. "a session is blocked waiting on you"), even though both
+drive the same blink thread and painting-precedence-over-progress behavior.
+`permission::mod.rs` calls `tray_icon::set_permission_pending` directly
+(backend already knows the queue state authoritatively), unlike
+`set_tray_alert`, which is IPC because `redline.js` owns that threshold
+logic on the frontend.
+
+**UI shape**: modeled on `redline.js` (sustained state + one-shot pulse on
+the rising edge) rather than `engine-overlay.js`'s full-panel takeover — a
+pending permission is transient and should coexist with normal use, not
+block the whole display. Reuses the `.sensor-overlay`/`.sensor-card`/
+`.sensor-btn` visual language for both the live gate (`#permission-gate`,
+highest z-index of any overlay) and the consent flow
+(`#permission-consent-overlay`), with the theme's `--amber-glow` accent (not
+a hardcoded color) so an actionable request doesn't read as a warning while
+still following the user's chosen theme like every other element. The
+consent overlay is opt-in only,
+opened from a new "PERMISSION HOOK" row on the Settings page (Page 3) —
+unlike the statusline sensor's overlay, it is never auto-shown at startup,
+since the hook is an optional extra capability the app's core value doesn't
+depend on.
+
+**Scope deliberately kept small**: the queue is a plain FIFO
+(`VecDeque<PendingSlot>`) with only one visible request at a time — no full
+multi-request UI, no "always allow for this session" memory, no `ask`/`defer`
+decisions (only binary allow/deny, since a human always resolves to one or
+the other). Add if a real need shows up; nothing here forecloses it.
+
+**Hardening from an 8-angle code review, applied before shipping**: (1) the
+panel didn't auto-show when a request arrived while hidden (the common
+case — hide-on-blur means it usually is) — a request would only ever surface
+as a blinking tray icon; `window::show_for_permission` now shows/focuses the
+panel on a new arrival, same positioning logic as the tray's click handler.
+(2) `hook_bin::print_decision` used `println!`, which panics on a stdout
+write failure (EPIPE if Claude Code already gave up reading) — right at the
+one moment a real decision was about to be delivered, contradicting the
+module's own "never panics" contract; switched to `writeln!`, which returns
+a `Result` instead. (3) the socket read in `handle_connection` had neither a
+timeout nor a size cap — a stalled or wrong-protocol connection could pin an
+OS thread forever or grow memory unbounded; added a 10s read/write timeout
+and a 1MB request cap (4KB on the hook's own response read, which is always
+a few bytes). (4) the accept loop discarded `accept()` errors via
+`.flatten()` with no backoff, which would hot-spin at 100% CPU under
+persistent OS-level failure; now sleeps 200ms on error. (5) a narrow
+race existed where `permission_approve`/`_deny` could remove and resolve a
+request at the exact instant `handle_connection`'s own queue timeout fired,
+silently losing a real human decision (the frontend would report success
+while the hook still timed out and failed open) — closed with a `try_recv()`
+fallback that picks up an in-flight decision instead of discarding it. (6)
+`chmod_755`/`copy_private`/`same_contents`/`write_settings_atomic`/
+`read_settings_value`/`settings_path` were byte-for-byte duplicated between
+`sensor::install` and this module (3 independent review angles converged on
+the same finding) — hoisted into `sensor/mod.rs` alongside the already-shared
+`claude_config_dir`/`write_private`, both installers now import them.
+
+Two findings were investigated and NOT fixed, as documented tradeoffs: no
+app-level single-instance lock exists anywhere in cc-autobahn already (a
+second launch can steal the socket file from a running instance) — a
+pre-existing, app-wide gap this feature merely inherits, disproportionate to
+fix as part of this change. And `prompt_id` is genuinely absent from Claude
+Code's hook payload before the first user prompt in a session (confirmed
+against the official hooks doc, not the review's own — since it's a real
+field/event, unlike what one reviewer initially claimed) — the one hook
+invocation that could hit this fails open exactly like a closed GUI would,
+which is already the correct, safe default.
+
+**Verified**: `cargo test` 42/42 (4 new, pure `apply_install`/`apply_uninstall`
+transformations — empty settings, preserving unrelated hooks, idempotent
+reinstall, no-op uninstall), `cargo clippy` clean.
+
+## D43 — Panel over a fullscreen app's Space: investigated, NOT fixed (reverted)
+
+**Bug**: the panel doesn't show up while another app is in fullscreen. On
+macOS a fullscreen app runs in its own dedicated Mission Control Space; a
+normal `NSWindow` only ever renders in the Space it was created on.
+`alwaysOnTop:true` in `tauri.conf.json` only raises the window's *level*
+(`NSFloatingWindowLevel`) — it says nothing about which Space the window is
+allowed to appear in.
+
+**This is documented as an open, unsolved problem, not a fix** — several
+real attempts were made and disproven on the user's actual machine (a
+2-monitor Sonoma+ setup), each confirmed with on-device debug logging, not
+just a clean compile:
+
+1. `collectionBehavior = CanJoinAllSpaces | FullScreenAuxiliary` +
+   `NSStatusWindowLevel` (25) — didn't work.
+2. `CanJoinAllSpaces` alone + `NSScreenSaverWindowLevel` (1000) — didn't
+   work (dropping `FullScreenAuxiliary` was itself a wrong reading of
+   Apple's docs — real working menu-bar panels, e.g. Ardent Swift's hotkey
+   panel and the open-source Helium app, combine both flags).
+3. Both flags + `NSScreenSaverWindowLevel` (1000) — didn't work.
+4. Both flags + `CGWindowLevelForKey(.maximumWindow)` (2147483631, verified
+   via `swift -e 'print(CGWindowLevelForKey(.maximumWindow))'`) — didn't
+   work either, despite a **standalone, dependency-free Swift/AppKit repro
+   with the exact same collectionBehavior/level/styleMask reliably working**
+   on the same machine, same macOS version, same monitor. Forcing the
+   window's `styleMask` to a bare `Borderless` (tao's borderless+
+   non-resizable branch otherwise leaves stray `Miniaturizable` +
+   `FullSizeContentView` bits set) didn't close the gap either.
+
+**Root cause, as far as it was narrowed down**: `NSWindow.isOnActiveSpace`
+reads back `false` for the real app's window in every attempt above, even
+though every inspectable property (`collectionBehavior`, `level`,
+`styleMask`, `isVisible`, on-screen position) matched the standalone repro
+exactly. Explicitly calling `NSApplication.activate()` from inside the
+tray's click handler — itself a genuine, synchronous AppKit `mouseDown:`
+callback on the real main thread (`tray-icon` crate uses a custom
+`NSStatusItem` view with real `mouseDown:`/`mouseUp:`, not an indirect/
+queued dispatch — confirmed by reading its source) — still left
+`NSApp.isActive` reading `false` even after polling with the run loop
+pumped for 200ms. Whatever is preventing this specific accessory app from
+becoming the active app during another app's native fullscreen wasn't
+identified; it may be a real, mostly-undocumented macOS restriction, or
+something specific to how Tauri/tao/WKWebView's window differs from a bare
+`NSWindow` (every found *working* third-party example uses `NSPanel` with
+`isFloatingPanel = true`, which tao's window construction doesn't set and
+isn't easily reachable through Tauri's API — that's the next thing to try
+if this is revisited, at the cost of a much bigger lift than a flag tweak).
+
+**Decision**: stopped at the user's request after this investigation.
+**All changes from this investigation were reverted** — `window::wire` and
+`window::position_under_tray` are back to their pre-D43 state, no
+`collectionBehavior`/`level`/`styleMask` overrides, no debug logging. Kept
+reverted rather than left half-working because the higher `level` values
+tried (especially `CGWindowLevelForKey(.maximumWindow)`) render *above*
+system UI like the force-quit dialog even in the common non-fullscreen case
+— a real downside with zero confirmed upside once every attempt failed.

@@ -12,6 +12,8 @@ import { wireHistoryPage } from "./modules/history-page.js";
 import { wireEngine } from "./modules/ipc-events.js";
 import { wireLimitsPage } from "./modules/limits-page.js";
 import { wireMfdNav } from "./modules/mfd-nav.js";
+import { wirePermissionConsent } from "./modules/permission-consent.js";
+import { wirePermissionGate } from "./modules/permission-gate.js";
 import { wirePinButton } from "./modules/pin-button.js";
 import { wireRedlineTray } from "./modules/redline.js";
 import { wireSensorUi } from "./modules/sensor-consent.js";
@@ -36,6 +38,8 @@ function init() {
   wireEngineOverlay();
   wireEngine();
   wireSensorUi();
+  wirePermissionGate();
+  wirePermissionConsent();
   wirePinButton();
   wireWindowDrag();
   wireResetPositionButton();

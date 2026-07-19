@@ -9,13 +9,15 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "release": "node scripts/release.mjs"
+    "release": "node scripts/release.mjs",
+    "screenshot:permission-gate": "node scripts/screenshot-permission-gate.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.11.4",
+    "playwright": "^1.61.1",
     "vite": "^8.1.5"
   }
 }

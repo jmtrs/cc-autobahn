@@ -14,7 +14,11 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
-use super::{claude_config_dir, write_private};
+use super::{
+    backup_once, claude_config_dir, install_stable_binary, read_settings_for_install,
+    read_settings_value, refresh_binary_if_stale, write_settings_atomic,
+    write_settings_with_rollback, SETTINGS_WRITE_LOCK,
+};
 
 const STATUSLINE_BIN: &str = "cc-autobahn-statusline";
 const BAK_SUFFIX: &str = ".cc-autobahn.bak";
@@ -38,17 +42,6 @@ pub struct InstallPreview {
     backup_path: String,
 }
 
-fn settings_path() -> Option<PathBuf> {
-    Some(claude_config_dir()?.join("settings.json"))
-}
-
-/// Reads and parses settings.json as a `Value`. `None` if it doesn't exist or fails to parse.
-fn read_settings() -> Option<serde_json::Value> {
-    let path = settings_path()?;
-    let data = fs::read_to_string(&path).ok()?;
-    serde_json::from_str(&data).ok()
-}
-
 /// Stable path for the binary copy (resolves translocation, D-new-2).
 fn stable_bin_path(cfg: &Path) -> PathBuf {
     cfg.join("cc-autobahn").join(STATUSLINE_BIN)
@@ -62,7 +55,7 @@ fn statusline_command(cfg: &Path) -> String {
 /// `#[tauri::command]` Is it installed and pointing to us?
 #[tauri::command]
 pub fn sensor_status() -> SensorStatus {
-    let Some(v) = read_settings() else {
+    let Some(v) = read_settings_value() else {
         return SensorStatus {
             installed: false,
             has_prev: false,
@@ -88,7 +81,7 @@ pub fn sensor_status() -> SensorStatus {
 #[tauri::command]
 pub fn sensor_preview_install() -> Result<InstallPreview, String> {
     let cfg = claude_config_dir().ok_or("could not resolve CLAUDE_CONFIG_DIR")?;
-    let prev = read_settings()
+    let prev = read_settings_value()
         .as_ref()
         .and_then(|v| v.as_object())
         .and_then(|o| o.get("statusLine"))
@@ -151,30 +144,27 @@ pub fn install_sensor() -> Result<(), String> {
     let cfg = claude_config_dir().ok_or("could not resolve CLAUDE_CONFIG_DIR")?;
     let settings_path = cfg.join("settings.json");
     let backup_path = cfg.join(format!("settings.json{BAK_SUFFIX}"));
+    let bin_dir = cfg.join("cc-autobahn");
+    let bin_path = stable_bin_path(&cfg);
+
+    // Serializes against `permission::install`'s own settings.json writer
+    // (D42 review fix) — both self-installers target the same file, and an
+    // unsynchronized read-modify-write on each side can drop the other's
+    // change if both run close together (e.g. approving both consent
+    // prompts back-to-back).
+    let _guard = SETTINGS_WRITE_LOCK.lock().unwrap();
 
     // 1. Current settings ({} if it doesn't exist). Error if it exists but fails to parse.
-    let mut settings: serde_json::Value = if settings_path.exists() {
-        let data = fs::read_to_string(&settings_path)
-            .map_err(|e| format!("could not read settings.json: {e}"))?;
-        serde_json::from_str(&data).map_err(|_| {
-            "settings.json is not strict JSON (does it have comments?). Configure the statusline manually.".to_string()
-        })?
-    } else {
-        serde_json::json!({})
-    };
+    let mut settings = read_settings_for_install(
+        &settings_path,
+        "settings.json is not strict JSON (does it have comments?). Configure the statusline manually.",
+    )?;
 
     // 2. 0600 backup, WITHOUT overwriting a pre-existing one (caveman pattern).
-    if settings_path.exists() && !backup_path.exists() {
-        copy_private(&settings_path, &backup_path).map_err(|e| format!("backup failed: {e}"))?;
-    }
+    backup_once(&settings_path, &backup_path)?;
 
     // 3. copy the binary to a stable path (D-new-2).
-    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let bin_dir = cfg.join("cc-autobahn");
-    fs::create_dir_all(&bin_dir).map_err(|e| format!("create_dir: {e}"))?;
-    let bin_path = stable_bin_path(&cfg);
-    fs::copy(&exe, &bin_path).map_err(|e| format!("copy bin: {e}"))?;
-    chmod_755(&bin_path);
+    install_stable_binary(&bin_path)?;
 
     // 4. transform settings (pure apply_install) and write the prev-statusline.
     let prev = apply_install(&mut settings, &statusline_command(&cfg));
@@ -193,19 +183,7 @@ pub fn install_sensor() -> Result<(), String> {
     }
 
     // 5. atomic write (tmp+rename, 0600) + re-validation + rollback.
-    write_settings_atomic(&settings_path, &settings.to_string())?;
-    let valid = fs::read_to_string(&settings_path)
-        .ok()
-        .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
-        .is_some();
-    if valid {
-        Ok(())
-    } else {
-        if backup_path.exists() {
-            let _ = fs::rename(&backup_path, &settings_path);
-        }
-        Err("settings invalid after writing; backup has been restored".to_string())
-    }
+    write_settings_with_rollback(&settings_path, &backup_path, &settings)
 }
 
 /// Refreshes the installed statusline binary copy if it's stale (D36): the
@@ -217,33 +195,12 @@ pub fn install_sensor() -> Result<(), String> {
 /// approve twice).
 pub fn refresh_if_stale() {
     std::thread::spawn(|| {
-        if !sensor_status().installed {
-            return; // not installed yet — the consent flow owns the first copy
-        }
+        let installed = sensor_status().installed;
         let Some(cfg) = claude_config_dir() else {
             return;
         };
-        let bin_path = stable_bin_path(&cfg);
-        let Ok(exe) = std::env::current_exe() else {
-            return;
-        };
-        if same_contents(&exe, &bin_path) {
-            return;
-        }
-        if fs::copy(&exe, &bin_path).is_ok() {
-            chmod_755(&bin_path);
-        }
+        refresh_binary_if_stale(installed, stable_bin_path(&cfg));
     });
-}
-
-/// Byte-for-byte comparison — mtime isn't a reliable staleness signal here
-/// (an app bundle replaced on disk can carry an older mtime than the copy
-/// made from a previous, newer run).
-fn same_contents(a: &Path, b: &Path) -> bool {
-    match (fs::read(a), fs::read(b)) {
-        (Ok(x), Ok(y)) => x == y,
-        _ => false,
-    }
 }
 
 /// `#[tauri::command]` Uninstalls: restores prevStatusLine (or removes it).
@@ -251,49 +208,12 @@ fn same_contents(a: &Path, b: &Path) -> bool {
 pub fn uninstall_sensor() -> Result<(), String> {
     let cfg = claude_config_dir().ok_or("could not resolve CLAUDE_CONFIG_DIR")?;
     let settings_path = cfg.join("settings.json");
-    let Some(mut settings) = read_settings() else {
+    let _guard = SETTINGS_WRITE_LOCK.lock().unwrap();
+    let Some(mut settings) = read_settings_value() else {
         return Ok(()); // nothing to undo
     };
     apply_uninstall(&mut settings);
     write_settings_atomic(&settings_path, &settings.to_string())?;
-    Ok(())
-}
-
-/// Writes `bytes` to `path` via atomic tmp+rename with mode 0600.
-fn write_settings_atomic(path: &Path, bytes: &str) -> Result<(), String> {
-    let tmp = path.with_extension("json.tmp");
-    if !write_private(&tmp, bytes.as_bytes()) {
-        return Err("could not write settings.json".to_string());
-    }
-    fs::rename(&tmp, path).map_err(|e| format!("rename settings: {e}"))
-}
-
-#[cfg(unix)]
-fn chmod_755(path: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = fs::metadata(path) {
-        let mut perms = meta.permissions();
-        perms.set_mode(0o755);
-        let _ = fs::set_permissions(path, perms);
-    }
-}
-
-#[cfg(not(unix))]
-fn chmod_755(_path: &Path) {}
-
-#[cfg(unix)]
-fn copy_private(src: &Path, dst: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::copy(src, dst)?;
-    let mut perms = fs::metadata(dst)?.permissions();
-    perms.set_mode(0o600);
-    fs::set_permissions(dst, perms)?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn copy_private(src: &Path, dst: &Path) -> std::io::Result<()> {
-    fs::copy(src, dst)?;
     Ok(())
 }
 

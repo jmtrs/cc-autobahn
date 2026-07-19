@@ -8,6 +8,7 @@ import {
   onInstallSucceeded,
   showEngineOverlay,
 } from "./engine-overlay.js";
+import { onPermissionPending, onPermissionResolved } from "./permission-gate.js";
 import { onBurnTick } from "./speedometer.js";
 import { onBlocksUpdate, onSensorState, onSensorUpdate } from "./trip-computer.js";
 
@@ -38,5 +39,13 @@ export async function wireEngine() {
   listen("sensor-state", (e) => {
     console.info("[sensor] state:", e.payload);
     onSensorState(e.payload);
+  });
+  listen("permission-pending", (e) => {
+    console.info("[permission] pending:", e.payload);
+    onPermissionPending(e.payload);
+  });
+  listen("permission-resolved", () => {
+    console.info("[permission] resolved");
+    onPermissionResolved();
   });
 }

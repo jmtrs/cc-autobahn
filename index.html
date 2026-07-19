@@ -126,12 +126,14 @@
               </div>
             </div>
 
-            <!-- Page 3: MFD settings — front-end only, localStorage.
-                 Two columns (same trick as Page 2's .limits-cols): the window
-                 is 440x150, wide and short, so a single vertical stack ran out
-                 of height once THEME was added below SHOW SCREENS. -->
+            <!-- Page 3: MFD settings — front-end only, localStorage. Three
+                 columns (same trick as Page 2's .limits-cols): the window is
+                 550x150, wide and short, so a single vertical stack (or even
+                 two columns, once PERMISSION SOUND joined THEME/WINDOW/
+                 PERMISSION HOOK in the same column) ran out of height. Split
+                 by topic instead: screens/navigation, appearance, permissions. -->
             <div class="page" data-page="3" id="page-3">
-              <div class="settings-cols">
+              <div class="settings-cols settings-cols-3">
                 <div class="settings-col">
                   <div class="row header-sub"><span class="label">DEFAULT SCREEN</span></div>
                   <!-- Custom dropdown, not a native <select>: WKWebView renders the
@@ -178,6 +180,38 @@
                   <div class="row header-sub"><span class="label">WINDOW</span></div>
                   <button type="button" class="sensor-btn" id="reset-position-btn">Reset position</button>
                 </div>
+
+                <div class="settings-col">
+                  <!-- D42 follow-up: alert sound on the permission gate,
+                       front-end only (permission-sound.js, localStorage) —
+                       independent of whether the hook below is connected.
+                       No separate Enabled/Test controls (D-review): OFF is
+                       just another dropdown entry, and picking any entry
+                       previews it immediately — one action instead of two. -->
+                  <div class="row header-sub"><span class="label">PERMISSION SOUND</span></div>
+                  <div class="vfd-dropdown" id="permission-sound-dropdown">
+                    <button type="button" class="vfd-dropdown-btn" id="permission-sound-btn">
+                      <span id="permission-sound-value">CHIME</span>
+                      <span class="vfd-dropdown-arrow">&#9662;</span>
+                    </button>
+                    <ul class="vfd-dropdown-list" id="permission-sound-list" hidden></ul>
+                  </div>
+                  <!-- Only shown when the CUSTOM entry is active — same
+                       reveal-on-selection trick as #theme-accent-row. -->
+                  <div class="row permission-sound-custom-row" id="permission-sound-custom-row" hidden>
+                    <button type="button" class="sensor-btn ghost" id="permission-sound-file-btn">
+                      Choose file&hellip;
+                    </button>
+                    <span class="permission-sound-filename" id="permission-sound-filename"></span>
+                  </div>
+                  <input type="file" id="permission-sound-file" accept="audio/*" hidden />
+
+                  <!-- D42: opens the opt-in consent overlay for the
+                       PermissionRequest hook (approve/deny CC tool calls
+                       from this window instead of the terminal). -->
+                  <div class="row header-sub"><span class="label">PERMISSION HOOK</span></div>
+                  <button type="button" class="sensor-btn" id="permission-settings-btn">Connect</button>
+                </div>
               </div>
             </div>
           </div>
@@ -209,6 +243,62 @@
                 <button class="sensor-btn ghost" id="sensor-cancel" hidden>Cancel</button>
                 <button class="sensor-btn ghost" id="sensor-disconnect" hidden>Disconnect</button>
                 <button class="sensor-btn" id="sensor-connect">Connect</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Permission hook consent overlay (D42) — opt-in from Settings,
+               unlike the two overlays above this is never auto-shown at
+               startup, since the hook is an optional extra capability. -->
+          <div class="sensor-overlay" id="permission-consent-overlay" hidden>
+            <div class="sensor-card">
+              <div class="sensor-title">PERMISSION HOOK</div>
+              <div class="sensor-body" id="permission-consent-body"></div>
+              <div class="sensor-actions">
+                <button class="sensor-btn ghost" id="permission-consent-cancel" hidden>Cancel</button>
+                <button class="sensor-btn ghost" id="permission-consent-disconnect" hidden>Disconnect</button>
+                <button class="sensor-btn" id="permission-consent-connect">Connect</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Permission gate (D42) — live approve/deny prompt, shown
+               whenever a queued PermissionRequest from any Claude Code
+               session is waiting on a decision. Highest z-index: a session
+               blocked waiting on a human is the most urgent thing the
+               cluster can show. -->
+          <div class="sensor-overlay permission-gate" id="permission-gate" hidden>
+            <div class="sensor-card">
+              <div class="sensor-title">
+                PERMISSION REQUEST
+                <span class="permission-tool" id="permission-tool">—</span>
+                <span class="permission-badge" id="permission-badge" hidden></span>
+                <span class="permission-context" id="permission-context"></span>
+              </div>
+              <div class="sensor-body">
+                <div class="permission-summary" id="permission-summary">—</div>
+                <div class="permission-cwd" id="permission-cwd">—</div>
+              </div>
+              <div class="sensor-actions">
+                <!-- Claude Code has no documented way to tell our hook a
+                     decision was made through some other path (its own
+                     terminal prompt) — this counts down to when the backend
+                     gives up on this entry on its own, so a request that
+                     was actually already resolved elsewhere doesn't look
+                     permanently stuck (D-review). -->
+                <span class="permission-timeout" id="permission-timeout"></span>
+                <button class="sensor-btn ghost" id="permission-deny">Deny</button>
+                <!-- Split button: Approve is the main action; the chevron
+                     (hidden unless the tool has a rule-able field, D42
+                     follow-up) opens a menu with "Always Allow". Same
+                     .vfd-dropdown pattern as the Page-3 dropdowns. -->
+                <div class="vfd-dropdown permission-split" id="permission-split">
+                  <button class="sensor-btn" id="permission-approve">Approve</button>
+                  <button class="sensor-btn permission-chevron" id="permission-chevron" hidden aria-label="More approval options">&#9662;</button>
+                  <ul class="vfd-dropdown-list" id="permission-always-list" hidden>
+                    <li id="permission-approve-always">Always Allow</li>
+                  </ul>
+                </div>
               </div>
             </div>
           </div>

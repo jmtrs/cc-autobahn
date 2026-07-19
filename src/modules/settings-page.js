@@ -6,6 +6,13 @@
 
 import { hintOnHover } from "./header-hint.js";
 import { loadMfdSettings, saveMfdSettings } from "./mfd-settings.js";
+import {
+  BUILTIN_SOUNDS,
+  loadPermissionSoundSettings,
+  MAX_CUSTOM_SOUND_BYTES,
+  previewPermissionSound,
+  savePermissionSoundSettings,
+} from "./permission-sound.js";
 import { applyTheme, initTheme, loadThemeSettings, PRESETS, saveThemeSettings } from "./theme.js";
 
 const PAGE_OPTIONS = [
@@ -182,8 +189,101 @@ function wireThemeSection() {
   paint(settings.themeId);
 }
 
+const SOUND_OPTIONS = [
+  ...Object.entries(BUILTIN_SOUNDS).map(([value, s]) => ({ value, label: s.label })),
+  { value: "custom", label: "CUSTOM" },
+  { value: "none", label: "OFF" },
+];
+
+/** D42 follow-up: alert sound on the permission gate. Same custom-dropdown
+ *  idiom as wireThemeSection. No separate Enabled/Test controls (D-review):
+ *  OFF is just another dropdown entry, and picking any entry previews it
+ *  immediately instead of requiring a second click on a Test button. */
+function wirePermissionSoundSection() {
+  const root = document.getElementById("permission-sound-dropdown");
+  const btn = document.getElementById("permission-sound-btn");
+  const valueEl = document.getElementById("permission-sound-value");
+  const list = document.getElementById("permission-sound-list");
+  const customRow = document.getElementById("permission-sound-custom-row");
+  const fileBtn = document.getElementById("permission-sound-file-btn");
+  const fileInput = document.getElementById("permission-sound-file");
+  const filenameEl = document.getElementById("permission-sound-filename");
+
+  hintOnHover(btn, "Sound played when a permission request arrives");
+  hintOnHover(fileBtn, "Upload your own alert sound");
+
+  list.innerHTML = SOUND_OPTIONS.map((opt) => `<li data-value="${opt.value}">${opt.label}</li>`).join("");
+
+  function paint(soundId) {
+    const opt = SOUND_OPTIONS.find((o) => o.value === soundId) ?? SOUND_OPTIONS[0];
+    valueEl.textContent = opt.label;
+    list.querySelectorAll("li").forEach((li) => {
+      li.classList.toggle("active", li.dataset.value === opt.value);
+    });
+    customRow.hidden = soundId !== "custom";
+  }
+
+  function close() {
+    list.hidden = true;
+    root.classList.remove("open");
+  }
+
+  btn.onclick = (e) => {
+    e.stopPropagation();
+    const wasOpen = !list.hidden;
+    close();
+    if (!wasOpen) {
+      list.hidden = false;
+      root.classList.add("open");
+    }
+  };
+
+  list.querySelectorAll("li").forEach((li) => {
+    li.onclick = () => {
+      const soundId = li.dataset.value;
+      paint(soundId);
+      const settings = savePermissionSoundSettings({ soundId });
+      previewPermissionSound(soundId, settings.customDataUrl);
+      close();
+    };
+  });
+
+  document.addEventListener("click", (e) => {
+    if (!root.contains(e.target)) close();
+  });
+
+  fileBtn.onclick = () => fileInput.click();
+
+  // Kept as a data: URL directly in localStorage (no Tauri fs write) — the
+  // size cap protects the shared origin storage quota (permission-sound.js).
+  // Picking a file selects CUSTOM and previews it right away, same as
+  // picking any other dropdown entry.
+  fileInput.onchange = () => {
+    const file = fileInput.files[0];
+    if (!file) return;
+    if (file.size > MAX_CUSTOM_SOUND_BYTES) {
+      filenameEl.textContent = `too big (max ${Math.round(MAX_CUSTOM_SOUND_BYTES / 1000)}KB)`;
+      fileInput.value = "";
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      savePermissionSoundSettings({ soundId: "custom", customDataUrl: reader.result });
+      filenameEl.textContent = file.name;
+      paint("custom");
+      previewPermissionSound("custom", reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const settings = loadPermissionSoundSettings();
+  paint(settings.soundId);
+  if (settings.soundId === "custom" && settings.customDataUrl) filenameEl.textContent = "custom sound";
+}
+
 export function wireSettingsPage() {
   wireDefaultPageDropdown();
   renderScreenList();
   wireThemeSection();
+  wirePermissionSoundSection();
 }

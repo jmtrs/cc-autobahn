@@ -16,7 +16,8 @@ pub mod install;
 pub mod statusline_bin;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, SystemTime};
 
@@ -78,6 +79,173 @@ pub(crate) fn write_private(path: &std::path::Path, buf: &[u8]) -> bool {
 #[cfg(not(unix))]
 pub(crate) fn write_private(path: &std::path::Path, buf: &[u8]) -> bool {
     fs::write(path, buf).is_ok()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared settings.json install helpers — every self-installer that mutates
+// `${cfg}/settings.json` (this module's own statusLine install, D12, and
+// `permission::install`'s PermissionRequest hook install, D42) needs the
+// exact same backup/atomic-write/rollback safety mechanics. Kept here rather
+// than duplicated per feature, found by code review (D42) after the first
+// two installers turned out byte-for-byte identical on this part.
+// ─────────────────────────────────────────────────────────────────────────────
+
+pub(crate) fn settings_path() -> Option<PathBuf> {
+    Some(claude_config_dir()?.join("settings.json"))
+}
+
+/// Serializes every read-modify-write of a settings JSON file across the
+/// process: `sensor::install`/`permission::install` both target the same
+/// `${cfg}/settings.json` (D42 review fix — two installers racing on the same
+/// file, e.g. approving both self-install prompts back-to-back, could
+/// otherwise drop one's change), and `permission::always_allow` does the same
+/// dance against a per-repo `settings.local.json`. One global lock is
+/// intentional over a per-path registry: these are human-paced actions
+/// (install clicks, approval clicks), never a hot path, so the extra
+/// serialization across unrelated paths costs nothing observable.
+pub(crate) static SETTINGS_WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+/// Step 1 of every self-installer's shared shape: `{}` if `path` doesn't
+/// exist yet, the parsed value if it does, or `msg` as the error if it
+/// exists but isn't strict JSON (Claude Code's own settings.json schema is
+/// Zod-strict — refusing to guess here, unlike overwriting it as if it were
+/// empty, is what keeps a malformed file from silently losing its content).
+pub(crate) fn read_settings_for_install(
+    path: &Path,
+    msg: &str,
+) -> Result<serde_json::Value, String> {
+    if !path.exists() {
+        return Ok(serde_json::json!({}));
+    }
+    let data =
+        fs::read_to_string(path).map_err(|e| format!("could not read {}: {e}", path.display()))?;
+    serde_json::from_str(&data).map_err(|_| msg.to_string())
+}
+
+/// Step 2: non-overwriting 0600 backup of `path` at `backup_path`.
+pub(crate) fn backup_once(path: &Path, backup_path: &Path) -> Result<(), String> {
+    if path.exists() && !backup_path.exists() {
+        copy_private(path, backup_path).map_err(|e| format!("backup failed: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Step 3: copies the running binary to `dst` (a stable path, resolving
+/// Gatekeeper translocation, D-new-2) with 0755 perms.
+pub(crate) fn install_stable_binary(dst: &Path) -> Result<(), String> {
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    if let Some(parent) = dst.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("create_dir: {e}"))?;
+    }
+    fs::copy(&exe, dst).map_err(|e| format!("copy bin: {e}"))?;
+    chmod_755(dst);
+    Ok(())
+}
+
+/// Step 5: atomic write (tmp+rename, 0600) + post-write re-validation, with
+/// rollback to `backup_path` if the write somehow left invalid JSON behind.
+pub(crate) fn write_settings_with_rollback(
+    settings_path: &Path,
+    backup_path: &Path,
+    settings: &serde_json::Value,
+) -> Result<(), String> {
+    write_settings_atomic(settings_path, &settings.to_string())?;
+    let valid = fs::read_to_string(settings_path)
+        .ok()
+        .and_then(|d| serde_json::from_str::<serde_json::Value>(&d).ok())
+        .is_some();
+    if valid {
+        Ok(())
+    } else {
+        if backup_path.exists() {
+            let _ = fs::rename(backup_path, settings_path);
+        }
+        Err("settings invalid after writing; backup has been restored".to_string())
+    }
+}
+
+/// Shared body of every self-installer's silent binary self-refresh (D36):
+/// checked at every GUI startup on a dedicated thread, replaces the stable
+/// binary copy only when it differs from the running exe. No settings.json
+/// write, no re-consent — `installed`/`stable_bin_path` are the only bits
+/// that differ per feature.
+pub(crate) fn refresh_binary_if_stale(installed: bool, stable_bin_path: PathBuf) {
+    if !installed {
+        return; // not installed yet — the consent flow owns the first copy
+    }
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
+    if same_contents(&exe, &stable_bin_path) {
+        return;
+    }
+    if fs::copy(&exe, &stable_bin_path).is_ok() {
+        chmod_755(&stable_bin_path);
+    }
+}
+
+/// Reads and parses a settings JSON file at an arbitrary path as a `Value`.
+/// `None` if it doesn't exist or fails to parse. Also backs
+/// `permission::always_allow`'s per-repo `.claude/settings.local.json`
+/// (D42) — not just `${cfg}/settings.json` — hence taking a path instead of
+/// being hardcoded like `read_settings_value` below.
+pub(crate) fn read_settings_value_at(path: &std::path::Path) -> Option<serde_json::Value> {
+    let data = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&data).ok()
+}
+
+/// Reads and parses `${cfg}/settings.json` specifically. `None` if it
+/// doesn't exist or fails to parse.
+pub(crate) fn read_settings_value() -> Option<serde_json::Value> {
+    read_settings_value_at(&settings_path()?)
+}
+
+/// Writes `bytes` to `path` via atomic tmp+rename with mode 0600.
+pub(crate) fn write_settings_atomic(path: &std::path::Path, bytes: &str) -> Result<(), String> {
+    let tmp = path.with_extension("json.tmp");
+    if !write_private(&tmp, bytes.as_bytes()) {
+        return Err("could not write settings.json".to_string());
+    }
+    fs::rename(&tmp, path).map_err(|e| format!("rename settings: {e}"))
+}
+
+#[cfg(unix)]
+pub(crate) fn chmod_755(path: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+    if let Ok(meta) = fs::metadata(path) {
+        let mut perms = meta.permissions();
+        perms.set_mode(0o755);
+        let _ = fs::set_permissions(path, perms);
+    }
+}
+
+#[cfg(not(unix))]
+pub(crate) fn chmod_755(_path: &std::path::Path) {}
+
+#[cfg(unix)]
+pub(crate) fn copy_private(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::copy(src, dst)?;
+    let mut perms = fs::metadata(dst)?.permissions();
+    perms.set_mode(0o600);
+    fs::set_permissions(dst, perms)?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub(crate) fn copy_private(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    fs::copy(src, dst)?;
+    Ok(())
+}
+
+/// Byte-for-byte comparison — mtime isn't a reliable staleness signal here
+/// (an app bundle replaced on disk can carry an older mtime than the copy
+/// made from a previous, newer run).
+pub(crate) fn same_contents(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (fs::read(a), fs::read(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

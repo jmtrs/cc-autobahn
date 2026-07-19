@@ -1,11 +1,15 @@
 // cc-autobahn — Tauri shell entrypoint.
 //
-// Dual binary:
+// Triple binary:
 //   · `cc-autobahn statusline` → Claude Code statusLine mode (D12): reads the
 //     session JSON from stdin, re-emits the user's previous line (chain), and
 //     dumps the JSON to a file that the window tails. Resolved BEFORE
 //     building the webview → no GUI, fast exit.
-//   · no args → GUI mode: menu-bar icon (D24) + anchored panel + three
+//   · `cc-autobahn permission-hook` → Claude Code PermissionRequest hook mode
+//     (D42): reads the request from stdin, blocks on the GUI's socket for a
+//     human decision, prints the decision (or nothing, fail-open). Same
+//     no-GUI, fast-exit shape as statusline mode.
+//   · no args → GUI mode: menu-bar icon (D24) + anchored panel + four
 //     sensors on dedicated threads.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -14,6 +18,7 @@ mod engine;
 mod env_lock;
 mod path_state;
 mod pathfix;
+mod permission;
 mod sensor;
 mod tray;
 mod tray_icon;
@@ -29,9 +34,16 @@ use window::PinnedState;
 fn main() {
     // Statusline mode: decided before touching Tauri (no webview, no window).
     let mut args = std::env::args().skip(1);
-    if args.next().as_deref() == Some("statusline") {
-        sensor::run_statusline();
-        return;
+    match args.next().as_deref() {
+        Some("statusline") => {
+            sensor::run_statusline();
+            return;
+        }
+        Some("permission-hook") => {
+            permission::hook_bin::run_permission_hook();
+            return;
+        }
+        _ => {}
     }
 
     tauri::Builder::default()
@@ -43,6 +55,14 @@ fn main() {
             sensor::install::sensor_preview_install,
             sensor::install::install_sensor,
             sensor::install::uninstall_sensor,
+            permission::permission_approve,
+            permission::permission_approve_always,
+            permission::permission_deny,
+            permission::permission_pending_snapshot,
+            permission::install::permission_status,
+            permission::install::permission_preview_install,
+            permission::install::install_permission_hook,
+            permission::install::uninstall_permission_hook,
             window::set_pinned,
             window::reset_position,
             tray_icon::set_tray_alert,
@@ -52,11 +72,12 @@ fn main() {
         .setup(|app| {
             pathfix::apply(&app.handle().clone());
             sensor::install::refresh_if_stale();
+            permission::install::refresh_if_stale();
 
             let handle = app.handle().clone();
             engine::start(handle.clone());
             burn::start(handle.clone());
-            sensor::start(handle);
+            sensor::start(handle.clone());
 
             // No icon in Dock/Cmd+Tab (D24): lives only in the menu bar.
             #[cfg(target_os = "macos")]
@@ -77,6 +98,14 @@ fn main() {
             let (last_blur_hide, auto_reposition_guard) =
                 window::wire(app, &win, position_state.clone())?;
             app.manage(auto_reposition_guard.clone());
+
+            // Started only after PositionState/AutoRepositionGuard are
+            // managed (D42 review fix): its socket listener can accept a
+            // connection and call `window::show_for_permission` almost
+            // immediately, and that function's `try_state` lookups silently
+            // no-op if either isn't managed yet.
+            permission::start(handle);
+
             let tray_handle =
                 tray::build(app, last_blur_hide, auto_reposition_guard, position_state)?;
 

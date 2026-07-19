@@ -51,6 +51,7 @@ pub enum ProgressSource {
 struct TrayState {
     pct_remaining: f64,
     alert: bool,
+    pending_permission: bool,
     official_ever_active: bool,
 }
 
@@ -60,6 +61,7 @@ fn state() -> &'static Mutex<TrayState> {
         Mutex::new(TrayState {
             pct_remaining: 100.0,
             alert: false,
+            pending_permission: false,
             official_ever_active: false,
         })
     })
@@ -78,22 +80,23 @@ static BLINK_THREAD_STARTED: AtomicBool = AtomicBool::new(false);
 /// `set_alert(app, false)` restores it.
 pub fn set_progress(app: &AppHandle, pct_remaining: f64, source: ProgressSource) {
     let pct = pct_remaining.clamp(0.0, 100.0);
-    let (alert, should_paint) = {
+    let (blocked, should_paint) = {
         let mut s = state().lock().unwrap();
-        match source {
+        let should_paint = match source {
             ProgressSource::Official => {
                 s.official_ever_active = true;
                 s.pct_remaining = pct;
-                (s.alert, true)
+                true
             }
-            ProgressSource::Estimated if s.official_ever_active => (s.alert, false),
+            ProgressSource::Estimated if s.official_ever_active => false,
             ProgressSource::Estimated => {
                 s.pct_remaining = pct;
-                (s.alert, true)
+                true
             }
-        }
+        };
+        (s.alert || s.pending_permission, should_paint)
     };
-    if should_paint && !alert {
+    if should_paint && !blocked {
         paint(app, render(pct));
     }
 }
@@ -112,20 +115,46 @@ pub fn set_tray_alert(app: AppHandle, active: bool) {
 /// (redline.js) don't need to track their own edge-detection just to avoid
 /// spamming this.
 pub fn set_alert(app: &AppHandle, active: bool) {
-    let (changed, pct) = {
+    let (changed, pct, still_blocked) = {
         let mut s = state().lock().unwrap();
         let changed = s.alert != active;
         s.alert = active;
-        (changed, s.pct_remaining)
+        (changed, s.pct_remaining, s.pending_permission)
     };
     if !changed {
         return;
     }
     if active {
         ensure_blink_thread(app.clone());
-    } else {
+    } else if !still_blocked {
         // Restore the accurate ring immediately instead of waiting for the
-        // blink thread to notice on its next poll.
+        // blink thread to notice on its next poll — unless a permission
+        // request is still pending, in which case that keeps owning the icon.
+        paint(app, render(pct));
+    }
+}
+
+/// Mirrors [`set_alert`]'s idempotent shape for a pending `PermissionRequest`
+/// (D42) — kept as its own field rather than reusing `alert`, since the two
+/// urgencies mean different things to a user glancing at the menu bar
+/// (PACE/AUTO budget pressure vs "a session is blocked waiting on you"),
+/// even though both share the same blink treatment. Called directly from
+/// `permission::mod.rs`, not via IPC — nothing in the frontend drives this
+/// (unlike `set_tray_alert`, which mirrors `redline.js`'s own threshold
+/// logic), the backend already knows the queue state authoritatively.
+pub fn set_permission_pending(app: &AppHandle, active: bool) {
+    let (changed, pct, still_blocked) = {
+        let mut s = state().lock().unwrap();
+        let changed = s.pending_permission != active;
+        s.pending_permission = active;
+        (changed, s.pct_remaining, s.alert)
+    };
+    if !changed {
+        return;
+    }
+    if active {
+        ensure_blink_thread(app.clone());
+    } else if !still_blocked {
         paint(app, render(pct));
     }
 }
@@ -141,18 +170,27 @@ fn ensure_blink_thread(app: AppHandle) {
         return;
     }
     thread::spawn(move || loop {
-        if !state().lock().unwrap().alert {
+        if !is_blinking() {
             thread::sleep(Duration::from_millis(200));
             continue;
         }
         paint(&app, render_uniform(ARC_ALPHA));
         thread::sleep(Duration::from_millis(ALERT_BLINK_MS));
-        if !state().lock().unwrap().alert {
+        if !is_blinking() {
             continue;
         }
         paint(&app, render_uniform(TRACK_ALPHA));
         thread::sleep(Duration::from_millis(ALERT_BLINK_MS));
     });
+}
+
+/// Either urgency (`alert` or `pending_permission`) keeps the blink thread
+/// running — the ring doesn't need to visually distinguish which reason to a
+/// user glancing at the menu bar, the gate panel is where that distinction
+/// actually matters.
+fn is_blinking() -> bool {
+    let s = state().lock().unwrap();
+    s.alert || s.pending_permission
 }
 
 fn paint(app: &AppHandle, buf: Vec<u8>) {
