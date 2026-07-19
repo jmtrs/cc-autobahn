@@ -77,8 +77,9 @@ Responsible for **all I/O**. Never blocks the UI.
   detects on the machine), fetched **on demand** (D33's 4th cadence class,
   alongside D13's three) — only when the History/Limits MFD page opens, not
   on a timer, cached client-side (`history-data.js`) for a few minutes.
-- **Window / tray**: split by concern — `window.rs` owns the panel (PIN state,
-  hide-on-blur, positioning under the icon), `tray.rs` owns the menu-bar icon
+- **Window / tray**: split by concern — `window.rs` owns the native macOS
+  `NSPanel` conversion/fullscreen-Space behavior, PIN state, hide-on-blur, and
+  positioning under the icon; `tray.rs` owns the menu-bar icon
   (`TrayIconBuilder`, no new plugin, D24) + menu + click handler; `main.rs` just
   wires the two together in `.setup()`. No Dock or Cmd+Tab
   (`ActivationPolicy::Accessory`). The icon itself **is not a static PNG**: it's

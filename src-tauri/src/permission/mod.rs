@@ -148,6 +148,12 @@ struct PendingSlot {
 
 type PendingQueue = Arc<Mutex<VecDeque<PendingSlot>>>;
 
+/// Serializes queue snapshots with their tray/frontend side effects. Queue
+/// mutations release `PendingQueue` before calling [`emit_state`], so without
+/// this a delayed `resolved` emission can overtake a newer `pending` emission
+/// and leave the UI hidden while the queue is non-empty.
+type PermissionEmissionLock = Arc<Mutex<()>>;
+
 /// Payload of the `permission-pending` event — always the current head of the
 /// queue plus a count, whether this arrival became the head or just landed
 /// behind an existing one (the frontend re-renders from the payload, it
@@ -262,6 +268,8 @@ fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
 /// the frontend event and the tray badge in sync, called after every queue
 /// mutation (push, approve/deny, timeout-drop).
 fn emit_state(app: &AppHandle, queue: &PendingQueue) {
+    let emission_lock = app.state::<PermissionEmissionLock>();
+    let _emission_guard = emission_lock.lock().unwrap();
     let payload = {
         let q = queue.lock().unwrap();
         q.front()
@@ -377,6 +385,7 @@ fn resolve(app: &AppHandle, id: &str, decision: Decision) -> Result<(), String> 
 pub fn start(app: AppHandle) {
     let queue: PendingQueue = Arc::new(Mutex::new(VecDeque::new()));
     app.manage(queue.clone());
+    app.manage::<PermissionEmissionLock>(Arc::new(Mutex::new(())));
     app.manage(always_allow::new_set());
     spawn_listener(app, queue);
 }
@@ -389,12 +398,18 @@ fn spawn_listener(app: AppHandle, queue: PendingQueue) {
             return;
         };
         let _ = std::fs::create_dir_all(&parent);
-        let _ = std::fs::remove_file(&path); // clear a stale socket left by a crashed run
-
-        let Ok(listener) = UnixListener::bind(&path) else {
-            return; // bind failed (e.g. permissions) — feature silently unavailable, hook fails open
+        let listener = match bind_listener(&path) {
+            Ok(Some(listener)) => listener,
+            // Another live cc-autobahn owns the socket. Never unlink it: doing
+            // so makes the existing listener unreachable and steals all new
+            // permission requests without stopping the old process.
+            Ok(None) | Err(_) => return,
         };
-        set_socket_private(&path);
+        if set_socket_private(&path).is_err() {
+            drop(listener);
+            let _ = std::fs::remove_file(&path);
+            return; // fail closed locally rather than expose an injectable socket
+        }
 
         for conn in listener.incoming() {
             match conn {
@@ -412,17 +427,40 @@ fn spawn_listener(app: AppHandle, queue: PendingQueue) {
     });
 }
 
+/// Binds a fresh socket, replaces only a provably stale socket, and leaves a
+/// live listener untouched. `Ok(None)` means another process answered the
+/// liveness probe and remains the owner.
+#[cfg(unix)]
+fn bind_listener(path: &std::path::Path) -> std::io::Result<Option<UnixListener>> {
+    use std::os::unix::fs::FileTypeExt;
+
+    match UnixListener::bind(path) {
+        Ok(listener) => Ok(Some(listener)),
+        Err(bind_error) if bind_error.kind() == std::io::ErrorKind::AddrInUse => {
+            if UnixStream::connect(path).is_ok() {
+                return Ok(None);
+            }
+            // Do not delete an unexpected regular file/symlink at our known
+            // path. Only a dead Unix socket is eligible for stale cleanup.
+            if !std::fs::symlink_metadata(path)?.file_type().is_socket() {
+                return Err(bind_error);
+            }
+            std::fs::remove_file(path)?;
+            UnixListener::bind(path).map(Some)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 #[cfg(not(unix))]
 fn spawn_listener(_app: AppHandle, _queue: PendingQueue) {}
 
 #[cfg(unix)]
-fn set_socket_private(path: &std::path::Path) {
+fn set_socket_private(path: &std::path::Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = std::fs::metadata(path) {
-        let mut perms = meta.permissions();
-        perms.set_mode(0o600);
-        let _ = std::fs::set_permissions(path, perms);
-    }
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_mode(0o600);
+    std::fs::set_permissions(path, perms)
 }
 
 /// One connection = one hook invocation = one permission request. Reads the
@@ -703,5 +741,51 @@ mod tests {
     fn cwd_project_edge_cases() {
         assert_eq!(cwd_project(""), "?");
         assert_eq!(cwd_project("/"), "/");
+    }
+
+    #[cfg(unix)]
+    fn test_socket_path(case: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        PathBuf::from("/tmp").join(format!("cca-{case}-{}-{unique}.sock", std::process::id()))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bind_listener_keeps_live_owner() {
+        let path = test_socket_path("live");
+        let first = bind_listener(&path).unwrap().unwrap();
+        assert!(
+            bind_listener(&path).unwrap().is_none(),
+            "second instance must not unlink a live listener"
+        );
+        drop(first);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bind_listener_replaces_stale_socket() {
+        let path = test_socket_path("stale");
+        let stale = UnixListener::bind(&path).unwrap();
+        drop(stale); // leaves a socket inode with no live listener
+
+        let replacement = bind_listener(&path).unwrap();
+        assert!(replacement.is_some());
+        drop(replacement);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bind_listener_never_deletes_regular_file() {
+        let path = test_socket_path("regular");
+        std::fs::write(&path, b"keep me").unwrap();
+
+        assert!(bind_listener(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"keep me");
+        let _ = std::fs::remove_file(path);
     }
 }

@@ -130,19 +130,17 @@ pub(crate) fn remember(
     cwd: &str,
     matched: &str,
 ) -> Result<(), String> {
-    // Belt-and-suspenders for Bash too: also remembered in-memory in case
-    // the on-disk write below races Claude Code's own settings reload, or a
-    // repeat call arrives before CC has picked up the file change.
-    {
+    let remember_in_memory = || {
         let set = app.state::<AlwaysAllowSet>();
         set.lock().unwrap().insert((
             session_id.to_string(),
             tool_name.to_string(),
             matched.to_string(),
         ));
-    }
+    };
 
     if tool_name != "Bash" {
+        remember_in_memory();
         return Ok(()); // Read/Edit/Write: in-memory only, matches CC's own "until session end"
     }
 
@@ -170,7 +168,13 @@ pub(crate) fn remember(
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create_dir {}: {e}", parent.display()))?;
     }
-    write_settings_atomic(&path, &settings.to_string())
+    write_settings_atomic(&path, &settings.to_string())?;
+
+    // Belt-and-suspenders while Claude Code reloads the persisted rule. This
+    // happens only AFTER a successful write: a failed Always Allow must never
+    // leave an invisible in-memory auto-approval active for future commands.
+    remember_in_memory();
+    Ok(())
 }
 
 #[cfg(test)]

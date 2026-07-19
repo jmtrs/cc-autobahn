@@ -21,7 +21,7 @@ serde_json = "1.0.150"
 # our own code to clip the NSWindow (CALayer.cornerRadius). No third-party
 # plugin or legacy cocoa/objc stack (D16 spirit: minimal, already compiled).
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSView", "NSResponder", "NSScreen"] }
+objc2-app-kit = { version = "0.3", features = ["NSPanel", "NSWindow", "NSView", "NSResponder", "NSScreen"] }
 objc2-quartz-core = { version = "0.3", features = ["CALayer"] }
 # Native panel placement (tao multi-monitor workaround, see window.rs): NSPoint
 # type + MainThreadMarker. Both are already transitive deps via objc2-app-kit.

@@ -103,6 +103,14 @@ async function resolve(command) {
   try {
     await gateInvoke(command, { id });
   } catch (e) {
+    // The invoke can fail before the backend sees it (IPC/runtime error). Keep
+    // the current card actionable instead of leaving visible buttons wired to
+    // a null id forever. A newer pending event wins and must not be overwritten.
+    if (currentId === null) {
+      currentId = id;
+      clearInterval(timeoutTimer);
+      document.getElementById("permission-timeout").textContent = "action failed — retry";
+    }
     console.error(`[permission] ${command}:`, e);
   }
 }

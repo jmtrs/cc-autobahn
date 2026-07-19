@@ -41,18 +41,19 @@
   padding: 0;
   box-sizing: border-box;
   user-select: none;
-  /* Native cursor hidden everywhere — cursor.js renders our own .fake-cursor
-     element instead, given a z-index below .screen::after's scanline grid
-     so it reads as tucked inside the display glass, not floating above the
-     whole window like a native OS cursor always does. Set on `*` rather
-     than left to inherit from html/body: WebKit's UA stylesheet gives
-     <button>/<input>/<select> their own explicit cursor, which inheritance
-     alone can't beat — an explicit author rule on the element itself is
-     the only thing that outranks it. No inheritance hazard this time
-     (unlike the old per-state cursor bug): every element gets the exact
-     same value, `none`, with a single deliberate exception below for
-     in-place nameplate editing. */
-  cursor: none;
+  /* cursor.js renders the visible .fake-cursor below the scanline grid. Use
+     a REAL transparent native cursor underneath it, not `cursor:none`:
+     WebKit implements `none` through AppKit's global cursor hide/unhide state,
+     and an NSPanel can disappear before WebKit receives mouseExited, leaving
+     the cursor hidden after it has crossed into another app. A transparent
+     cursor still participates in AppKit cursor-rect switching, so the next
+     window restores its normal cursor without any hide-count bookkeeping.
+     Keep this explicit on `*` because WebKit's UA stylesheet assigns native
+     cursors directly to form controls. */
+  cursor:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1' height='1' viewBox='0 0 1 1'%3E%3C/svg%3E")
+      0 0,
+    default;
 }
 
 html,

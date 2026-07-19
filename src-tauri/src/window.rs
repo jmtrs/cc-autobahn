@@ -152,8 +152,32 @@ pub fn show_for_permission(app: &AppHandle) {
             position_under_tray(&window, &rect, &auto_guard);
         }
     }
-    let _ = window.show();
-    let _ = window.set_focus();
+    let _ = show_panel(&window);
+}
+
+/// Shows the cluster as a native panel. `orderFrontRegardless` is essential
+/// on macOS: a non-activating NSPanel can become key over another app's
+/// fullscreen Space without trying (and failing) to activate this accessory
+/// application first.
+pub fn show_panel(window: &WebviewWindow) -> tauri::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let window = window.clone();
+        window.clone().run_on_main_thread(move || {
+            let ns_window = window
+                .ns_window()
+                .expect("cc-autobahn: panel lost its native NSWindow");
+            let panel: &objc2_app_kit::NSPanel = unsafe { &*ns_window.cast() };
+            panel.orderFrontRegardless();
+            panel.makeKeyWindow();
+        })
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        window.show()?;
+        window.set_focus()
+    }
 }
 
 /// Locks a mutex recovering from poison (a prior panic while held) instead of
@@ -180,6 +204,8 @@ pub fn wire(
     // The NSWindow is clipped at the CALayer level, which antialiases correctly.
     #[cfg(target_os = "macos")]
     {
+        configure_fullscreen_panel(window)?;
+
         let ns_window: &objc2_app_kit::NSWindow = unsafe { &*window.ns_window()?.cast() };
         if let Some(content_view) = ns_window.contentView() {
             content_view.setWantsLayer(true);
@@ -235,6 +261,92 @@ pub fn wire(
     });
 
     Ok((last_blur_hide, auto_reposition_guard))
+}
+
+/// Swizzles tao's `TaoWindow` into a real `NSPanel` subclass and applies the
+/// AppKit contract required for an accessory window to join native fullscreen
+/// Spaces. Changing only `NSWindow.collectionBehavior` is insufficient on the
+/// affected macOS versions (D43); the runtime class is the material difference.
+#[cfg(target_os = "macos")]
+fn configure_fullscreen_panel(window: &WebviewWindow) -> tauri::Result<()> {
+    use std::ffi::c_void;
+    use std::sync::OnceLock;
+
+    use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+    use objc2::{sel, ClassType};
+    use objc2_app_kit::{
+        NSPanel, NSScreenSaverWindowLevel, NSWindowCollectionBehavior, NSWindowStyleMask,
+    };
+
+    // A borderless NSPanel normally refuses key status. The override preserves
+    // the existing clickable/keyboard-capable cluster behavior while the
+    // NonactivatingPanel style keeps the fullscreen application frontmost.
+    extern "C-unwind" fn can_become_key_window(_: &AnyObject, _: Sel) -> Bool {
+        Bool::YES
+    }
+
+    fn panel_class() -> &'static AnyClass {
+        static CLASS: OnceLock<&'static AnyClass> = OnceLock::new();
+        CLASS.get_or_init(|| {
+            let name = c"CcAutobahnPanel";
+            if let Some(existing) = AnyClass::get(name) {
+                return existing;
+            }
+            let mut builder = ClassBuilder::new(name, NSPanel::class())
+                .expect("cc-autobahn: failed to create NSPanel subclass");
+            unsafe {
+                builder.add_method(
+                    sel!(canBecomeKeyWindow),
+                    can_become_key_window as extern "C-unwind" fn(_, _) -> _,
+                );
+            }
+            builder.register()
+        })
+    }
+
+    unsafe extern "C" {
+        fn object_setClass(object: *mut c_void, class: *const AnyClass) -> *const AnyClass;
+    }
+
+    let raw = window.ns_window()?;
+    let object: &AnyObject = unsafe { &*raw.cast() };
+    let target = panel_class();
+    let current = object.class();
+
+    if current != target {
+        // TaoWindow carries one small `focusable` ivar, so its allocation is
+        // at least as large as our ivar-free NSPanel subclass. Refuse the swap
+        // if a future tao/AppKit change invalidates that safety condition.
+        assert!(
+            current.instance_size() >= target.instance_size(),
+            "cannot convert {} ({} bytes) to {} ({} bytes)",
+            current.name().to_string_lossy(),
+            current.instance_size(),
+            target.name().to_string_lossy(),
+            target.instance_size()
+        );
+        let previous = unsafe { object_setClass(raw, target) };
+        assert_eq!(
+            previous, current as *const AnyClass,
+            "NSPanel conversion raced with another Objective-C class change"
+        );
+    }
+
+    let panel: &NSPanel = unsafe { &*raw.cast() };
+    panel.setStyleMask(NSWindowStyleMask::NonactivatingPanel);
+    panel.setFloatingPanel(true);
+    panel.setHidesOnDeactivate(false);
+    panel.setBecomesKeyOnlyIfNeeded(false);
+    panel.setCollectionBehavior(
+        NSWindowCollectionBehavior::CanJoinAllSpaces
+            | NSWindowCollectionBehavior::FullScreenAuxiliary,
+    );
+    // The screen-saver level is the lowest level consistently reported above
+    // native fullscreen content on current macOS; unlike the discarded
+    // maximumWindow experiment it does not outrank the highest system UI.
+    panel.setLevel(NSScreenSaverWindowLevel);
+
+    Ok(())
 }
 
 /// Anchors the panel right below the tray icon, centered horizontally and

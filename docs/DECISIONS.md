@@ -1237,22 +1237,27 @@ fallback that picks up an in-flight decision instead of discarding it. (6)
 the same finding) — hoisted into `sensor/mod.rs` alongside the already-shared
 `claude_config_dir`/`write_private`, both installers now import them.
 
-Two findings were investigated and NOT fixed, as documented tradeoffs: no
-app-level single-instance lock exists anywhere in cc-autobahn already (a
-second launch can steal the socket file from a running instance) — a
-pre-existing, app-wide gap this feature merely inherits, disproportionate to
-fix as part of this change. And `prompt_id` is genuinely absent from Claude
+One finding remains a documented tradeoff: no app-level single-instance lock
+exists anywhere in cc-autobahn. The permission listener now probes an
+existing socket and leaves a live owner untouched (replacing only a stale Unix
+socket), so a second launch can no longer steal all new permission requests;
+however, requests still belong to the first running UI. A full app-wide
+single-instance policy remains separate scope. `prompt_id` is genuinely absent from Claude
 Code's hook payload before the first user prompt in a session (confirmed
 against the official hooks doc, not the review's own — since it's a real
 field/event, unlike what one reviewer initially claimed) — the one hook
 invocation that could hit this fails open exactly like a closed GUI would,
 which is already the correct, safe default.
 
-**Verified**: `cargo test` 42/42 (4 new, pure `apply_install`/`apply_uninstall`
-transformations — empty settings, preserving unrelated hooks, idempotent
-reinstall, no-op uninstall), `cargo clippy` clean.
+**2026-07-19 notification review**: serialized queue snapshot/emission side
+effects so an older `resolved` event cannot overtake a newer `pending` event;
+made socket mode 0600 mandatory; protected live sockets and unexpected regular
+files; restored frontend retry state after failed IPC; and delayed Bash's
+in-memory Always Allow entry until its settings write succeeds. Verified with
+59/59 Rust tests (including live/stale/non-socket ownership), clean Clippy,
+and a production Vite build.
 
-## D43 — Panel over a fullscreen app's Space: investigated, NOT fixed (reverted)
+## D43 — Native NSPanel over a fullscreen app's Space
 
 **Bug**: the panel doesn't show up while another app is in fullscreen. On
 macOS a fullscreen app runs in its own dedicated Mission Control Space; a
@@ -1261,8 +1266,8 @@ normal `NSWindow` only ever renders in the Space it was created on.
 (`NSFloatingWindowLevel`) — it says nothing about which Space the window is
 allowed to appear in.
 
-**This is documented as an open, unsolved problem, not a fix** — several
-real attempts were made and disproven on the user's actual machine (a
+**Historical investigation** — several flag/level-only attempts were made
+and disproven on the user's actual machine (a
 2-monitor Sonoma+ setup), each confirmed with on-device debug logging, not
 just a clean compile:
 
@@ -1296,16 +1301,28 @@ pumped for 200ms. Whatever is preventing this specific accessory app from
 becoming the active app during another app's native fullscreen wasn't
 identified; it may be a real, mostly-undocumented macOS restriction, or
 something specific to how Tauri/tao/WKWebView's window differs from a bare
-`NSWindow` (every found *working* third-party example uses `NSPanel` with
-`isFloatingPanel = true`, which tao's window construction doesn't set and
-isn't easily reachable through Tauri's API — that's the next thing to try
-if this is revisited, at the cost of a much bigger lift than a flag tweak).
+`NSWindow`. Every found *working* third-party example used `NSPanel` with
+`isFloatingPanel = true`; that observation led to the resolution below.
 
-**Decision**: stopped at the user's request after this investigation.
-**All changes from this investigation were reverted** — `window::wire` and
-`window::position_under_tray` are back to their pre-D43 state, no
-`collectionBehavior`/`level`/`styleMask` overrides, no debug logging. Kept
-reverted rather than left half-working because the higher `level` values
-tried (especially `CGWindowLevelForKey(.maximumWindow)`) render *above*
-system UI like the force-quit dialog even in the common non-fullscreen case
-— a real downside with zero confirmed upside once every attempt failed.
+**Resolution (2026-07-19)**: the missing distinction really was the runtime
+window class. `window::wire` now swizzles tao's `TaoWindow` allocation into an
+ivar-free `NSPanel` subclass with `canBecomeKeyWindow = YES`, then configures:
+
+- `NonactivatingPanel` style, so the fullscreen app stays frontmost;
+- `isFloatingPanel = true` and `hidesOnDeactivate = false`;
+- `CanJoinAllSpaces | FullScreenAuxiliary` collection behavior;
+- `NSScreenSaverWindowLevel` (1000), high enough for native fullscreen but
+  not the dangerous `maximumWindow` level from the reverted experiment.
+
+Both tray clicks and permission-request auto-open use native
+`orderFrontRegardless` + `makeKeyWindow`. The latter is dispatched onto the
+AppKit main thread: the first end-to-end attempt exposed that the permission
+socket calls `show_for_permission` from a worker thread, where direct AppKit
+window ordering aborts the process.
+
+**Verified on-device**: a temporary independent AppKit process entered native
+fullscreen, then the real permission-hook path opened cc-autobahn. The hook
+remained blocked awaiting a decision and `CGWindowListCopyWindowInfo` with
+`optionOnScreenOnly` reported the cc-autobahn window in that active fullscreen
+Space at layer 1000 with its expected 550x150 bounds. `cargo test` 56/56 and
+`cargo clippy --all-targets -- -D warnings` clean.

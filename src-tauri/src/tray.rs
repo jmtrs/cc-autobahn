@@ -7,7 +7,9 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::Manager;
 
-use crate::window::{position_at, position_under_tray, AutoRepositionGuard, PositionState};
+use crate::window::{
+    position_at, position_under_tray, show_panel, AutoRepositionGuard, PositionState,
+};
 
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon-template.png");
 // Clicking the icon to *close* the panel first triggers the blur (which
@@ -85,8 +87,7 @@ pub fn build(
                 } else {
                     position_under_tray(&window, &rect, &auto_reposition_guard);
                 }
-                let _ = window.show();
-                let _ = window.set_focus();
+                let _ = show_panel(&window);
             }
         })
         .build(app)
