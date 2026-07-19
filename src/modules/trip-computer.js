@@ -7,6 +7,7 @@ import { formatDurationMs, formatHMin, formatModelCode, formatTokens } from "./f
 import { renderFooterMetric } from "./footer-metric.js";
 import { hintOnHover, setHeaderHint } from "./header-hint.js";
 import { claudeState as state } from "./telemetry-state.js";
+import { loadGlobalSetting, saveGlobalSetting } from "./app-settings.js";
 
 export const SEGMENT_COUNT = 12;
 const WINDOW_MIN = 300; // 5h billing window, in minutes
@@ -25,19 +26,14 @@ const NAMEPLATES = {
 // Per-slot hover labels for the gear column (wireTripComputerHints) — plain
 // model names, "custom" resolved dynamically at hover time instead (varies).
 const GEAR_LABELS = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable" };
-const NAMEPLATE_STORAGE_KEY = "cc-autobahn.nameplates";
 let currentGearHit = null; // which model key the visible nameplate belongs to, for saving edits
 
 function loadNameplateOverrides() {
-  try {
-    return JSON.parse(localStorage.getItem(NAMEPLATE_STORAGE_KEY)) || {};
-  } catch {
-    return {};
-  }
+  return loadGlobalSetting("nameplates");
 }
 
 function getNameplate(hit) {
-  return loadNameplateOverrides()[hit] || NAMEPLATES[hit];
+  return loadNameplateOverrides()[`claude:${hit}`] || NAMEPLATES[hit];
 }
 
 /** Build the autonomie segment bar (fuel-gauge style). */
@@ -143,11 +139,11 @@ export function wireNameplateEdit() {
     const overrides = loadNameplateOverrides();
     const value = el.textContent.trim().toUpperCase();
     if (!value || value === NAMEPLATES[currentGearHit]) {
-      delete overrides[currentGearHit];
+      delete overrides[`claude:${currentGearHit}`];
     } else {
-      overrides[currentGearHit] = value;
+      overrides[`claude:${currentGearHit}`] = value;
     }
-    localStorage.setItem(NAMEPLATE_STORAGE_KEY, JSON.stringify(overrides));
+    saveGlobalSetting("nameplates", overrides);
     el.textContent = getNameplate(currentGearHit);
   };
   el.onblur = commit;

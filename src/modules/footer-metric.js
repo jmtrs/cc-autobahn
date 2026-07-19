@@ -11,6 +11,7 @@ import { formatHMin } from "./format.js";
 import { hintOnHover } from "./header-hint.js";
 import { updateRedline } from "./redline.js";
 import { claudeState as state } from "./telemetry-state.js";
+import { loadGlobalSetting, saveGlobalSetting } from "./app-settings.js";
 
 const PACE_WINDOW_MS = 5 * 60 * 1000; // recent window for PACE
 const PACE_MIN_BLOCK_ELAPSED_MIN = 1; // minimum block elapsed before trusting blockAvg
@@ -18,10 +19,7 @@ const PACE_MIN_SPAN_MIN = 0.5; // minimum tick span before trusting recentRate
 const AUTONOMY_WINDOW_MS = 10 * 60 * 1000; // recent window for AUTO
 const AUTONOMY_MIN_SPAN_MIN = 2; // minimum real span before trusting the pace
 
-let footerMetric =
-  localStorage.getItem("cc-autobahn.footerMetric") === "autonomy"
-    ? "autonomy"
-    : "pace";
+let footerMetric = loadGlobalSetting("footerMetric");
 
 /** PACE: % difference between the recent pace (5 min, output tokens ONLY,
  *  from `burn-tick`) and the block's output average. Does NOT use ccusage's
@@ -121,7 +119,7 @@ export function wireFooterToggle() {
   hintOnHover(el, "PACE: rate/avg ⇄ AUTO: Range at this pace");
   el.onclick = () => {
     footerMetric = footerMetric === "pace" ? "autonomy" : "pace";
-    localStorage.setItem("cc-autobahn.footerMetric", footerMetric);
+    saveGlobalSetting("footerMetric", footerMetric);
     renderFooterMetric();
   };
 }

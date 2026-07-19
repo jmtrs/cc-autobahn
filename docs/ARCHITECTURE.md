@@ -126,7 +126,8 @@ IPC/events.
   PACE/AUTO footer (D28, persisted in `localStorage`); `telemetry-state.js` holds
   the state shared between the two (`lastBlock`, sensor connection, PACE/AUTO
   buffers, `sevenDayPct`) to avoid a circular import. MFD pages (D33):
-  `mfd-nav.js` (page-cycle button + state), `mfd-settings.js` (localStorage:
+  `mfd-nav.js` (page-cycle button + state), `app-settings.js` (versioned schema-v2
+  boundary and legacy migration), `mfd-settings.js` (schema-backed settings:
   default page, which pages are in the cycle), `history-data.js` (shared
   on-demand fetch, used by both Page 1 and Page 2), `history-page.js` (Page 1:
   cost sparkline), `limits-page.js` (Page 2: weekly window, cost/model, burn
@@ -187,7 +188,7 @@ tray states, themes, permission sound/consent, and manual position reset are
 wired. Default placement remains under the tray, with D41's persisted drag
 override available when wanted.
 
-Current verified baseline: **77 Rust tests**, **9 frontend tests**, Rustfmt
+Current verified baseline: **78 Rust tests**, **11 frontend tests**, Rustfmt
 check, strict Clippy (`-D warnings`), and the Vite production build all pass.
 Frontend linting is not yet configured. Future work is tracked in the roadmap:
 Codex provider foundation is implemented; Codex data adapters and UI remain.

@@ -2,7 +2,7 @@
 // localStorage load/save shape as mfd-settings.js/theme.js: front-end only,
 // no backend round-trip — playing an <audio> element needs no Tauri IPC.
 
-const STORAGE_KEY = "cc-autobahn.permission-sound";
+import { loadGlobalSetting, saveGlobalSetting } from "./app-settings.js";
 // No separate "enabled" flag (D-review) — OFF is just another dropdown
 // entry (soundId: "none"), one less control to keep in sync with the other.
 const DEFAULTS = { soundId: "chime", customDataUrl: null };
@@ -25,17 +25,12 @@ export const BUILTIN_SOUNDS = {
 };
 
 export function loadPermissionSoundSettings() {
-  try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(STORAGE_KEY)) };
-  } catch {
-    return { ...DEFAULTS };
-  }
+  return { ...DEFAULTS, ...loadGlobalSetting("permissionSound") };
 }
 
 export function savePermissionSoundSettings(patch) {
   const next = { ...loadPermissionSoundSettings(), ...patch };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  return next;
+  return saveGlobalSetting("permissionSound", next);
 }
 
 /** Resolves the audio src for a given (soundId, customDataUrl) pair without

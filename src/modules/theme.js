@@ -4,7 +4,7 @@
 // HSL so a single native <input type="color"> is enough (D-review: 5 manual
 // swatches don't fit cleanly in the 440x150 window).
 
-const STORAGE_KEY = "cc-autobahn.theme";
+import { loadGlobalSetting, saveGlobalSetting } from "./app-settings.js";
 const DEFAULTS = { themeId: "amber", customAccent: "#ff9a1f" };
 
 export const PRESETS = {
@@ -43,17 +43,12 @@ export const PRESETS = {
 };
 
 export function loadThemeSettings() {
-  try {
-    return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(STORAGE_KEY)) };
-  } catch {
-    return { ...DEFAULTS };
-  }
+  return { ...DEFAULTS, ...loadGlobalSetting("theme") };
 }
 
 export function saveThemeSettings(patch) {
   const next = { ...loadThemeSettings(), ...patch };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
-  return next;
+  return saveGlobalSetting("theme", next);
 }
 
 function hexToHsl(hex) {

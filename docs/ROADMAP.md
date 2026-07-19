@@ -173,7 +173,7 @@ Current automated baseline:
 
 ```bash
 npm run build
-npm run test:frontend # 9 tests
+npm run test:frontend # 11 tests
 npm run test:visual   # 4 Claude screens, exact 550 × 150 contract
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings

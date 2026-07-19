@@ -813,8 +813,9 @@ The following commands passed during the 2026-07-19 re-audit:
 
 ```text
 npm run build
-npm run test:frontend              # 9 passed
-cargo test                         # 77 passed
+npm run test:frontend              # 11 passed
+npm run test:visual                # 4 screens at 550 × 150
+cargo test                         # 78 passed
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 ```
@@ -884,6 +885,12 @@ viewport with clipping/overflow checks and committed visual baselines.
 - Add regression tests proving Claude behavior remains unchanged.
 
 ### Phase 2 — Componentized and dual-provider UI
+
+**Status:** in progress on `develop`. The versioned settings boundary and
+idempotent legacy migration are implemented first: display mode, global
+preferences, provider namespaces and `provider:model` nameplate keys now live
+in schema v2 while old keys remain available for rollback. Provider-scoped DOM
+renderers and native mode resizing remain.
 
 - Convert telemetry, model selector, History and Limits into provider-scoped renderers.
 - Preserve the existing header and dynamic nameplate as shared chassis elements.

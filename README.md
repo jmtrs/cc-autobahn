@@ -91,7 +91,7 @@ behavior and the optional Claude Code permission bridge.
   both and starts polling, no terminal required.
 
 Current verified baseline: `cargo test` **78/78**, `npm run test:frontend`
-**9/9**, four Playwright layout/snapshot baselines at **550×150**, `cargo fmt --check`,
+**11/11**, four Playwright layout/snapshot baselines at **550×150**, `cargo fmt --check`,
 `cargo clippy --all-targets --all-features -- -D warnings`, and
 `npm run build` all pass.
 
