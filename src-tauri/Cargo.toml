@@ -15,6 +15,7 @@ tauri-build = { version = "2.6", features = [] }
 tauri = { version = "2.11", features = ["macos-private-api", "tray-icon", "image-png"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
+uuid = { version = "1.18", features = ["v4"] }
 
 # Native rounded corners for the panel (D24 addendum): objc2-* are already
 # transitive deps of tauri (macos-private-api) — here they're just exposed to

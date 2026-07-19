@@ -6,6 +6,7 @@
 
 import { hintOnHover } from "./header-hint.js";
 import { loadMfdSettings } from "./mfd-settings.js";
+import { setCurrentPage } from "./telemetry-state.js";
 
 const PAGE_LABELS = { 0: "SINCE START", 1: "HISTORY", 2: "LIMITS", 3: "SETTINGS" };
 
@@ -25,6 +26,7 @@ function cycleOrder() {
 
 function activate(page) {
   current = page;
+  setCurrentPage(page);
   document.querySelectorAll(".page").forEach((el) => {
     el.classList.toggle("active", Number(el.dataset.page) === page);
   });

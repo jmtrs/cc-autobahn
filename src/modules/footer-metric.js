@@ -10,7 +10,7 @@
 import { formatHMin } from "./format.js";
 import { hintOnHover } from "./header-hint.js";
 import { updateRedline } from "./redline.js";
-import { state } from "./telemetry-state.js";
+import { claudeState as state } from "./telemetry-state.js";
 
 const PACE_WINDOW_MS = 5 * 60 * 1000; // recent window for PACE
 const PACE_MIN_BLOCK_ELAPSED_MIN = 1; // minimum block elapsed before trusting blockAvg

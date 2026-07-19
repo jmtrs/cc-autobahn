@@ -15,17 +15,16 @@ use std::time::Duration;
 
 use serde::Deserialize;
 
-use super::{socket_path, Decision, HookRequest};
+use super::{socket_path, Decision, DecisionMsg, HookRequest};
 
 /// Just under Claude Code's own 600s hook timeout, so this always loses the
 /// race and prints nothing rather than being killed mid-write.
 const HOOK_READ_TIMEOUT_SECS: u64 = 580;
 
-/// The decision response is always `{"decision":"allow"|"deny"}` — a few
-/// bytes. Capped generously so a misbehaving GUI (wrong protocol version,
-/// stuck sending without a newline) can't grow this short-lived process's
-/// memory unbounded while it waits out `HOOK_READ_TIMEOUT_SECS`.
-const MAX_RESPONSE_BYTES: u64 = 4 * 1024;
+/// Native permission suggestions can be almost as large as the incoming hook
+/// payload because the GUI echoes one unchanged as `updatedPermissions`.
+/// Preserve the same hard cap plus small JSON-envelope headroom.
+const MAX_RESPONSE_BYTES: u64 = super::MAX_REQUEST_BYTES + 4 * 1024;
 
 /// Claude Code's own stdin contract for tool-event hooks (snake_case) —
 /// distinct from [`HookRequest`], which is this app's own (camelCase) wire
@@ -33,12 +32,22 @@ const MAX_RESPONSE_BYTES: u64 = 4 * 1024;
 #[derive(Debug, Deserialize)]
 struct CcHookInput {
     session_id: String,
-    prompt_id: String,
+    #[serde(default)]
+    prompt_id: Option<String>,
     tool_name: String,
     #[serde(default)]
     tool_input: serde_json::Value,
     #[serde(default)]
     cwd: String,
+    #[serde(default)]
+    permission_suggestions: Vec<serde_json::Value>,
+}
+
+/// Generates an invocation identity independent of Claude's prompt
+/// correlation. Every hook invocation is a separate process, so process-local
+/// counters and PIDs cannot provide uniqueness after PID reuse.
+fn generate_request_id() -> String {
+    format!("claude-{}", uuid::Uuid::new_v4())
 }
 
 /// Entry point of `permission-hook` mode (`argv[1] == "permission-hook"`).
@@ -54,11 +63,13 @@ pub fn run_permission_hook() {
         return;
     };
     let request = HookRequest {
+        request_id: generate_request_id(),
         prompt_id: input.prompt_id,
         session_id: input.session_id,
         tool_name: input.tool_name,
         tool_input: input.tool_input,
         cwd: input.cwd,
+        permission_suggestions: input.permission_suggestions,
     };
 
     let Some(decision) = ask_gui(&request) else {
@@ -71,7 +82,7 @@ pub fn run_permission_hook() {
 /// decision. `None` on any failure (including timeout) — the caller's
 /// silence is the fail-open behavior.
 #[cfg(unix)]
-fn ask_gui(request: &HookRequest) -> Option<Decision> {
+fn ask_gui(request: &HookRequest) -> Option<DecisionMsg> {
     use std::os::unix::net::UnixStream;
 
     let path = socket_path()?;
@@ -100,11 +111,11 @@ fn ask_gui(request: &HookRequest) -> Option<Decision> {
         return None;
     }
     let msg: super::DecisionMsg = serde_json::from_str(&response).ok()?;
-    Some(msg.decision)
+    Some(msg)
 }
 
 #[cfg(not(unix))]
-fn ask_gui(_request: &HookRequest) -> Option<Decision> {
+fn ask_gui(_request: &HookRequest) -> Option<DecisionMsg> {
     None // the permission hook isn't wired on non-unix targets — fail open.
 }
 
@@ -115,15 +126,19 @@ fn ask_gui(_request: &HookRequest) -> Option<Decision> {
 /// this wrong is silent: Claude Code just doesn't recognize the output and
 /// falls back to its own terminal prompt, which is exactly what happened
 /// before this was fixed (D42 follow-up bug). PURE → testable without stdout.
-fn decision_output(decision: Decision) -> serde_json::Value {
-    let behavior = match decision {
+fn decision_output(response: DecisionMsg) -> serde_json::Value {
+    let behavior = match response.decision {
         Decision::Allow => "allow",
         Decision::Deny => "deny",
     };
+    let mut decision = serde_json::json!({ "behavior": behavior });
+    if !response.updated_permissions.is_empty() {
+        decision["updatedPermissions"] = serde_json::Value::Array(response.updated_permissions);
+    }
     serde_json::json!({
         "hookSpecificOutput": {
             "hookEventName": "PermissionRequest",
-            "decision": { "behavior": behavior },
+            "decision": decision,
         }
     })
 }
@@ -135,8 +150,8 @@ fn decision_output(decision: Decision) -> serde_json::Value {
 /// moment a real decision was about to be delivered. `writeln!` on a
 /// `Write` value returns a `Result` instead, so a failed write is just
 /// ignored like every other fallible step in this file.
-fn print_decision(decision: Decision) {
-    let out = decision_output(decision);
+fn print_decision(response: DecisionMsg) {
+    let out = decision_output(response);
     let mut stdout = std::io::stdout();
     let _ = writeln!(stdout, "{out}");
     let _ = stdout.flush();
@@ -148,7 +163,7 @@ mod tests {
 
     #[test]
     fn allow_uses_nested_behavior_shape() {
-        let v = decision_output(Decision::Allow);
+        let v = decision_output(DecisionMsg::plain(Decision::Allow));
         assert_eq!(
             v["hookSpecificOutput"]["hookEventName"],
             "PermissionRequest"
@@ -162,7 +177,57 @@ mod tests {
 
     #[test]
     fn deny_uses_nested_behavior_shape() {
-        let v = decision_output(Decision::Deny);
+        let v = decision_output(DecisionMsg::plain(Decision::Deny));
         assert_eq!(v["hookSpecificOutput"]["decision"]["behavior"], "deny");
+    }
+
+    #[test]
+    fn native_permission_suggestion_round_trips_unchanged() {
+        let suggestion = serde_json::json!({
+            "type": "addRules",
+            "rules": [{ "toolName": "Bash", "ruleContent": "npm test" }],
+            "behavior": "allow",
+            "destination": "localSettings"
+        });
+        let v = decision_output(DecisionMsg::allow_with_permissions(
+            vec![suggestion.clone()],
+        ));
+        assert_eq!(
+            v["hookSpecificOutput"]["decision"]["updatedPermissions"][0],
+            suggestion
+        );
+    }
+
+    #[test]
+    fn prompt_id_is_optional_and_request_ids_are_distinct() {
+        let input: CcHookInput = serde_json::from_value(serde_json::json!({
+            "session_id": "session-1",
+            "tool_name": "Bash",
+            "tool_input": { "command": "npm test" }
+        }))
+        .unwrap();
+        assert!(input.prompt_id.is_none());
+        assert_ne!(generate_request_id(), generate_request_id());
+    }
+
+    #[test]
+    fn response_limit_preserves_native_suggestion_larger_than_4kib() {
+        let suggestion = serde_json::json!({
+            "type": "addRules",
+            "rules": [{ "toolName": "Bash", "ruleContent": "x".repeat(8 * 1024) }],
+            "behavior": "allow",
+            "destination": "localSettings"
+        });
+        let response = DecisionMsg::allow_with_permissions(vec![suggestion.clone()]);
+        let mut wire = serde_json::to_string(&response).unwrap();
+        wire.push('\n');
+        assert!(wire.len() > 4 * 1024);
+        assert!((wire.len() as u64) < MAX_RESPONSE_BYTES);
+
+        let mut reader = BufReader::new(std::io::Cursor::new(wire)).take(MAX_RESPONSE_BYTES);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let decoded: DecisionMsg = serde_json::from_str(&line).unwrap();
+        assert_eq!(decoded.updated_permissions, vec![suggestion]);
     }
 }

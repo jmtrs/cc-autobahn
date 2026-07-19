@@ -8,7 +8,7 @@
 import { formatModelCode, formatResetAt, formatUsd } from "./format.js";
 import { hintOnHover } from "./header-hint.js";
 import { latestDay, loadHistory, SPINNER_HTML } from "./history-data.js";
-import { state } from "./telemetry-state.js";
+import { claudeState as state } from "./telemetry-state.js";
 
 const LIMIT_SEGMENTS = 12;
 

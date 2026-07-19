@@ -28,7 +28,7 @@ import {
 } from "./modules/trip-computer.js";
 import { wireResetPositionButton, wireWindowDrag } from "./modules/window-drag.js";
 
-function init() {
+async function init() {
   initTheme();
   wireCursor();
   // Autonomy bar empty until the first blocks-update (no data yet).
@@ -36,9 +36,9 @@ function init() {
   tickClock();
   setInterval(tickClock, 1000);
   wireEngineOverlay();
-  wireEngine();
+  await wireEngine();
   wireSensorUi();
-  wirePermissionGate();
+  await wirePermissionGate();
   wirePermissionConsent();
   wirePinButton();
   wireWindowDrag();

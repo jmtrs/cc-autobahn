@@ -314,6 +314,8 @@ struct EffortInfo {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SensorUpdate {
+    provider: crate::providers::ProviderId,
+    observed_at_ms: i64,
     five_hour_pct: Option<f64>,
     five_hour_resets_at: Option<i64>, // seconds epoch
     seven_day_pct: Option<f64>,
@@ -339,6 +341,8 @@ impl SensorUpdate {
             .map(|w| (w.used_percentage, w.resets_at))
             .unwrap_or((None, None));
         SensorUpdate {
+            provider: crate::providers::ProviderId::Claude,
+            observed_at_ms: crate::providers::now_epoch_ms(),
             five_hour_pct,
             five_hour_resets_at,
             seven_day_pct,
@@ -353,8 +357,39 @@ impl SensorUpdate {
 
 /// Payload of the `sensor-state` {connected} event to the frontend.
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct StatePayload {
+    provider: crate::providers::ProviderId,
+    observed_at_ms: i64,
     connected: bool,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SensorSnapshot {
+    update: Option<SensorUpdate>,
+    state: StatePayload,
+}
+
+#[tauri::command]
+pub fn sensor_snapshot() -> SensorSnapshot {
+    let observed_at_ms = crate::providers::now_epoch_ms();
+    let update = status_file()
+        .and_then(|path| fs::read(path).ok())
+        .and_then(|data| serde_json::from_slice::<StatusInput>(&data).ok())
+        .map(|input| {
+            let mut update = SensorUpdate::from_input(&input);
+            update.observed_at_ms = observed_at_ms;
+            update
+        });
+    SensorSnapshot {
+        update,
+        state: StatePayload {
+            provider: crate::providers::ProviderId::Claude,
+            observed_at_ms,
+            connected: is_connected(SystemTime::now()),
+        },
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -389,7 +424,25 @@ pub fn start(app: AppHandle) {
             // Connection state: the file exists and is fresh (< STALE_SECS).
             let connected = is_connected(now);
             if last_connected != Some(connected) {
-                let _ = app.emit("sensor-state", StatePayload { connected });
+                let _ = app.emit(
+                    "sensor-state",
+                    StatePayload {
+                        provider: crate::providers::ProviderId::Claude,
+                        observed_at_ms: crate::providers::now_epoch_ms(),
+                        connected,
+                    },
+                );
+                crate::providers::emit_health(
+                    &app,
+                    crate::providers::ProviderId::Claude,
+                    crate::providers::ProviderComponent::Sensor,
+                    if connected {
+                        crate::providers::HealthStatus::Connected
+                    } else {
+                        crate::providers::HealthStatus::Degraded
+                    },
+                    None,
+                );
                 last_connected = Some(connected);
             }
 
@@ -452,12 +505,27 @@ mod tests {
     fn parses_status_input_full() {
         let i: StatusInput = serde_json::from_str(SAMPLE).expect("must parse");
         let u = SensorUpdate::from_input(&i);
+        assert_eq!(serde_json::to_value(&u).unwrap()["provider"], "claude");
+        assert!(u.observed_at_ms > 0);
         assert_eq!(u.model_id.as_deref(), Some("claude-opus-4-8"));
         assert_eq!(u.effort_level.as_deref(), Some("high"));
         assert!((u.five_hour_pct.unwrap() - 23.5).abs() < 1e-6);
         assert_eq!(u.five_hour_resets_at, Some(1_738_425_600)); // seconds, NOT ms
         assert!((u.seven_day_pct.unwrap() - 41.2).abs() < 1e-6);
         assert!((u.cost_usd.unwrap() - 0.01234).abs() < 1e-9);
+    }
+
+    #[test]
+    fn sensor_state_uses_frontend_camel_case_contract() {
+        let value = serde_json::to_value(StatePayload {
+            provider: crate::providers::ProviderId::Claude,
+            observed_at_ms: 42,
+            connected: true,
+        })
+        .unwrap();
+        assert_eq!(value["provider"], "claude");
+        assert_eq!(value["observedAtMs"], 42);
+        assert!(value.get("observed_at_ms").is_none());
     }
 
     /// Non Pro/Max subscriber → rate_limits absent. Must not break.

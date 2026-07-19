@@ -1,31 +1,85 @@
-// Shared mutable state between trip-computer (writer of block/sensor data),
-// speedometer (writer of burn ticks), and footer-metric (reader of both, for
-// the PACE/AUTO computation). A single shared object avoids a circular
-// import between trip-computer.js and footer-metric.js.
+// Provider-isolated application state. Shared chassis state lives once under
+// `global`; telemetry, health and future history caches never cross providers.
+
+export const PROVIDERS = Object.freeze(["claude", "codex"]);
+export const HEALTH_COMPONENTS = Object.freeze([
+  "engine",
+  "sensor",
+  "history",
+  "transcript",
+  "permissions",
+  "app-server",
+]);
+export const HEALTH_STATUSES = Object.freeze(["connected", "degraded", "unavailable"]);
+
+export function createProviderState(provider) {
+  if (!PROVIDERS.includes(provider)) throw new Error(`unknown provider: ${provider}`);
+  return {
+    provider,
+    health: {},
+    lastEventAtMs: {},
+    lastBlock: null,
+    sensorConnected: false,
+    everSensorConnected: false,
+    everQuotaConnected: false,
+    autonomieShowTime: false,
+    fiveHourResetsAtMs: 0,
+    fiveHourPct: 0,
+    sevenDayPct: 0,
+    sevenDayResetsAtMs: 0,
+    recentTicks: [],
+    recentPct: [],
+  };
+}
 
 export const state = {
-  lastBlock: null, // last blocks-update, to re-apply the estimate on disconnect
-  // `sensorConnected` = is the sensor pushing FRESH data right now? (D-review:
-  // a normal pause with no Claude Code rendering sets it to false for a few
-  // seconds, without being a real "never connected"). `everSensorConnected` is
-  // sticky — once true, it never falls back to ccusage's projection again
-  // (independent 5h window system; the jump between the two looked
-  // absurd: official "0h17" → ccusage's "EST 4h31").
-  sensorConnected: false, // is official data arriving from the statusLine?
-  everSensorConnected: false, // did it ever connect? (sticky, see above)
-  // `everQuotaConnected` is narrower than `everSensorConnected`: the statusLine
-  // file can connect (and stay connected) without ever carrying `rate_limits`
-  // (non-Pro/Max subscriber — see sensor::mod.rs's `tolerates_missing_rate_limits`).
-  // Quota-based gauges (segments/autonomie text, D40) must gate on THIS flag,
-  // not `everSensorConnected` — gating on the generic one made non-Pro/Max
-  // users' gauge freeze on a fabricated "100%" forever, since fiveHourPct
-  // never gets a real value to replace its 0 default (found in review).
-  everQuotaConnected: false, // did a payload with a real `fiveHourPct` ever arrive? (sticky)
-  autonomieShowTime: false, // click-toggle: show reset time instead of quota (quota mode only)
-  fiveHourResetsAtMs: 0, // epoch-ms of the 5h reset (fallback countdown, estimated-only)
-  fiveHourPct: 0, // official used_percentage of the 5h quota, re-read by the clock tick
-  sevenDayPct: 0, // official 7d rate-limit window used%, read by limits-page (Page 2)
-  sevenDayResetsAtMs: 0, // epoch-ms of the 7d reset, read by limits-page (Page 2)
-  recentTicks: [], // { recvAt, tokens } — fed by onBurnTick, read by footer-metric's PACE
-  recentPct: [], // { recvAt, pct } — fed by onSensorUpdate, read by footer-metric's AUTO
+  global: {
+    displayMode: "claude",
+    currentPage: 0,
+    lastActiveModel: null,
+    permissionHead: null,
+  },
+  providers: {
+    claude: createProviderState("claude"),
+    codex: createProviderState("codex"),
+  },
 };
+
+// Existing renderers remain intentionally Claude-bound until Phase 2 creates
+// provider-scoped DOM roots. This explicit alias prevents a Codex event from
+// mutating the legacy singleton UI by accident.
+export const claudeState = state.providers.claude;
+
+export function providerIdFromPayload(payload) {
+  return PROVIDERS.includes(payload?.provider) ? payload.provider : null;
+}
+
+export function setCurrentPage(page) {
+  if (!Number.isInteger(page) || page < 0 || page > 3) return false;
+  state.global.currentPage = page;
+  return true;
+}
+
+export function setPermissionHead(payload) {
+  state.global.permissionHead = payload ?? null;
+}
+
+export function updateProviderHealth(payload) {
+  const provider = providerIdFromPayload(payload);
+  if (
+    !provider ||
+    !HEALTH_COMPONENTS.includes(payload?.component) ||
+    !HEALTH_STATUSES.includes(payload?.status)
+  )
+    return false;
+  const observedAtMs = Number(payload.observedAtMs);
+  if (!Number.isFinite(observedAtMs) || observedAtMs < 0) return false;
+  const current = state.providers[provider].health[payload.component];
+  if (current && observedAtMs < current.observedAtMs) return false;
+  state.providers[provider].health[payload.component] = {
+    status: payload.status,
+    observedAtMs,
+    detail: payload.detail ?? null,
+  };
+  return true;
+}

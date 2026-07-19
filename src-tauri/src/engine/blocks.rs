@@ -16,6 +16,8 @@ struct BlocksEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Block {
+    #[serde(default, skip_deserializing)]
+    provider: crate::providers::ProviderId,
     id: String,
     #[serde(default)]
     is_active: bool,
@@ -142,8 +144,9 @@ mod tests {
         assert!((block.cost_usd - 24.846).abs() < 1e-9);
         assert_eq!(block.total_tokens, 27_769_638);
         assert_eq!(block.token_counts.output_tokens, 227_752);
-        assert_eq!(block.projection.unwrap().remaining_minutes, 185);
-        assert!(block.burn_rate.unwrap().cost_per_hour > 0.0);
+        assert_eq!(block.projection.as_ref().unwrap().remaining_minutes, 185);
+        assert!(block.burn_rate.as_ref().unwrap().cost_per_hour > 0.0);
+        assert_eq!(serde_json::to_value(block).unwrap()["provider"], "claude");
     }
 
     /// A "gap" block omits burnRate/projection: it must not break parsing.
@@ -162,5 +165,13 @@ mod tests {
     fn tolerates_empty() {
         let env: BlocksEnvelope = serde_json::from_str("{}").expect("empty parses");
         assert!(env.blocks.is_empty());
+    }
+
+    #[test]
+    fn external_json_cannot_spoof_provider_identity() {
+        let env: BlocksEnvelope =
+            serde_json::from_str(r#"{"blocks":[{"id":"x","provider":"codex","isActive":true}]}"#)
+                .unwrap();
+        assert_eq!(env.blocks[0].provider, crate::providers::ProviderId::Claude);
     }
 }

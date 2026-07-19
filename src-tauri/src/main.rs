@@ -19,6 +19,7 @@ mod env_lock;
 mod path_state;
 mod pathfix;
 mod permission;
+pub mod providers;
 mod sensor;
 mod tray;
 mod tray_icon;
@@ -52,6 +53,7 @@ fn main() {
             engine::install::install_bun,
             engine::history::history_daily,
             sensor::install::sensor_status,
+            sensor::sensor_snapshot,
             sensor::install::sensor_preview_install,
             sensor::install::install_sensor,
             sensor::install::uninstall_sensor,
@@ -59,6 +61,7 @@ fn main() {
             permission::permission_approve_always,
             permission::permission_deny,
             permission::permission_pending_snapshot,
+            providers::provider_health_snapshot,
             permission::install::permission_status,
             permission::install::permission_preview_install,
             permission::install::install_permission_hook,
@@ -69,6 +72,7 @@ fn main() {
         ])
         .manage::<PinnedState>(Arc::new(Mutex::new(false)))
         .manage::<PathState>(Arc::new(Mutex::new(None)))
+        .manage::<providers::ProviderHealthState>(providers::new_health_state())
         .setup(|app| {
             pathfix::apply(&app.handle().clone());
             sensor::install::refresh_if_stale();

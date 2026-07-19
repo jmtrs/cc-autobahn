@@ -11,41 +11,80 @@ import {
 import { onPermissionPending, onPermissionResolved } from "./permission-gate.js";
 import { onBurnTick } from "./speedometer.js";
 import { onBlocksUpdate, onSensorState, onSensorUpdate } from "./trip-computer.js";
+import { hydrateProviderHealth, routeClaudePayload } from "./provider-routing.js";
+import { updateProviderHealth } from "./telemetry-state.js";
 
 export async function wireEngine() {
   if (!("__TAURI_INTERNALS__" in window)) return; // running outside Tauri
   const { listen } = await import("@tauri-apps/api/event");
+  const { invoke } = await import("@tauri-apps/api/core");
 
-  listen("engine-detected", () => showEngineOverlay(false));
-  listen("engine-missing", () => showEngineOverlay(true));
-  listen("install-progress", (e) => onInstallProgress(e.payload));
-  listen("install-succeeded", (e) => onInstallSucceeded(e.payload));
-  listen("install-failed", (e) => onInstallFailed(e.payload));
-  listen("engine-error", (e) => console.error("[engine] error:", e.payload));
-  listen("blocks-idle", () => console.info("[engine] no active block"));
-  listen("blocks-update", (e) => {
-    console.info("[engine] blocks-update:", e.payload);
-    showEngineOverlay(false);
-    onBlocksUpdate(e.payload);
+  await listen("provider-health", (e) => {
+    if (updateProviderHealth(e.payload)) {
+      console.info("[provider] health:", e.payload);
+    }
   });
-  listen("burn-tick", (e) => {
-    console.info("[burn] tok/s per response:", e.payload);
-    onBurnTick(e.payload);
+  await listen("app-engine-detected", () => showEngineOverlay(false));
+  await listen("app-engine-missing", () => showEngineOverlay(true));
+  await listen("install-progress", (e) => onInstallProgress(e.payload));
+  await listen("install-succeeded", (e) => onInstallSucceeded(e.payload));
+  await listen("install-failed", (e) => onInstallFailed(e.payload));
+  await listen("app-engine-error", (e) => console.error("[engine] error:", e.payload));
+  await listen("blocks-idle", (e) => {
+    routeClaudePayload(e.payload, () => console.info("[engine] no active Claude block"));
   });
-  listen("sensor-update", (e) => {
-    console.info("[sensor] official:", e.payload);
-    onSensorUpdate(e.payload);
+  await listen("blocks-update", (e) => {
+    routeClaudePayload(e.payload, (payload) => {
+      console.info("[engine] blocks-update:", payload);
+      showEngineOverlay(false);
+      onBlocksUpdate(payload);
+    });
   });
-  listen("sensor-state", (e) => {
-    console.info("[sensor] state:", e.payload);
-    onSensorState(e.payload);
+  await listen("burn-tick", (e) => {
+    routeClaudePayload(e.payload, (payload) => {
+      console.info("[burn] tok/s per response:", payload);
+      onBurnTick(payload);
+    });
   });
-  listen("permission-pending", (e) => {
-    console.info("[permission] pending:", e.payload);
-    onPermissionPending(e.payload);
+  await listen("sensor-update", (e) => {
+    routeClaudePayload(e.payload, (payload) => {
+      console.info("[sensor] official:", payload);
+      onSensorUpdate(payload);
+    }, "sensor-update");
   });
-  listen("permission-resolved", () => {
-    console.info("[permission] resolved");
-    onPermissionResolved();
+  await listen("sensor-state", (e) => {
+    routeClaudePayload(e.payload, (payload) => {
+      console.info("[sensor] state:", payload);
+      onSensorState(payload);
+    }, "sensor-state");
   });
+  await listen("permission-pending", (e) => {
+    routeClaudePayload(e.payload, (payload) => {
+      console.info("[permission] pending:", payload);
+      onPermissionPending(payload);
+    });
+  });
+  await listen("permission-resolved", (e) => {
+    routeClaudePayload(e.payload, () => {
+      console.info("[permission] resolved");
+      onPermissionResolved();
+    });
+  });
+
+  try {
+    hydrateProviderHealth(await invoke("provider_health_snapshot"));
+  } catch (e) {
+    console.error("[provider] health snapshot:", e);
+  }
+  try {
+    const snapshot = await invoke("sensor_snapshot");
+    if (snapshot?.update) {
+      routeClaudePayload(snapshot.update, onSensorUpdate, "sensor-update", true);
+    }
+    if (snapshot?.state) {
+      routeClaudePayload(snapshot.state, onSensorState, "sensor-state", true);
+    }
+  } catch (e) {
+    console.error("[sensor] snapshot:", e);
+  }
 }

@@ -22,6 +22,7 @@ const ACTIVE_WINDOW_SECS: u64 = 60 * 60;
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct BurnTick {
+    provider: crate::providers::ProviderId,
     tok_per_s: f64,
     turn_output_tokens: u64,
     turn_duration_ms: i64,
@@ -33,6 +34,7 @@ struct BurnTick {
 impl From<BurnCalc> for BurnTick {
     fn from(c: BurnCalc) -> Self {
         BurnTick {
+            provider: crate::providers::ProviderId::Claude,
             tok_per_s: c.tok_per_s,
             turn_output_tokens: c.turn_output_tokens,
             turn_duration_ms: c.turn_duration_ms,
@@ -222,6 +224,19 @@ fn fs_read_dir(p: &Path) -> Option<std::fs::ReadDir> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn burn_tick_carries_claude_discriminator() {
+        let tick = BurnTick::from(BurnCalc {
+            tok_per_s: 12.5,
+            turn_output_tokens: 25,
+            turn_duration_ms: 2_000,
+            message_id: "message-1".into(),
+            timestamp: "2026-07-19T10:00:00.000Z".into(),
+            is_partial: false,
+        });
+        assert_eq!(serde_json::to_value(tick).unwrap()["provider"], "claude");
+    }
 
     /// Minimal valid assistant line for the parser.
     fn assistant(id: &str, ts: &str, out: u64, stop: &str) -> String {

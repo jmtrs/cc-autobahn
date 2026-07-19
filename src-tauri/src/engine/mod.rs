@@ -67,7 +67,7 @@ impl Engine {
         c
     }
 
-    /// Short label for the `engine-detected` event.
+    /// Short label for the `app-engine-detected` event.
     fn label(self) -> &'static str {
         match self {
             Engine::Global => "ccusage",
@@ -127,7 +127,7 @@ fn on_path(bin: &str, path: Option<&str>) -> bool {
 
 /// `#[tauri::command]` Is an engine available RIGHT NOW? Used to render the
 /// "CHECK ENGINE" screen on the first render without depending on winning the
-/// race against the `engine-missing` event (the `start` thread may emit it
+/// race against the `app-engine-missing` event (the `start` thread may emit it
 /// before the frontend finishes registering the listener). Same pattern as `sensor_status`.
 #[tauri::command]
 pub fn engine_status(app: tauri::AppHandle) -> bool {
@@ -136,11 +136,11 @@ pub fn engine_status(app: tauri::AppHandle) -> bool {
 }
 
 /// Starts the engine on a dedicated thread. Detects once; if there's no engine
-/// it emits `engine-missing` and returns. If there is one, polls in a loop emitting:
+/// it emits `app-engine-missing` and returns. If there is one, polls in a loop emitting:
 ///   · `blocks-update`  → active block (payload = Block)
 ///   · `blocks-idle`    → no active block right now
-///   · `engine-error`   → one-off failure of this cycle (payload = message)
-///   · `engine-detected`→ once, with the engine's label
+///   · `app-engine-error`   → one-off failure of this cycle (payload = message)
+///   · `app-engine-detected`→ once, with the engine's label
 pub fn start(app: AppHandle) {
     thread::spawn(move || {
         // Read PathState ONCE at thread entry (PATH only ever changes at
@@ -153,18 +153,42 @@ pub fn start(app: AppHandle) {
         let mut engine = match detect(path.as_deref()) {
             Some(e) => e,
             None => {
-                let _ = app.emit("engine-missing", ());
+                crate::providers::emit_health(
+                    &app,
+                    crate::providers::ProviderId::Claude,
+                    crate::providers::ProviderComponent::Engine,
+                    crate::providers::HealthStatus::Unavailable,
+                    Some("ccusage engine not found".into()),
+                );
+                let _ = app.emit("app-engine-missing", ());
                 return;
             }
         };
-        let _ = app.emit("engine-detected", engine.label());
+        let _ = app.emit("app-engine-detected", engine.label());
+        crate::providers::emit_health(
+            &app,
+            crate::providers::ProviderId::Claude,
+            crate::providers::ProviderComponent::Engine,
+            crate::providers::HealthStatus::Connected,
+            None,
+        );
 
         let mut consecutive_failures: u32 = 0;
+        let mut engine_degraded = false;
 
         loop {
             match blocks::poll_once(engine, path.as_deref()) {
                 Ok(Some(block)) => {
                     consecutive_failures = 0;
+                    if take_recovered(&mut engine_degraded) {
+                        crate::providers::emit_health(
+                            &app,
+                            crate::providers::ProviderId::Claude,
+                            crate::providers::ProviderComponent::Engine,
+                            crate::providers::HealthStatus::Connected,
+                            None,
+                        );
+                    }
                     // % remaining of the 5h window for the tray ring — same
                     // criterion as applyEstimated() in main.js. Reported
                     // unconditionally: `tray_icon::set_progress` itself
@@ -184,17 +208,39 @@ pub fn start(app: AppHandle) {
                 }
                 Ok(None) => {
                     consecutive_failures = 0;
+                    if take_recovered(&mut engine_degraded) {
+                        crate::providers::emit_health(
+                            &app,
+                            crate::providers::ProviderId::Claude,
+                            crate::providers::ProviderComponent::Engine,
+                            crate::providers::HealthStatus::Connected,
+                            None,
+                        );
+                    }
                     // No active block: window not being spent, ring full.
                     crate::tray_icon::set_progress(
                         &app,
                         100.0,
                         crate::tray_icon::ProgressSource::Estimated,
                     );
-                    let _ = app.emit("blocks-idle", ());
+                    let _ = app.emit(
+                        "blocks-idle",
+                        crate::providers::ProviderMarker {
+                            provider: crate::providers::ProviderId::Claude,
+                        },
+                    );
                 }
                 Err(message) => {
                     consecutive_failures += 1;
-                    let _ = app.emit("engine-error", message);
+                    engine_degraded = true;
+                    let _ = app.emit("app-engine-error", &message);
+                    crate::providers::emit_health(
+                        &app,
+                        crate::providers::ProviderId::Claude,
+                        crate::providers::ProviderComponent::Engine,
+                        crate::providers::HealthStatus::Degraded,
+                        Some(message),
+                    );
 
                     // The resolved engine may have disappeared (uninstalled/moved);
                     // re-run the detection cascade instead of hammering a dead binary forever.
@@ -202,10 +248,25 @@ pub fn start(app: AppHandle) {
                         if let Some(e) = detect(path.as_deref()) {
                             if e != engine {
                                 engine = e;
-                                let _ = app.emit("engine-detected", engine.label());
+                                let _ = app.emit("app-engine-detected", engine.label());
+                                crate::providers::emit_health(
+                                    &app,
+                                    crate::providers::ProviderId::Claude,
+                                    crate::providers::ProviderComponent::Engine,
+                                    crate::providers::HealthStatus::Connected,
+                                    None,
+                                );
+                                engine_degraded = false;
                             }
                         } else {
-                            let _ = app.emit("engine-missing", ());
+                            crate::providers::emit_health(
+                                &app,
+                                crate::providers::ProviderId::Claude,
+                                crate::providers::ProviderComponent::Engine,
+                                crate::providers::HealthStatus::Unavailable,
+                                Some("ccusage engine disappeared".into()),
+                            );
+                            let _ = app.emit("app-engine-missing", ());
                             return;
                         }
                     }
@@ -224,4 +285,21 @@ pub fn start(app: AppHandle) {
             thread::sleep(Duration::from_secs(backoff_secs));
         }
     });
+}
+
+fn take_recovered(engine_degraded: &mut bool) -> bool {
+    std::mem::replace(engine_degraded, false)
+}
+
+#[cfg(test)]
+mod provider_health_tests {
+    use super::take_recovered;
+
+    #[test]
+    fn successful_poll_recovers_degraded_engine_once() {
+        let mut degraded = true;
+        assert!(take_recovered(&mut degraded));
+        assert!(!degraded);
+        assert!(!take_recovered(&mut degraded));
+    }
 }

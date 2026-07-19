@@ -6,7 +6,7 @@
 import { formatDurationMs, formatHMin, formatModelCode, formatTokens } from "./format.js";
 import { renderFooterMetric } from "./footer-metric.js";
 import { hintOnHover, setHeaderHint } from "./header-hint.js";
-import { state } from "./telemetry-state.js";
+import { claudeState as state } from "./telemetry-state.js";
 
 export const SEGMENT_COUNT = 12;
 const WINDOW_MIN = 300; // 5h billing window, in minutes

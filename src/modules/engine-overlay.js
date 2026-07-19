@@ -59,7 +59,7 @@ export function onInstallProgress(stage) {
 // return value.
 export function onInstallSucceeded(label) {
   setEngineBody(`Engine detected (${label}). Starting…`);
-  showEngineOverlay(false); // blocks-update/engine-detected will confirm it shortly
+  showEngineOverlay(false); // blocks-update/app-engine-detected will confirm it shortly
 }
 
 export function onInstallFailed(message) {

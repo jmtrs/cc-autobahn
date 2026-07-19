@@ -8,6 +8,7 @@
 // change, so unlike redline.js this module has no tray IPC of its own.
 
 import { playPermissionSound } from "./permission-sound.js";
+import { setPermissionHead } from "./telemetry-state.js";
 
 let gateInvoke = null;
 let currentId = null;
@@ -119,6 +120,7 @@ async function resolve(command) {
  *  count, whether this arrival became the visible request or just landed
  *  behind an existing one — repaint unconditionally from the payload. */
 export function onPermissionPending(payload) {
+  setPermissionHead(payload);
   currentId = payload.id;
   document.getElementById("permission-tool").textContent = payload.toolName;
   // Shell-prompt cue for Bash only — other tools show the raw field
@@ -164,6 +166,7 @@ export function onPermissionPending(payload) {
 
 /** `permission-resolved` event: queue is empty, hide the panel. */
 export function onPermissionResolved() {
+  setPermissionHead(null);
   currentId = null;
   wasVisible = false;
   clearInterval(timeoutTimer);

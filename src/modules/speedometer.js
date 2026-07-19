@@ -4,7 +4,7 @@
 
 import { formatTps } from "./format.js";
 import { renderFooterMetric } from "./footer-metric.js";
-import { state } from "./telemetry-state.js";
+import { claudeState as state } from "./telemetry-state.js";
 
 const burn = {
   target: 0, // target tok/s (last tick, or decaying while idle)

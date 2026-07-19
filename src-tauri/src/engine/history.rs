@@ -27,6 +27,8 @@ struct DailyEnvelope {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DailyEntry {
+    #[serde(default, skip_deserializing)]
+    pub provider: crate::providers::ProviderId,
     pub date: String,
     #[serde(default)]
     pub total_cost: f64,
@@ -177,12 +179,21 @@ mod tests {
         let env: DailyEnvelope = serde_json::from_str(REAL_SAMPLE).expect("must parse");
         assert_eq!(env.daily.len(), 1);
         let day = &env.daily[0];
+        assert_eq!(day.provider, crate::providers::ProviderId::Claude);
         assert_eq!(day.date, "2026-07-17");
         assert_eq!(day.model_breakdowns.len(), 1);
         let m = &day.model_breakdowns[0];
         assert_eq!(m.model_name, "claude-sonnet-5");
         assert_eq!(m.output_tokens, 47_677);
         assert_eq!(m.cache_read_tokens, 4_316_477);
+    }
+
+    #[test]
+    fn external_history_cannot_spoof_provider_identity() {
+        let env: DailyEnvelope =
+            serde_json::from_str(r#"{"daily":[{"provider":"codex","date":"2026-07-19"}]}"#)
+                .unwrap();
+        assert_eq!(env.daily[0].provider, crate::providers::ProviderId::Claude);
     }
 
     /// Real output for a day with 3 models (captured 2026-07-17, `--since
