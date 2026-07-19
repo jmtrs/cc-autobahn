@@ -208,8 +208,9 @@ export function wireNameplateEdit(views = [claudeView]) {
  *  by the estimated fallback (D40: official mode reads quota %, not time; see
  *  onSensorUpdate()). Segments and the "autonomie" text must still read the
  *  same unit within a source (D23). */
-function segmentsForMinutes(min) {
-  return Math.max(0, Math.min(SEGMENT_COUNT, Math.round((SEGMENT_COUNT * min) / WINDOW_MIN)));
+function segmentsForMinutes(min, windowMinutes = WINDOW_MIN) {
+  const duration = Number(windowMinutes) > 0 ? Number(windowMinutes) : WINDOW_MIN;
+  return Math.max(0, Math.min(SEGMENT_COUNT, Math.round((SEGMENT_COUNT * min) / duration)));
 }
 
 /** Autonomy bar + text + gear from ccusage's PROJECTION (estimated). */
@@ -234,16 +235,25 @@ export function applyEstimated(block, view = claudeView) {
  *  that isn't known" rule as everywhere else in this file. */
 function paintQuotaGauge(view) {
   const state = view.state;
+  if (state.rateLimitSourceQuality === "unavailable") {
+    view.element("autonomie").textContent = "UNAVAILABLE";
+    buildSegments(0, view);
+    return;
+  }
+  const qualityPrefix = state.rateLimitSourceQuality === "stale" ? "STALE " : "";
   if (state.autonomieShowTime && state.fiveHourResetsAtMs > 0) {
     const remainMin = (state.fiveHourResetsAtMs - Date.now()) / 60000;
     view.element("autonomie").textContent =
-      remainMin > 0 ? formatHMin(remainMin) : "—";
-    buildSegments(segmentsForMinutes(Math.max(0, remainMin)), view);
+      remainMin > 0 ? `${qualityPrefix}${formatHMin(remainMin)}` : `${qualityPrefix}—`;
+    buildSegments(
+      segmentsForMinutes(Math.max(0, remainMin), state.primaryWindowDurationMinutes),
+      view,
+    );
     return;
   }
   const pct = state.fiveHourPct;
   buildSegments(Math.round((SEGMENT_COUNT * (100 - pct)) / 100), view);
-  view.element("autonomie").textContent = `${Math.round(100 - pct)}%`;
+  view.element("autonomie").textContent = `${qualityPrefix}${Math.round(100 - pct)}%`;
 }
 
 /** Re-paints the "autonomie" row on each clock tick (D40). In official mode
@@ -319,6 +329,7 @@ export function onSensorUpdate(p, view = claudeView) {
   const state = view.state;
   state.sensorConnected = true;
   state.everSensorConnected = true;
+  state.rateLimitSourceQuality = "official";
   const pctFinite = Number.isFinite(p?.fiveHourPct);
   const pct = pctFinite ? Math.max(0, Math.min(100, p.fiveHourPct)) : 0;
   state.fiveHourResetsAtMs = p?.fiveHourResetsAt ? Number(p.fiveHourResetsAt) * 1000 : 0;
@@ -342,15 +353,61 @@ export function onSensorUpdate(p, view = claudeView) {
   }
   // Official 7d rate-limit window — full numbers live on Page 2 (limits-page.js);
   // the border tint here stays as the always-visible "check engine"-style warning.
-  const sevenDayPct = Number(p?.sevenDayPct) || 0;
-  state.sevenDayPct = sevenDayPct;
-  state.sevenDayResetsAtMs = p?.sevenDayResetsAt ? Number(p.sevenDayResetsAt) * 1000 : 0;
-  view.root().classList.toggle("warn", sevenDayPct > 80);
+  const sevenDayFinite = Number.isFinite(p?.sevenDayPct);
+  if (sevenDayFinite) {
+    state.hasSecondaryLimit = true;
+    state.sevenDayPct = Math.max(0, Math.min(100, p.sevenDayPct));
+    state.sevenDayResetsAtMs = p?.sevenDayResetsAt
+      ? Number(p.sevenDayResetsAt) * 1000
+      : 0;
+    view.root().classList.toggle("warn", state.sevenDayPct > 80);
+  }
   // Sliding buffer for the footer's AUTO metric (see footer-metric.js).
-  if (Number.isFinite(pct)) {
+  if (pctFinite) {
     state.recentPct.push({ recvAt: Date.now(), pct });
   }
   renderFooterMetric(view);
+  view.emit("telemetry-tick");
+}
+
+/** Provider-neutral official rate-limit contract from Codex App Server. */
+export function onRateLimitUpdate(p, view = claudeView) {
+  const state = view.state;
+  state.rateLimitSourceQuality = p?.sourceQuality ?? "unavailable";
+  state.rateLimitBuckets = Array.isArray(p?.buckets) ? p.buckets : [];
+  if (Number.isFinite(p?.primary?.windowDurationMinutes)) {
+    state.primaryWindowDurationMinutes = p.primary.windowDurationMinutes;
+  }
+  state.secondaryWindowDurationMinutes = Number.isFinite(
+    p?.secondary?.windowDurationMinutes,
+  )
+    ? p.secondary.windowDurationMinutes
+    : null;
+  if (p?.sourceQuality !== "official") {
+    state.sensorConnected = false;
+    if (state.everQuotaConnected) paintQuotaGauge(view);
+    renderFooterMetric(view);
+    view.emit("telemetry-tick");
+    return;
+  }
+  onSensorUpdate(
+    {
+      observedAtMs: p?.observedAtMs,
+      fiveHourPct: p?.primary?.usedPercent,
+      fiveHourResetsAt: Number.isFinite(p?.primary?.resetsAtMs)
+        ? p.primary.resetsAtMs / 1000
+        : null,
+      sevenDayPct: p?.secondary?.usedPercent,
+      sevenDayResetsAt: Number.isFinite(p?.secondary?.resetsAtMs)
+        ? p.secondary.resetsAtMs / 1000
+        : null,
+    },
+    view,
+  );
+}
+
+export function onAccountUsageUpdate(p, view = claudeView) {
+  view.state.accountUsage = p ?? null;
   view.emit("telemetry-tick");
 }
 
@@ -364,6 +421,7 @@ export function onSensorState(p, view = claudeView) {
   const state = view.state;
   state.sensorConnected = !!p?.connected;
   if (state.sensorConnected) return;
+  if (state.everQuotaConnected) state.rateLimitSourceQuality = "stale";
   if (state.everQuotaConnected) return; // frozen: don't touch anything
   view.root().classList.remove("warn");
   if (state.lastBlock) applyEstimated(state.lastBlock, view);

@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { hydrateProviderHealth, routeClaudePayload } from "./provider-routing.js";
+import {
+  hydrateProviderHealth,
+  routeClaudePayload,
+  routeProviderPayload,
+} from "./provider-routing.js";
 import { state, updateProviderHealth } from "./telemetry-state.js";
 
 test("IPC routing invokes legacy renderer only for Claude payloads", () => {
@@ -47,6 +51,31 @@ test("channel routing rejects a delayed sensor snapshot after a newer event", ()
     false
   );
   assert.deepEqual(seen, ["event"]);
+});
+
+test("provider channel routing isolates Codex snapshots and rejects replay", () => {
+  state.providers.claude.lastEventAtMs = {};
+  state.providers.codex.lastEventAtMs = {};
+  const seen = [];
+  assert.equal(
+    routeProviderPayload(
+      { provider: "codex", observedAtMs: 300, value: "live" },
+      (payload) => seen.push(payload.value),
+      "rate-limit-update",
+    ),
+    true,
+  );
+  assert.equal(
+    routeProviderPayload(
+      { provider: "codex", observedAtMs: 299, value: "old snapshot" },
+      (payload) => seen.push(payload.value),
+      "rate-limit-update",
+      true,
+    ),
+    false,
+  );
+  assert.deepEqual(seen, ["live"]);
+  assert.deepEqual(state.providers.claude.lastEventAtMs, {});
 });
 
 test("health snapshot hydrates missed startup events without replaying older state", () => {

@@ -186,19 +186,19 @@ IPC/events.
 **Phases 0–7 done** (see [ROADMAP.md](./ROADMAP.md)). One executable dispatches
 to three modes: GUI, `statusline`, or `permission-hook`. GUI mode starts hidden
 behind the tray, runs the Claude engine/transcript/status sensors plus the Codex
-rollout sensor and on-demand daily
+rollout and official App Server account sensors and on-demand daily
 history, and hosts the event-driven permission listener. The four-page MFD
 contains Trip, History, Limits, and shared Settings; redline feedback, dynamic
 tray states, themes, permission sound/consent, and manual position reset are
 wired. Default placement remains under the tray, with D41's persisted drag
 override available when wanted.
 
-Current verified baseline: **89 Rust tests**, **36 frontend tests**, Rustfmt
+Current verified baseline: **98 Rust tests**, **40 frontend tests**, Rustfmt
 check, strict Clippy (`-D warnings`), and the Vite production build all pass.
 Frontend linting is not yet configured. Future work is tracked in the roadmap:
 Codex provider foundation and the complete dual-provider chassis are implemented;
 local rollout speed/model/thread telemetry and local estimated history are
-implemented; App Server account data remains.
+implemented; official App Server account data is implemented.
 Bun sidecar and
 Windows/Linux are optional, and permission request identity/native Claude
 permission suggestions are hardened; mixed-provider permission routing remains.

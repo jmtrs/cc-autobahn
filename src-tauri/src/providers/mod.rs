@@ -114,6 +114,8 @@ pub struct RateLimitSnapshot {
     pub source_quality: SourceQuality,
     pub primary: Option<RateLimitWindow>,
     pub secondary: Option<RateLimitWindow>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub buckets: Vec<RateLimitBucket>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -122,6 +124,38 @@ pub struct RateLimitWindow {
     pub used_percent: f64,
     pub window_duration_minutes: Option<u64>,
     pub resets_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RateLimitBucket {
+    pub limit_id: Option<String>,
+    pub limit_name: Option<String>,
+    pub plan_type: Option<String>,
+    pub primary: Option<RateLimitWindow>,
+    pub secondary: Option<RateLimitWindow>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountUsageSnapshot {
+    pub provider: ProviderId,
+    pub observed_at_ms: i64,
+    pub source_quality: SourceQuality,
+    pub lifetime_tokens: Option<u64>,
+    pub peak_daily_tokens: Option<u64>,
+    pub longest_running_turn_seconds: Option<u64>,
+    pub current_streak_days: Option<u64>,
+    pub longest_streak_days: Option<u64>,
+    #[serde(default)]
+    pub daily_usage: Vec<AccountDailyUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountDailyUsage {
+    pub start_date: String,
+    pub tokens: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -284,6 +318,7 @@ mod tests {
                 resets_at_ms: Some(1000),
             }),
             secondary: None,
+            buckets: vec![],
         };
         let value = serde_json::to_value(snapshot).unwrap();
         assert_eq!(value["sourceQuality"], "official");

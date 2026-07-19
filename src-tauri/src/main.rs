@@ -64,6 +64,7 @@ fn main() {
             permission::permission_pending_snapshot,
             providers::provider_health_snapshot,
             providers::provider_activity_snapshot,
+            providers::codex::app_server::codex_account_snapshot,
             permission::install::permission_status,
             permission::install::permission_preview_install,
             permission::install::install_permission_hook,
@@ -78,6 +79,9 @@ fn main() {
         .manage::<PathState>(Arc::new(Mutex::new(None)))
         .manage::<providers::ProviderHealthState>(providers::new_health_state())
         .manage::<providers::ProviderActivityState>(providers::new_activity_state())
+        .manage::<providers::codex::app_server::AccountSensorState>(
+            providers::codex::app_server::new_state(),
+        )
         .setup(|app| {
             pathfix::apply(&app.handle().clone());
             sensor::install::refresh_if_stale();
@@ -128,6 +132,14 @@ fn main() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("cc-autobahn: error while running the cluster");
+        .build(tauri::generate_context!())
+        .expect("cc-autobahn: error while building the cluster")
+        .run(|_, event| {
+            if matches!(
+                event,
+                tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
+            ) {
+                providers::codex::app_server::stop();
+            }
+        });
 }

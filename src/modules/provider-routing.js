@@ -2,12 +2,18 @@ import { providerIdFromPayload, state, updateProviderHealth } from "./telemetry-
 
 export function routeClaudePayload(payload, handler, channel = null, rejectEqual = false) {
   if (providerIdFromPayload(payload) !== "claude") return false;
+  return routeProviderPayload(payload, handler, channel, rejectEqual);
+}
+
+export function routeProviderPayload(payload, handler, channel = null, rejectEqual = false) {
+  const provider = providerIdFromPayload(payload);
+  if (!provider) return false;
   if (channel) {
     const observedAtMs = Number(payload.observedAtMs);
     if (!Number.isFinite(observedAtMs) || observedAtMs < 0) return false;
-    const current = state.providers.claude.lastEventAtMs[channel] ?? -1;
+    const current = state.providers[provider].lastEventAtMs[channel] ?? -1;
     if (observedAtMs < current || (rejectEqual && observedAtMs === current)) return false;
-    state.providers.claude.lastEventAtMs[channel] = observedAtMs;
+    state.providers[provider].lastEventAtMs[channel] = observedAtMs;
   }
   handler(payload);
   return true;

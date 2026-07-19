@@ -29,7 +29,7 @@ function paintWeeklyBar(pct, view) {
   }
 }
 
-function renderWeeklyLimit(view) {
+export function renderWeeklyLimit(view) {
   const state = view.state;
   if (view.root().dataset.providerAvailable === "false") {
     view.element("limit-pct").textContent = "—";
@@ -37,12 +37,21 @@ function renderWeeklyLimit(view) {
     view.element("limit-reset").textContent = "data source unavailable";
     return;
   }
-  const hasData = state.sevenDayResetsAtMs > 0;
+  if (view.provider === "codex" && state.rateLimitSourceQuality === "unavailable") {
+    view.element("limit-pct").textContent = "—";
+    paintWeeklyBar(0, view);
+    view.element("limit-reset").textContent = "data source unavailable";
+    return;
+  }
+  const hasData = state.hasSecondaryLimit || state.sevenDayResetsAtMs > 0;
   const pct = Number(state.sevenDayPct) || 0;
   view.element("limit-pct").textContent = hasData ? `${Math.round(pct)}%` : "—";
   paintWeeklyBar(pct, view);
+  const quality = state.rateLimitSourceQuality === "stale" ? "stale · " : "";
   view.element("limit-reset").textContent = hasData
-    ? `resets ${formatResetAt(state.sevenDayResetsAtMs)}`
+    ? state.sevenDayResetsAtMs > 0
+      ? `${quality}resets ${formatResetAt(state.sevenDayResetsAtMs)}`
+      : `${quality}reset unavailable`
     : "no official data yet";
 }
 
@@ -107,7 +116,9 @@ export function wireLimitsPage(view = claudeView) {
   // Page 0's .row.gauge, it's one gauge, not three things to explain.
   hintOnHover(
     view.query(".limits-col"),
-    "Official 7-day usage window, resets weekly"
+    view.provider === "codex"
+      ? "Official Codex secondary usage window"
+      : "Official 7-day usage window, resets weekly"
   );
   hintOnHover(view.element("breakdown-list"), "Cost by model, today");
   hintOnHover(view.query(".burn-rates"), "Instant vs. this block's average $/h");

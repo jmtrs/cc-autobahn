@@ -10,9 +10,19 @@ import {
 } from "./engine-overlay.js";
 import { onPermissionPending, onPermissionResolved } from "./permission-gate.js";
 import { onBurnTick } from "./speedometer.js";
-import { onBlocksUpdate, onSensorState, onSensorUpdate } from "./trip-computer.js";
+import {
+  onAccountUsageUpdate,
+  onBlocksUpdate,
+  onRateLimitUpdate,
+  onSensorState,
+  onSensorUpdate,
+} from "./trip-computer.js";
 import { claudeView, codexView } from "./provider-view.js";
-import { hydrateProviderHealth, routeClaudePayload } from "./provider-routing.js";
+import {
+  hydrateProviderHealth,
+  routeClaudePayload,
+  routeProviderPayload,
+} from "./provider-routing.js";
 import { providerIdFromPayload, state, updateProviderHealth } from "./telemetry-state.js";
 import { setProviderAvailability } from "./provider-status.js";
 import { setGear } from "./trip-computer.js";
@@ -21,9 +31,13 @@ const providerViews = { claude: claudeView, codex: codexView };
 
 function syncCodexAvailability() {
   const health = state.providers.codex.health;
-  const available = ["transcript", "history"].some(
-    (component) => health[component]?.status === "connected",
-  );
+  const available =
+    ["transcript", "history"].some(
+      (component) => health[component]?.status === "connected",
+    ) ||
+    health["app-server"]?.status === "connected" ||
+    (health["app-server"]?.status === "degraded" &&
+      state.providers.codex.everQuotaConnected);
   setProviderAvailability("codex", available);
 }
 
@@ -89,6 +103,32 @@ export async function wireEngine() {
       onSensorState(payload, claudeView);
     }, "sensor-state");
   });
+  await listen("rate-limit-update", (e) => {
+    const provider = providerIdFromPayload(e.payload);
+    const view = providerViews[provider];
+    if (!view) return;
+    routeProviderPayload(
+      e.payload,
+      (payload) => {
+        console.info("[provider] official rate limits:", payload);
+        onRateLimitUpdate(payload, view);
+      },
+      "rate-limit-update",
+    );
+  });
+  await listen("account-usage-update", (e) => {
+    const provider = providerIdFromPayload(e.payload);
+    const view = providerViews[provider];
+    if (!view) return;
+    routeProviderPayload(
+      e.payload,
+      (payload) => {
+        console.info("[provider] official account usage:", payload);
+        onAccountUsageUpdate(payload, view);
+      },
+      "account-usage-update",
+    );
+  });
   await listen("permission-pending", (e) => {
     routeClaudePayload(e.payload, (payload) => {
       console.info("[permission] pending:", payload);
@@ -144,5 +184,27 @@ export async function wireEngine() {
     }
   } catch (e) {
     console.error("[sensor] snapshot:", e);
+  }
+  try {
+    const snapshot = await invoke("codex_account_snapshot");
+    if (snapshot?.rateLimits) {
+      routeProviderPayload(
+        snapshot.rateLimits,
+        (payload) => onRateLimitUpdate(payload, codexView),
+        "rate-limit-update",
+        true,
+      );
+    }
+    if (snapshot?.accountUsage) {
+      routeProviderPayload(
+        snapshot.accountUsage,
+        (payload) => onAccountUsageUpdate(payload, codexView),
+        "account-usage-update",
+        true,
+      );
+    }
+    syncCodexAvailability();
+  } catch (e) {
+    console.error("[codex] account snapshot:", e);
   }
 }

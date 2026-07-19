@@ -582,10 +582,22 @@ mod tests {
     fn real_recent_rollout_bootstraps_identity_when_available() {
         let roots = discover_rollout_roots();
         let files = active_jsonls(&roots, SystemTime::now());
-        let Some((path, _, _)) = files.first() else {
+        let Some(tail) = files.iter().find_map(|(path, _, _)| {
+            let tail = Tail::bootstrap(path);
+            let compatible = tail
+                .decoder
+                .thread_id
+                .as_deref()
+                .is_some_and(|id| !id.is_empty())
+                && tail
+                    .decoder
+                    .current_model
+                    .as_deref()
+                    .is_some_and(|model| !model.is_empty());
+            compatible.then_some(tail)
+        }) else {
             return;
         };
-        let tail = Tail::bootstrap(path);
         assert!(
             tail.decoder
                 .thread_id

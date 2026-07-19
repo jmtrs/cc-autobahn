@@ -1,6 +1,6 @@
 # Data engine
 
-cc-autobahn does not calculate usage: it **reads** it from three official/standard sources.
+cc-autobahn does not calculate usage: it **reads** it from four official/standard sources.
 All the raw data already exists; we just present it.
 
 ## Source 1 — ccusage (main engine)
@@ -107,7 +107,29 @@ the full JSON to `~/.claude/cc-autobahn-status.json`, which the GUI tails. This 
 
 Docs: <https://code.claude.com/docs/en/statusline>
 
-## Source 4 (optional) — OpenTelemetry
+## Source 4 — Codex App Server account sensor
+
+One owned `codex app-server --stdio` child supplies Codex's official account
+limits and account token-usage summary. cc-autobahn initializes only the stable
+surface, probes `account/rateLimits/read` and `account/usage/read`, and consumes
+`account/rateLimits/updated` notifications. Sparse updates merge into the last
+full snapshot without treating missing or null metadata as a deletion.
+
+All `rateLimitsByLimitId` buckets are preserved. The `codex` bucket drives the
+primary/secondary gauges when present; legacy `rateLimits` remains the fallback.
+The selected executable and its reported version own the connection. Unsupported
+methods, authentication modes, stale data and child exits degrade this component
+without stopping rollout telemetry or `ccusage codex` history. Account usage is
+official token telemetry, **not** official USD billing.
+
+Protocol input is newline-delimited JSON-RPC with a 1 MiB message bound. The
+adapter keeps one child, correlates request IDs, stores startup snapshots, polls
+once per minute, marks old snapshots stale then unavailable, and reconnects with
+bounded backoff.
+
+Docs: <https://developers.openai.com/codex/app-server/>
+
+## Source 5 (optional) — OpenTelemetry
 
 For advanced historical dashboards, Claude Code emits OTEL metrics:
 
@@ -135,6 +157,7 @@ Docs: <https://code.claude.com/docs/en/monitoring-usage>
 | `ccusage blocks` | **10–30 s** (or a persistent process) | the 5h block doesn't change every second; running `npx` every 1–2 s is wasteful |
 | JSONL tails (`tok/s`) | **200 ms file follow + 5 s discovery** | independent Claude/Codex ticks across concurrent sessions/threads |
 | Statusline (`rate_limits`, model) | **push** | arrives whenever Claude Code renders |
+| Codex App Server account sensor | **push + 60 s capability probe** | sparse limit notifications stay live; polling recovers missed updates and refreshes usage |
 | `ccusage claude daily` (History/Limits) | **on-demand** (D33) | daily totals barely move within a day; fetched only when that MFD page opens, cached client-side ~5 min |
 
 ## Zero-friction strategy (the app wires itself up, D9)

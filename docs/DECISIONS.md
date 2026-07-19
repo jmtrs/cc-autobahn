@@ -1462,3 +1462,35 @@ model cost semantics, privacy, spoof rejection, malformed input, cache
 isolation, in-flight coalescing, retry and stale-day handling. Full baseline:
 89 Rust tests, 36 frontend tests, Rustfmt, strict Clippy, Vite production build
 and whitespace validation.
+
+## D48 — Official Codex account data stays behind one stable App Server adapter
+
+**Lifecycle and version boundary**: cc-autobahn resolves the Codex executable
+from its hardened application PATH, reports that exact runtime's version and
+owns one `codex app-server --stdio` child. Initialization opts out of
+experimental APIs. Stable account methods are capability-probed at runtime;
+older binaries and unsupported authentication modes degrade only App Server
+health. Reconnect is sequential with bounded exponential backoff, so duplicate
+children cannot accumulate. Tauri exit events explicitly stop and reap the
+active child before the process exits.
+
+**Wire and normalization contract**: newline JSON-RPC messages are bounded to
+1 MiB and correlated by request ID. `account/rateLimits/read` seeds a full
+snapshot; `account/rateLimits/updated` is merged recursively while ignoring
+missing/null fields. Every `rateLimitsByLimitId` bucket crosses IPC in sorted
+form, while the `codex` bucket deterministically owns the primary/secondary
+panel gauges. Epoch seconds become milliseconds once in Rust. Account usage
+keeps summary and daily token buckets but never invents an official USD cost.
+
+**Freshness and fallback**: Rust stores the latest rate-limit/account-usage
+snapshots to close the pre-WebView subscription race. Events carry
+`official`/`stale`/`unavailable` quality without rewriting the original
+observation time; App Server health is independent from rollout and
+history health, so failure cannot erase cross-surface local telemetry or
+estimated history. A real redacted contract probe against `codex-cli 0.144.6`
+confirmed initialize, rate limits and account usage.
+
+**Verification**: sparse merge, null preservation, deterministic multi-bucket
+selection, account usage and input-size bounds have Rust fixtures. Full gate:
+98 Rust tests, 40 frontend tests, Rustfmt, strict Clippy, Vite production build
+and whitespace validation.

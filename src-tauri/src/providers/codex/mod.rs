@@ -3,6 +3,7 @@
 //! Phase 3 starts with the local rollout source so activity from independent
 //! CLI, IDE and desktop threads remains observable without an owned App Server.
 
+pub mod app_server;
 mod rollout;
 
 use std::thread;
@@ -13,12 +14,14 @@ use tauri::AppHandle;
 use super::{emit_health, HealthStatus, ProviderComponent, ProviderId};
 
 pub const ID: ProviderId = ProviderId::Codex;
-pub const COMPONENTS: [ProviderComponent; 1] = [ProviderComponent::Transcript];
+pub const COMPONENTS: [ProviderComponent; 2] =
+    [ProviderComponent::Transcript, ProviderComponent::AppServer];
 
 const TAIL_INTERVAL_MS: u64 = 200;
 const RESCAN_SECS: u64 = 5;
 
 pub fn start(app: AppHandle) {
+    app_server::start(app.clone());
     thread::spawn(move || {
         let roots = rollout::discover_rollout_roots();
         let mut tails = rollout::TailSet::new();
@@ -59,6 +62,8 @@ mod tests {
     #[test]
     fn adapter_declares_rollout_transcript_once() {
         assert_eq!(ID, ProviderId::Codex);
-        assert_eq!(COMPONENTS, [ProviderComponent::Transcript]);
+        assert_eq!(COMPONENTS.len(), 2);
+        assert!(COMPONENTS.contains(&ProviderComponent::Transcript));
+        assert!(COMPONENTS.contains(&ProviderComponent::AppServer));
     }
 }
