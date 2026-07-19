@@ -151,7 +151,7 @@ Implementation order, one layer at a time, verifying before moving forward.
       Always Allow, configurable built-in/custom/off alert sound.
 - [x] Themes, reorderable optional MFD screens, synthetic VFD cursor, and
       current Settings controls wired without changing the 550 × 150 panel.
-- [x] Current quality gate: 77 Rust tests, 9 frontend tests, Rustfmt, strict Clippy, and Vite
+- [x] Current quality gate: 78 Rust tests, 9 frontend tests, Rustfmt, strict Clippy, and Vite
       production build pass.
 
 ## Follow-up work

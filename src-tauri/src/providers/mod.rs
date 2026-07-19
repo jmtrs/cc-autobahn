@@ -1,11 +1,19 @@
 //! Provider-neutral contracts. Adapters own provider-specific wire formats;
 //! the rest of the application consumes these discriminated domain shapes.
 
+pub mod claude;
+
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
+
+/// Starts every enabled provider adapter. The native shell calls this registry
+/// once; adapters remain responsible for their own worker topology.
+pub fn start_enabled(app: AppHandle) {
+    claude::start(app);
+}
 
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,

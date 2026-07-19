@@ -870,12 +870,11 @@ Practical delivery levels:
 
 ### Phase 1 — Provider foundation
 
-**Status:** first foundation cut implemented on `develop`: normalized Rust
-contracts, provider-discriminated Claude payloads, component health registry
-and snapshots, startup-safe sensor hydration, global/per-provider frontend
-state, strict Claude-only legacy routing, CI frontend tests and replay guards.
-Moving all Claude adapters behind the provider lifecycle and broader visual
-regression coverage remain before this phase is complete.
+**Status:** provider lifecycle and first foundation cut implemented on `develop`:
+normalized Rust contracts, provider-discriminated Claude payloads, component
+health registry and snapshots, startup-safe sensor hydration, global/per-provider
+frontend state, strict Claude-only legacy routing, CI frontend tests and replay
+guards. Broader visual regression coverage remains before this phase is complete.
 
 - Define normalized domain contracts.
 - Move current Claude implementations behind a Claude provider without changing behavior.

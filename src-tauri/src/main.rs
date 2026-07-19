@@ -79,9 +79,7 @@ fn main() {
             permission::install::refresh_if_stale();
 
             let handle = app.handle().clone();
-            engine::start(handle.clone());
-            burn::start(handle.clone());
-            sensor::start(handle.clone());
+            providers::start_enabled(handle.clone());
 
             // No icon in Dock/Cmd+Tab (D24): lives only in the menu bar.
             #[cfg(target_os = "macos")]
