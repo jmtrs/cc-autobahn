@@ -815,7 +815,7 @@ The following commands passed during the 2026-07-19 re-audit:
 npm run build
 npm run test:frontend              # 11 passed
 npm run test:visual                # 4 screens at 550 × 150
-cargo test                         # 78 passed
+cargo test                         # 80 passed
 cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 ```
@@ -889,8 +889,10 @@ viewport with clipping/overflow checks and committed visual baselines.
 **Status:** in progress on `develop`. The versioned settings boundary and
 idempotent legacy migration are implemented first: display mode, global
 preferences, provider namespaces and `provider:model` nameplate keys now live
-in schema v2 while old keys remain available for rollback. Provider-scoped DOM
-renderers and native mode resizing remain.
+in schema v2 while old keys remain available for rollback. A serialized native
+transition now enforces 550 × 150 for single-provider modes and 550 × 290 for
+Both, preserving and monitor-clamping the top-left point. Provider-scoped DOM
+renderers and the Settings display-mode control remain.
 
 - Convert telemetry, model selector, History and Limits into provider-scoped renderers.
 - Preserve the existing header and dynamic nameplate as shared chassis elements.

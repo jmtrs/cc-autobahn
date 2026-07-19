@@ -188,7 +188,7 @@ tray states, themes, permission sound/consent, and manual position reset are
 wired. Default placement remains under the tray, with D41's persisted drag
 override available when wanted.
 
-Current verified baseline: **78 Rust tests**, **11 frontend tests**, Rustfmt
+Current verified baseline: **80 Rust tests**, **11 frontend tests**, Rustfmt
 check, strict Clippy (`-D warnings`), and the Vite production build all pass.
 Frontend linting is not yet configured. Future work is tracked in the roadmap:
 Codex provider foundation is implemented; Codex data adapters and UI remain.

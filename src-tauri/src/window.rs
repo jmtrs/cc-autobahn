@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tauri::tray::TrayIcon;
-use tauri::{AppHandle, Manager, PhysicalPosition, Rect, WebviewWindow, WindowEvent};
+use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, Rect, WebviewWindow, WindowEvent};
 
 const PANEL_GAP: f64 = 4.0;
 
@@ -16,10 +16,58 @@ const PANEL_GAP: f64 = 4.0;
 /// the panel when it loses focus.
 pub type PinnedState = Arc<Mutex<bool>>;
 
+/// Serializes display-mode resize and clamp as one native transition.
+pub type DisplayModeTransition = Arc<Mutex<()>>;
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DisplayMode {
+    Claude,
+    Codex,
+    Both,
+}
+
+const SINGLE_PROVIDER_SIZE: (f64, f64) = (550.0, 150.0);
+const DUAL_PROVIDER_SIZE: (f64, f64) = (550.0, 290.0);
+
+fn display_mode_size(mode: DisplayMode) -> (f64, f64) {
+    match mode {
+        DisplayMode::Claude | DisplayMode::Codex => SINGLE_PROVIDER_SIZE,
+        DisplayMode::Both => DUAL_PROVIDER_SIZE,
+    }
+}
+
 /// `#[tauri::command]` The frontend's PIN button pins/releases the panel.
 #[tauri::command]
 pub fn set_pinned(state: tauri::State<'_, PinnedState>, value: bool) {
     *lock(&state) = value;
+}
+
+#[tauri::command]
+pub fn set_display_mode(
+    app: AppHandle,
+    mode: DisplayMode,
+    transition: tauri::State<'_, DisplayModeTransition>,
+    auto_guard: tauri::State<'_, AutoRepositionGuard>,
+) -> Result<(), String> {
+    let _transition = lock(&transition);
+    let window = app
+        .get_webview_window("cluster")
+        .ok_or_else(|| "cluster window is unavailable".to_string())?;
+    let current = window
+        .outer_position()
+        .map_err(|error| format!("read window position: {error}"))?;
+    let (width, height) = display_mode_size(mode);
+    window
+        .set_size(LogicalSize::new(width, height))
+        .map_err(|error| format!("resize window: {error}"))?;
+    position_at(
+        &window,
+        f64::from(current.x),
+        f64::from(current.y),
+        &auto_guard,
+    );
+    Ok(())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -495,4 +543,24 @@ fn set_top_left(window: &WebviewWindow, x: f64, y: f64, scale: f64) {
 #[cfg(not(target_os = "macos"))]
 fn set_top_left(window: &WebviewWindow, x: f64, y: f64, _scale: f64) {
     let _ = window.set_position(PhysicalPosition::new(x as i32, y as i32));
+}
+
+#[cfg(test)]
+mod display_mode_tests {
+    use super::*;
+
+    #[test]
+    fn single_modes_preserve_the_legacy_panel_size() {
+        assert_eq!(display_mode_size(DisplayMode::Claude), (550.0, 150.0));
+        assert_eq!(display_mode_size(DisplayMode::Codex), (550.0, 150.0));
+    }
+
+    #[test]
+    fn both_mode_only_grows_vertically() {
+        let single = display_mode_size(DisplayMode::Claude);
+        let both = display_mode_size(DisplayMode::Both);
+        assert_eq!(both.0, single.0);
+        assert!(both.1 > single.1);
+        assert_eq!(both, (550.0, 290.0));
+    }
 }

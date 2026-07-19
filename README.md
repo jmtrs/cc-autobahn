@@ -90,7 +90,7 @@ behavior and the optional Claude Code permission bridge.
 - **Zero setup** — no ccusage or Bun on the machine? one button installs
   both and starts polling, no terminal required.
 
-Current verified baseline: `cargo test` **78/78**, `npm run test:frontend`
+Current verified baseline: `cargo test` **80/80**, `npm run test:frontend`
 **11/11**, four Playwright layout/snapshot baselines at **550×150**, `cargo fmt --check`,
 `cargo clippy --all-targets --all-features -- -D warnings`, and
 `npm run build` all pass.

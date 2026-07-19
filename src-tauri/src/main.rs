@@ -67,10 +67,12 @@ fn main() {
             permission::install::install_permission_hook,
             permission::install::uninstall_permission_hook,
             window::set_pinned,
+            window::set_display_mode,
             window::reset_position,
             tray_icon::set_tray_alert,
         ])
         .manage::<PinnedState>(Arc::new(Mutex::new(false)))
+        .manage::<window::DisplayModeTransition>(Arc::new(Mutex::new(())))
         .manage::<PathState>(Arc::new(Mutex::new(None)))
         .manage::<providers::ProviderHealthState>(providers::new_health_state())
         .setup(|app| {

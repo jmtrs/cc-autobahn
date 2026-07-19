@@ -151,7 +151,7 @@ Implementation order, one layer at a time, verifying before moving forward.
       Always Allow, configurable built-in/custom/off alert sound.
 - [x] Themes, reorderable optional MFD screens, synthetic VFD cursor, and
       current Settings controls wired without changing the 550 × 150 panel.
-- [x] Current quality gate: 78 Rust tests, 9 frontend tests, Rustfmt, strict Clippy, and Vite
+- [x] Current quality gate: 80 Rust tests, 11 frontend tests, Rustfmt, strict Clippy, and Vite
       production build pass.
 
 ## Follow-up work
@@ -177,7 +177,7 @@ npm run test:frontend # 11 tests
 npm run test:visual   # 4 Claude screens, exact 550 × 150 contract
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml # 78 tests
+cargo test --manifest-path src-tauri/Cargo.toml # 80 tests
 ```
 
 For interaction changes, also run `npm run tauri dev` and verify native tray,
