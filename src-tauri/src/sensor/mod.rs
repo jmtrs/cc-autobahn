@@ -414,6 +414,7 @@ pub fn start(app: AppHandle) {
                 if let Some(used_pct) = update.five_hour_pct {
                     crate::tray_icon::set_progress(
                         &app,
+                        crate::providers::ProviderId::Claude,
                         100.0 - used_pct,
                         crate::tray_icon::ProgressSource::Official,
                     );

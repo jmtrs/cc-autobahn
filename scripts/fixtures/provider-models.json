@@ -1,0 +1,14 @@
+{
+  "claude": {
+    "modelId": "claude-opus-4-8",
+    "observedAtMs": 100,
+    "sequence": 1,
+    "sessionOrThreadId": "session-fixture"
+  },
+  "codex": {
+    "modelId": "gpt-5.6-sol",
+    "observedAtMs": 200,
+    "sequence": 1,
+    "sessionOrThreadId": "thread-fixture"
+  }
+}

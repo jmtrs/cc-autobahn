@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.8.1",
   "type": "module",
-  "description": "Mercedes W203 amber trip-computer for Claude Code token usage. Chassis only.",
+  "description": "Mercedes W203 instrument cluster for Claude Code and Codex usage.",
   "scripts": {
     "dev": "vite",
     "test:frontend": "node --test src/modules/*.test.js",

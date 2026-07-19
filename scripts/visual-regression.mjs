@@ -10,6 +10,9 @@ import { createServer } from "vite";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const writeSnapshots = process.argv.includes("--update");
+const providerModels = JSON.parse(
+  await readFile(path.join(root, "scripts", "fixtures", "provider-models.json"), "utf8"),
+);
 const PIXEL_CHANNEL_TOLERANCE = 2;
 const pages = [
   [0, "SINCE START", "live"],
@@ -96,6 +99,23 @@ try {
     }, { mode: scenario.mode, theme: scenario.theme.settings });
     await page.goto(`http://127.0.0.1:${address.port}/`);
     await page.waitForSelector(`[data-app-chassis][data-display-mode="${scenario.mode}"]`);
+    const coldMarkersHidden = await page
+      .locator('[data-provider-role="gear-marker"]')
+      .evaluateAll((markers) => markers.every((marker) => marker.hidden));
+    if (!coldMarkersHidden) throw new Error(`${scenario.mode}: cold model marker claims activity`);
+    await page.evaluate(async ({ models, providers }) => {
+      const [{ setGear }, { createProviderView }, { setProviderAvailability }] = await Promise.all([
+        import("/src/modules/trip-computer.js"),
+        import("/src/modules/provider-view.js"),
+        import("/src/modules/provider-status.js"),
+      ]);
+      providers.forEach((provider) => {
+        if (provider === "codex") setProviderAvailability("codex", true);
+        const fixture = models[provider];
+        const view = createProviderView({ provider });
+        setGear([fixture.modelId], view, fixture);
+      });
+    }, { models: providerModels, providers: scenario.providers });
     await page.addStyleTag({
       content: "*, *::before, *::after { animation: none !important; transition: none !important; }",
     });
@@ -137,6 +157,8 @@ try {
         return {
           activePages: activePages.map((element) => Number(element.dataset.page)),
           label: document.getElementById("page-label").textContent,
+          activeProvider: document.querySelector('[data-chassis-role="active-provider-tag"]')?.textContent,
+          nameplate: document.querySelector('[data-chassis-role="nameplate"]')?.textContent,
           currentPage: Number(cluster.dataset.currentPage),
           visibleProviders: visibleModules.map((element) => element.dataset.providerModule),
           settingsCopies: document.querySelectorAll('.shared-pages .page[data-page="3"]').length,
@@ -160,9 +182,13 @@ try {
 
       const expectedSize = [scenario.viewport.width, scenario.viewport.height];
       const expectedActive = Array(index === 3 ? 1 : scenario.providers.length).fill(index);
+      const expectedProvider = scenario.providers.at(-1).toUpperCase();
+      const expectedNameplate = scenario.providers.at(-1) === "codex" ? "GPT 5.6 SOL" : "CC 500";
       if (
         layout.currentPage !== index ||
         layout.label !== expectedLabel ||
+        layout.activeProvider !== expectedProvider ||
+        layout.nameplate !== expectedNameplate ||
         JSON.stringify(layout.activePages) !== JSON.stringify(expectedActive)
       ) {
         throw new Error(`${scenario.mode} page ${index}: navigation mismatch ${JSON.stringify(layout)}`);

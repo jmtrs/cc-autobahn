@@ -151,15 +151,19 @@ Implementation order, one layer at a time, verifying before moving forward.
       Always Allow, configurable built-in/custom/off alert sound.
 - [x] Themes, reorderable optional MFD screens, synthetic VFD cursor, and
       current Settings controls wired without changing the 550 × 150 panel.
-- [x] Current quality gate: 108 Rust tests, 42 frontend tests, Rustfmt, strict Clippy, and Vite
+- [x] Current quality gate: 114 Rust tests, 46 frontend tests, 36 visual baselines,
+      Rustfmt, strict Clippy, and Vite
       production build pass.
 
 ## Follow-up work
 
-- [x] Codex support through Phase 5: architecture, provider foundation,
+- [x] Codex automated delivery through Phase 6: architecture, provider foundation,
       dual-provider UI, local rollout speed/model/thread telemetry, estimated
-      history, official App Server account sensor and provider-native permission hooks. See
+      history, official App Server account sensor, provider-native permission hooks,
+      provider-aware model presentation, dual-provider tray arbitration and fixtures. See
       [CODEX-INTEGRATION-ASSESSMENT.md](./CODEX-INTEGRATION-ASSESSMENT.md).
+- [ ] Complete the trusted-hook and version/auth cross-surface soak. This needs
+      explicit native `/hooks` trust and cannot be automated by the installer.
 - [x] Permission identity: replace Claude `prompt_id` as queue identity with
       a generated per-hook-invocation ID; retain `prompt_id` as optional
       correlation metadata and include provider in future routing keys.
@@ -174,11 +178,11 @@ Current automated baseline:
 
 ```bash
 npm run build
-npm run test:frontend # 26 tests
+npm run test:frontend # 46 tests
 npm run test:visual   # 3 modes × 3 themes × 4 screens; exact 550 × 150/290 + pixel snapshots
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml # 80 tests
+cargo test --manifest-path src-tauri/Cargo.toml # 114 tests
 ```
 
 For interaction changes, also run `npm run tauri dev` and verify native tray,

@@ -96,6 +96,29 @@ test("delayed model activity cannot roll the shared nameplate backwards", () => 
   assert.equal(state.providers.claude.nameplateLabel, "CC 320");
 });
 
+test("equal-time root and subagent activity ignores unrelated local sequences", () => {
+  state.global.lastActiveModel = null;
+  state.providers.codex.lastModelActivity = null;
+  assert.equal(setLastActiveModel({
+    provider: "codex",
+    modelKey: "gpt-subagent",
+    label: "GPT SUBAGENT",
+    sessionOrThreadId: "thread-a",
+    observedAtMs: 500,
+    sequence: 99,
+  }), true);
+  assert.equal(setLastActiveModel({
+    provider: "codex",
+    modelKey: "gpt-root",
+    label: "GPT ROOT",
+    sessionOrThreadId: "thread-z",
+    observedAtMs: 500,
+    sequence: 1,
+  }), true);
+  assert.equal(state.global.lastActiveModel.sessionOrThreadId, "thread-z");
+  assert.equal(state.providers.codex.lastModelActivity.modelKey, "gpt-root");
+});
+
 test("legacy renderers are explicitly bound to Claude state", () => {
   assert.strictEqual(claudeState, state.providers.claude);
   assert.notStrictEqual(claudeState, state.providers.codex);

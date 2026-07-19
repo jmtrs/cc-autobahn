@@ -848,6 +848,7 @@ fn string_field(value: &Value, key: &str) -> Option<String> {
 }
 
 fn store_and_emit_limits(app: &AppHandle, state: &AccountSensorState, snapshot: RateLimitSnapshot) {
+    crate::tray_icon::sync_rate_limit_snapshot(app, &snapshot);
     state
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -1021,6 +1022,7 @@ fn mark_limits_quality(app: &AppHandle, state: &AccountSensorState, quality: Sou
         snapshot.source_quality = quality;
         snapshot.clone()
     };
+    crate::tray_icon::sync_rate_limit_snapshot(app, &snapshot);
     let _ = app.emit("rate-limit-update", snapshot);
 }
 

@@ -25,7 +25,6 @@ import { startBurnAnimation } from "./modules/speedometer.js";
 import { initTheme } from "./modules/theme.js";
 import {
   buildSegments,
-  setGear,
   wireNameplateEdit,
   wireTripComputerHints,
 } from "./modules/trip-computer.js";
@@ -55,7 +54,7 @@ async function init() {
   wireRedlineTray();
   providerViews.forEach((view) => wireFooterToggle(view, providerViews));
   wireNameplateEdit(providerViews);
-  wireTripComputerHints(claudeView);
+  providerViews.forEach((view) => wireTripComputerHints(view));
   // Page listeners wired before wireMfdNav() so its initial activate() (which
   // may land on Page 1/2 if that's the saved default) is already observed.
   providerViews.forEach((view) => {
@@ -65,9 +64,6 @@ async function init() {
   wireSettingsPage({ onDisplayModeChange: changeDisplayMode });
   wireMfdNav();
   providerViews.forEach((view) => renderFooterMetric(view));
-  if (claudeView.root().hidden === false) {
-    setGear(["opus"], claudeView); // positions Claude's default marker
-  }
   providerViews.forEach((view) => startBurnAnimation(view)); // independent provider springs
 }
 

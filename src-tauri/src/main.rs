@@ -135,6 +135,7 @@ fn main() {
             app.manage(tray_handle);
             tray_icon::set_progress(
                 &app.handle().clone(),
+                providers::ProviderId::Claude,
                 100.0,
                 tray_icon::ProgressSource::Estimated,
             );

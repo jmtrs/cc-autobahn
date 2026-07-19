@@ -882,7 +882,7 @@ when drained independently; `rescan_keeps_known_stale_file_state` covers the
 long quiet turn case), existing `drain_partial_line_not_duplicated` updated for
 the explicit-`path` signature, `cargo clippy`/`cargo fmt --check` clean.
 
-## D39 — Tray ring: estimated-vs-official arbitration moves into `tray_icon.rs` (supersedes part of D30)
+## D39 — Tray ring: estimated-vs-official arbitration moves into `tray_icon.rs` (supersedes part of D30; multi-provider summary superseded by D50)
 
 **Decision**: `tray_icon::set_progress` now takes a `ProgressSource` (`Estimated` |
 `Official`) and owns the priority decision itself — once an `Official` write
@@ -1523,3 +1523,28 @@ the user's config. Queue namespace, exact session memory, installer shape and
 ownership, hook timeout isolation, trust precedence and UI lifecycle states
 have fixtures. Full gate: 108 Rust tests, 42 frontend tests, 36 visual
 baselines, Rustfmt, strict Clippy, Vite build and whitespace validation.
+
+## D50 — Provider-native models and conservative dual-provider tray summary
+
+**Model presentation**: the selector and nameplate mapping are owned by each
+provider. Claude retains `O/S/H/F/C` and the established W203 trim labels.
+Codex uses `G/S/T/M/C` for GPT, Sol, Terra, Mini and custom families, while the
+shared nameplate shows a normalized real identifier such as `GPT 5.6 SOL`.
+Unknown IDs stay visible through a deterministic compact fallback. Overrides
+are keyed by provider plus model key; the immutable provider tag still follows
+the newest accepted activity event.
+
+**Tray summary**: `tray_icon.rs` stores one candidate per provider. Official
+data suppresses estimated data only for the same provider. At the native 22pt
+size, one ring renders the lowest valid percentage remaining across providers:
+the most urgent quota, never a sum or average. Stale data keeps its last-known
+candidate until the adapter marks it unavailable; unavailable candidates are
+removed. Redline and permission blinks continue to override the paint without
+discarding underlying quota state.
+
+**Verification**: provider model mappings and unknown fallbacks have frontend
+tests and visual fixtures; independent root/subagent rollout decoders and
+cross-provider tray arbitration have Rust tests. Full automated gate: 114 Rust
+tests, 46 frontend tests, 36 visual baselines, Rustfmt, strict Clippy, Vite
+build and whitespace validation. Native trusted-hook/version/auth soak remains
+an explicit release operation.

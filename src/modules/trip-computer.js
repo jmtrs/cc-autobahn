@@ -3,11 +3,12 @@
 // (D11: official data is never presented as estimated). Wired in Phase 3
 // Track A/B.
 
-import { formatDurationMs, formatHMin, formatModelCode, formatTokens } from "./format.js";
+import { formatDurationMs, formatHMin, formatTokens } from "./format.js";
 import { renderFooterMetric } from "./footer-metric.js";
 import { hintOnHover, setHeaderHint } from "./header-hint.js";
 import { loadGlobalSetting, saveGlobalSetting } from "./app-settings.js";
 import { claudeView } from "./provider-view.js";
+import { defaultNameplate, modelSlots, resolveModelPresentation } from "./model-presentation.js";
 import {
   reconcileNameplateEdit,
   recordModelActivity,
@@ -25,28 +26,23 @@ function runtime(view) {
       lastGearHit: null,
       lastCustomLabel: "",
       currentGearHit: null,
+      currentModelKey: null,
+      currentModelEditable: false,
     });
   }
   return runtimeByProvider.get(view.provider);
 }
 
-// Model badge, Mercedes trim-nameplate style — one per active model (D-review naming session).
-// User-editable (click the badge); custom text persists per model in localStorage.
-const NAMEPLATES = {
-  opus: "CC 500",
-  sonnet: "CC 320",
-  haiku: "CC 220 CDI",
-  fable: "CC 63 AMG",
-};
-// Per-slot hover labels for the gear column (wireTripComputerHints) — plain
-// model names, "custom" resolved dynamically at hover time instead (varies).
-const GEAR_LABELS = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable" };
 function loadNameplateOverrides() {
   return loadGlobalSetting("nameplates");
 }
 
-function getNameplate(hit, view) {
-  return loadNameplateOverrides()[`${view.provider}:${hit}`] || NAMEPLATES[hit];
+function getNameplate(modelKey, view, fallback = null) {
+  return (
+    loadNameplateOverrides()[`${view.provider}:${modelKey}`] ||
+    defaultNameplate(view.provider, modelKey) ||
+    fallback
+  );
 }
 
 /** Build the autonomie segment bar (fuel-gauge style). */
@@ -69,22 +65,17 @@ export function buildSegments(filled, view = claudeView) {
 export function setGear(models, view = claudeView, activity = {}) {
   if (!Array.isArray(models) || models.length === 0) return;
   const local = runtime(view);
-  const order = ["opus", "sonnet", "haiku", "fable"];
-  const hit = order.find((m) =>
-    models.some((id) => String(id).toLowerCase().includes(m))
-  );
-  // No known model matched: fall back to the "custom" slot, identified by
-  // the first model id reported (same "first match wins" rule as `hit`,
-  // not a per-session breakdown — one physical selector, one value).
-  const customId = hit ? null : models.find((id) => id);
-  if (!hit && !customId) return;
-  const gearKey = hit || "custom";
-  if (customId) local.lastCustomLabel = formatModelCode(customId);
+  const presentation = models
+    .map((modelId) => resolveModelPresentation(view.provider, modelId))
+    .find(Boolean);
+  if (!presentation) return;
+  const { modelKey, slotKey: gearKey, editable } = presentation;
+  if (gearKey === "custom") local.lastCustomLabel = presentation.nameplate;
 
-  const label = hit ? getNameplate(hit, view) : formatModelCode(customId);
+  const label = getNameplate(modelKey, view, presentation.nameplate);
   const accepted = recordModelActivity({
     provider: view.provider,
-    modelKey: gearKey,
+    modelKey,
     label,
     sessionOrThreadId: activity.sessionOrThreadId,
     observedAtMs: activity.observedAtMs ?? Date.now(),
@@ -92,15 +83,14 @@ export function setGear(models, view = claudeView, activity = {}) {
   });
   if (!accepted.providerAccepted) return;
   local.currentGearHit = gearKey;
+  local.currentModelKey = modelKey;
+  local.currentModelEditable = editable;
   const nameplateEl = view.chassisElement("nameplate");
   const providerTag = view.chassisElement("active-provider-tag");
   if (accepted.globalAccepted && providerTag) providerTag.textContent = view.provider.toUpperCase();
   // Don't overwrite mid-edit — the user is typing (D-review: a live model
   // tick landing while editing would clobber the in-progress text).
   if (accepted.globalAccepted && nameplateEl && nameplateEl.contentEditable !== "true") {
-    // Custom slot shows the real detected model code (e.g. "GLM5") instead
-    // of a decorative trim name — "custom" isn't a fixed model identity like
-    // the other 4, so there's no stable NAMEPLATES entry for it.
     nameplateEl.textContent = label;
   }
 
@@ -114,6 +104,7 @@ export function setGear(models, view = claudeView, activity = {}) {
   const gearEl = view.element("gear");
   const marker = view.element("gear-marker");
   if (activeEl && gearEl && marker) {
+    marker.hidden = false;
     // translateY relative to .gear itself — robust against font-size/gap
     // changes, doesn't depend on assuming a fixed row height.
     const targetY = activeEl.offsetTop + activeEl.offsetHeight / 2;
@@ -146,8 +137,10 @@ export function wireNameplateEdit(views = [claudeView]) {
     const provider = appState.global.lastActiveModel?.provider;
     const view = candidates.find((candidate) => candidate.provider === provider);
     if (!view) return null;
-    const modelKey = runtime(view).currentGearHit;
-    return modelKey ? { view, modelKey } : null;
+    const local = runtime(view);
+    return local.currentModelKey
+      ? { view, modelKey: local.currentModelKey, editable: local.currentModelEditable }
+      : null;
   };
   // No `title` (D-review): a native browser tooltip is dark-gray/sans-serif
   // OS chrome, breaks the amber VFD look with no CSS-reachable fix — same
@@ -160,7 +153,7 @@ export function wireNameplateEdit(views = [claudeView]) {
     // The "custom" slot isn't one fixed model identity (D-review) — it can
     // be a different proxy from one block to the next, so a saved rename
     // would go stale exactly where accuracy matters most. Not editable.
-    if (editContext.modelKey === "custom") {
+    if (!editContext.editable) {
       editContext = null;
       return;
     }
@@ -179,7 +172,7 @@ export function wireNameplateEdit(views = [claudeView]) {
     const { view, modelKey } = editContext;
     const overrides = loadNameplateOverrides();
     const value = el.textContent.trim().toUpperCase();
-    if (!value || value === NAMEPLATES[modelKey]) {
+    if (!value || value === defaultNameplate(view.provider, modelKey)) {
       delete overrides[`${view.provider}:${modelKey}`];
     } else {
       overrides[`${view.provider}:${modelKey}`] = value;
@@ -439,6 +432,8 @@ export function onSensorState(p, view = claudeView) {
  *  most-documented points of confusion (tok/s isn't live, cost is estimated). */
 export function wireTripComputerHints(view = claudeView) {
   const local = runtime(view);
+  const providerLabel = view.provider === "codex" ? "Codex" : "Claude";
+  const labels = Object.fromEntries(modelSlots(view.provider).map((slot) => [slot.key, slot.label]));
   // Per-letter hints (not one static hintOnHover on the whole .gear): each
   // slot names its own model even when it isn't the active one, and the
   // active slot is called out explicitly. "custom" has no fixed identity
@@ -447,19 +442,23 @@ export function wireTripComputerHints(view = claudeView) {
     const model = el.dataset.model;
     el.addEventListener("mouseenter", () => {
       const label =
-        model === "custom" ? local.lastCustomLabel || "Custom (non-Claude model)" : GEAR_LABELS[model];
-      setHeaderHint(local.currentGearHit === model ? `Active model: ${label}` : label);
+        model === "custom" ? local.lastCustomLabel || labels.custom : labels[model];
+      setHeaderHint(
+        local.currentGearHit === model
+          ? `${providerLabel} · active model: ${label}`
+          : `${providerLabel} · ${label}`,
+      );
     });
     el.addEventListener("mouseleave", () => setHeaderHint(""));
   });
   const gaugeRow = view.query(".row.gauge");
-  hintOnHover(gaugeRow, "5h quota remaining — click for reset time");
+  hintOnHover(gaugeRow, `${providerLabel} · primary limit remaining — click for reset time`);
   gaugeRow.onclick = () => toggleAutonomieView(view);
   hintOnHover(
     view.element("burn"),
-    "Per-response rate"
+    `${providerLabel} · per-response rate`
   );
-  hintOnHover(view.element("avg"), "Estimated cost, not official");
-  hintOnHover(view.element("odo"), "Total tokens since this block started");
-  hintOnHover(view.element("session-time"), "Elapsed time in this 5h block");
+  hintOnHover(view.element("avg"), `${providerLabel} · estimated cost, not official`);
+  hintOnHover(view.element("odo"), `${providerLabel} · total tokens in the active interval`);
+  hintOnHover(view.element("session-time"), `${providerLabel} · active interval elapsed`);
 }

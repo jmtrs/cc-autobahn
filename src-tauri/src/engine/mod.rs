@@ -202,6 +202,7 @@ pub fn start(app: AppHandle) {
                         .unwrap_or(0.0);
                     crate::tray_icon::set_progress(
                         &app,
+                        crate::providers::ProviderId::Claude,
                         pct_remaining,
                         crate::tray_icon::ProgressSource::Estimated,
                     );
@@ -221,6 +222,7 @@ pub fn start(app: AppHandle) {
                     // No active block: window not being spent, ring full.
                     crate::tray_icon::set_progress(
                         &app,
+                        crate::providers::ProviderId::Claude,
                         100.0,
                         crate::tray_icon::ProgressSource::Estimated,
                     );

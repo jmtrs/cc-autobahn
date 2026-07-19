@@ -5,6 +5,7 @@
 // segment gauge: 100% = 5h window full, 0% = exhausted. No drawing deps:
 // same hand-rolled pattern as scripts/make-tray-icon.mjs, but at
 // runtime and with a hole (ring, not disc) so the arc can be painted.
+use std::collections::BTreeMap;
 use std::f64::consts::TAU;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -13,6 +14,8 @@ use std::time::Duration;
 
 use tauri::tray::TrayIcon;
 use tauri::{AppHandle, Manager, Wry};
+
+use crate::providers::{ProviderId, RateLimitSnapshot, SourceQuality};
 
 const S: u32 = 44; // 22pt @2x retina, same as the previous static icon
 const OUTER_R: f64 = S as f64 * 0.42;
@@ -24,80 +27,126 @@ const ALERT_BLINK_MS: u64 = 450; // on/off half-period while critical (D37/D-rev
 /// 5h billing window in minutes — same as WINDOW_MIN in main.js.
 pub const WINDOW_MIN: f64 = 300.0;
 
-/// Which sensor produced a `set_progress` call — `engine`'s slow ccusage poll
-/// (time-based % of the 5h window) or `sensor`'s statusLine push (official
-/// quota-based %). Both run on independent dedicated threads with different
-/// cadences (D13); without this, painting the ring is a last-writer-wins race
-/// between two different percentage *meanings*, and the ring visibly flickers
-/// between them whenever they diverge (real bug, found live with both ccusage
-/// and the statusLine sensor connected). Official wins once seen, matching the
-/// panel's own `#segments` precedence (D23: `state.everSensorConnected` in
-/// `trip-computer.js`) — same "sticky" semantics on both displays instead of
-/// re-deriving a slightly different rule per gauge.
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Source precedence is provider-local. An official Claude reading blocks only
+/// Claude's estimate; it never blocks a Codex reading or wins by arrival order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProgressSource {
     Estimated,
     Official,
 }
 
-/// Shared tray state: the real progress value (kept up to date even while an
-/// alert is painting over it), whether the redline alert is active, and
-/// whether OFFICIAL data has ever arrived (sticky — mirrors `everSensorConnected`
-/// in trip-computer.js so a momentary sensor blip doesn't hand the ring back to
-/// the estimated source, same reasoning as D23). A `Mutex` here isn't optional —
-/// `set_progress` (called from `engine`'s and `sensor`'s own dedicated threads)
-/// and the blink thread below both repaint the same tray icon, and without one
-/// they'd race each other.
-struct TrayState {
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ProgressCandidate {
     pct_remaining: f64,
+    source: ProgressSource,
+}
+
+#[derive(Debug, Default)]
+struct ProgressCandidates(BTreeMap<ProviderId, ProgressCandidate>);
+
+impl ProgressCandidates {
+    fn update(&mut self, provider: ProviderId, pct_remaining: f64, source: ProgressSource) -> bool {
+        if !pct_remaining.is_finite() {
+            return false;
+        }
+        if source == ProgressSource::Estimated
+            && self
+                .0
+                .get(&provider)
+                .is_some_and(|candidate| candidate.source == ProgressSource::Official)
+        {
+            return false;
+        }
+        self.0.insert(
+            provider,
+            ProgressCandidate {
+                pct_remaining: pct_remaining.clamp(0.0, 100.0),
+                source,
+            },
+        );
+        true
+    }
+
+    fn remove(&mut self, provider: ProviderId) -> bool {
+        self.0.remove(&provider).is_some()
+    }
+
+    fn summary(&self) -> f64 {
+        self.0
+            .values()
+            .map(|candidate| candidate.pct_remaining)
+            .reduce(f64::min)
+            .unwrap_or(100.0)
+    }
+}
+
+/// Shared tray state. Candidates stay current even while an alert owns the
+/// icon. The summary is the most urgent valid provider quota (minimum
+/// remaining), never an average. A `Mutex` is required because provider
+/// workers and the blink thread repaint concurrently.
+struct TrayState {
+    candidates: ProgressCandidates,
     alert: bool,
     pending_permission: bool,
-    official_ever_active: bool,
 }
 
 fn state() -> &'static Mutex<TrayState> {
     static STATE: OnceLock<Mutex<TrayState>> = OnceLock::new();
     STATE.get_or_init(|| {
         Mutex::new(TrayState {
-            pct_remaining: 100.0,
+            candidates: ProgressCandidates::default(),
             alert: false,
             pending_permission: false,
-            official_ever_active: false,
         })
     })
 }
 
 static BLINK_THREAD_STARTED: AtomicBool = AtomicBool::new(false);
 
-/// Redraws the tray icon with the ring at the given `pct_remaining` (0–100,
-/// clamped), from `source`. Once an `Official` write has landed, later
-/// `Estimated` writes are ignored for the rest of the process's lifetime —
-/// this is the ONLY place that arbitrates between the two sources; callers
-/// (`engine`, `sensor`) just report their own reading unconditionally. If the
-/// tray isn't managed yet (very early startup) this does nothing — it will be
-/// retried on the next tick. While the redline alert is active, the value is
-/// only remembered (not painted) — the blink thread owns the icon until
-/// `set_alert(app, false)` restores it.
-pub fn set_progress(app: &AppHandle, pct_remaining: f64, source: ProgressSource) {
-    let pct = pct_remaining.clamp(0.0, 100.0);
-    let (blocked, should_paint) = {
-        let mut s = state().lock().unwrap();
-        let should_paint = match source {
-            ProgressSource::Official => {
-                s.official_ever_active = true;
-                s.pct_remaining = pct;
-                true
+/// Records one provider's progress and repaints the conservative summary.
+/// Official-over-estimated arbitration is isolated to that provider.
+pub fn set_progress(
+    app: &AppHandle,
+    provider: ProviderId,
+    pct_remaining: f64,
+    source: ProgressSource,
+) {
+    let mut s = state().lock().unwrap();
+    if !s.candidates.update(provider, pct_remaining, source) {
+        return;
+    }
+    if !s.alert && !s.pending_permission {
+        paint(app, render(s.candidates.summary()));
+    }
+}
+
+/// Removes a provider whose quota is explicitly unavailable. A stale snapshot
+/// deliberately keeps its last-known value; App Server promotes it to
+/// unavailable after its longer expiry window.
+pub fn clear_progress(app: &AppHandle, provider: ProviderId) {
+    let mut s = state().lock().unwrap();
+    if s.candidates.remove(provider) && !s.alert && !s.pending_permission {
+        paint(app, render(s.candidates.summary()));
+    }
+}
+
+/// Applies the normalized provider-neutral rate-limit contract to the tray.
+pub fn sync_rate_limit_snapshot(app: &AppHandle, snapshot: &RateLimitSnapshot) {
+    match snapshot.source_quality {
+        SourceQuality::Official | SourceQuality::Estimated => {
+            let source = if snapshot.source_quality == SourceQuality::Official {
+                ProgressSource::Official
+            } else {
+                ProgressSource::Estimated
+            };
+            if let Some(primary) = &snapshot.primary {
+                set_progress(app, snapshot.provider, 100.0 - primary.used_percent, source);
+            } else {
+                clear_progress(app, snapshot.provider);
             }
-            ProgressSource::Estimated if s.official_ever_active => false,
-            ProgressSource::Estimated => {
-                s.pct_remaining = pct;
-                true
-            }
-        };
-        (s.alert || s.pending_permission, should_paint)
-    };
-    if should_paint && !blocked {
-        paint(app, render(pct));
+        }
+        SourceQuality::Stale => {}
+        SourceQuality::Unavailable => clear_progress(app, snapshot.provider),
     }
 }
 
@@ -115,22 +164,20 @@ pub fn set_tray_alert(app: AppHandle, active: bool) {
 /// (redline.js) don't need to track their own edge-detection just to avoid
 /// spamming this.
 pub fn set_alert(app: &AppHandle, active: bool) {
-    let (changed, pct, still_blocked) = {
+    let changed = {
         let mut s = state().lock().unwrap();
         let changed = s.alert != active;
         s.alert = active;
-        (changed, s.pct_remaining, s.pending_permission)
+        if changed && !active && !s.pending_permission {
+            paint(app, render(s.candidates.summary()));
+        }
+        changed
     };
     if !changed {
         return;
     }
     if active {
         ensure_blink_thread(app.clone());
-    } else if !still_blocked {
-        // Restore the accurate ring immediately instead of waiting for the
-        // blink thread to notice on its next poll — unless a permission
-        // request is still pending, in which case that keeps owning the icon.
-        paint(app, render(pct));
     }
 }
 
@@ -143,19 +190,20 @@ pub fn set_alert(app: &AppHandle, active: bool) {
 /// (unlike `set_tray_alert`, which mirrors `redline.js`'s own threshold
 /// logic), the backend already knows the queue state authoritatively.
 pub fn set_permission_pending(app: &AppHandle, active: bool) {
-    let (changed, pct, still_blocked) = {
+    let changed = {
         let mut s = state().lock().unwrap();
         let changed = s.pending_permission != active;
         s.pending_permission = active;
-        (changed, s.pct_remaining, s.alert)
+        if changed && !active && !s.alert {
+            paint(app, render(s.candidates.summary()));
+        }
+        changed
     };
     if !changed {
         return;
     }
     if active {
         ensure_blink_thread(app.clone());
-    } else if !still_blocked {
-        paint(app, render(pct));
     }
 }
 
@@ -170,16 +218,14 @@ fn ensure_blink_thread(app: AppHandle) {
         return;
     }
     thread::spawn(move || loop {
-        if !is_blinking() {
+        if !paint_blink_frame(&app, ARC_ALPHA) {
             thread::sleep(Duration::from_millis(200));
             continue;
         }
-        paint(&app, render_uniform(ARC_ALPHA));
         thread::sleep(Duration::from_millis(ALERT_BLINK_MS));
-        if !is_blinking() {
+        if !paint_blink_frame(&app, TRACK_ALPHA) {
             continue;
         }
-        paint(&app, render_uniform(TRACK_ALPHA));
         thread::sleep(Duration::from_millis(ALERT_BLINK_MS));
     });
 }
@@ -188,9 +234,13 @@ fn ensure_blink_thread(app: AppHandle) {
 /// running — the ring doesn't need to visually distinguish which reason to a
 /// user glancing at the menu bar, the gate panel is where that distinction
 /// actually matters.
-fn is_blinking() -> bool {
+fn paint_blink_frame(app: &AppHandle, alpha: u8) -> bool {
     let s = state().lock().unwrap();
-    s.alert || s.pending_permission
+    let active = s.alert || s.pending_permission;
+    if active {
+        paint(app, render_uniform(alpha));
+    }
+    active
 }
 
 fn paint(app: &AppHandle, buf: Vec<u8>) {
@@ -248,4 +298,46 @@ fn render_ring(alpha_at: impl Fn(f64) -> u8) -> Vec<u8> {
         }
     }
     buf
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn summary_uses_the_most_urgent_provider_without_averaging() {
+        let mut candidates = ProgressCandidates::default();
+        assert!(candidates.update(ProviderId::Claude, 72.0, ProgressSource::Official));
+        assert!(candidates.update(ProviderId::Codex, 38.0, ProgressSource::Official));
+        assert_eq!(candidates.summary(), 38.0);
+    }
+
+    #[test]
+    fn official_precedence_is_isolated_per_provider() {
+        let mut candidates = ProgressCandidates::default();
+        assert!(candidates.update(ProviderId::Claude, 70.0, ProgressSource::Official));
+        assert!(!candidates.update(ProviderId::Claude, 20.0, ProgressSource::Estimated));
+        assert!(candidates.update(ProviderId::Codex, 45.0, ProgressSource::Estimated));
+        assert_eq!(candidates.summary(), 45.0);
+    }
+
+    #[test]
+    fn removing_an_unavailable_provider_reveals_the_other_candidate() {
+        let mut candidates = ProgressCandidates::default();
+        candidates.update(ProviderId::Claude, 65.0, ProgressSource::Official);
+        candidates.update(ProviderId::Codex, 10.0, ProgressSource::Official);
+        assert!(candidates.remove(ProviderId::Codex));
+        assert_eq!(candidates.summary(), 65.0);
+        assert!(candidates.remove(ProviderId::Claude));
+        assert_eq!(candidates.summary(), 100.0);
+    }
+
+    #[test]
+    fn invalid_values_do_not_poison_the_summary() {
+        let mut candidates = ProgressCandidates::default();
+        assert!(!candidates.update(ProviderId::Codex, f64::NAN, ProgressSource::Official));
+        assert_eq!(candidates.summary(), 100.0);
+        assert!(candidates.update(ProviderId::Codex, 140.0, ProgressSource::Official));
+        assert_eq!(candidates.summary(), 100.0);
+    }
 }

@@ -468,6 +468,59 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_root_and_subagent_rollouts_keep_decoder_identity_isolated() {
+        let mut root = Decoder::default();
+        let mut subagent = Decoder::default();
+        for (decoder, thread_id) in [
+            (&mut root, "thread-root"),
+            (&mut subagent, "thread-subagent"),
+        ] {
+            assert!(decoder
+                .process_line(
+                    line(
+                        "2026-07-19T10:00:00.000Z",
+                        "session_meta",
+                        &format!(r#"{{"id":"{thread_id}"}}"#),
+                    )
+                    .as_bytes(),
+                )
+                .is_none());
+        }
+
+        let root_event = root
+            .process_line(
+                line(
+                    "2026-07-19T10:00:01.000Z",
+                    "turn_context",
+                    r#"{"model":"gpt-5.6-sol"}"#,
+                )
+                .as_bytes(),
+            )
+            .expect("root model");
+        let subagent_event = subagent
+            .process_line(
+                line(
+                    "2026-07-19T10:00:01.100Z",
+                    "turn_context",
+                    r#"{"model":"gpt-5.6-terra"}"#,
+                )
+                .as_bytes(),
+            )
+            .expect("subagent model");
+
+        let DecodedEvent::Model(root_model) = root_event else {
+            panic!("expected root model activity");
+        };
+        let DecodedEvent::Model(subagent_model) = subagent_event else {
+            panic!("expected subagent model activity");
+        };
+        assert_eq!(root_model.session_or_thread_id, "thread-root");
+        assert_eq!(subagent_model.session_or_thread_id, "thread-subagent");
+        assert_eq!(root_model.model_id, "gpt-5.6-sol");
+        assert_eq!(subagent_model.model_id, "gpt-5.6-terra");
+    }
+
+    #[test]
     fn decoder_ignores_null_malformed_and_duplicate_counts() {
         let mut decoder = Decoder::default();
         assert!(decoder.process_line(b"not-json").is_none());

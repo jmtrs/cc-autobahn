@@ -96,7 +96,7 @@ async function renderBreakdown(view, isMounted) {
       // id like "claude-haiku-4-5-20251001" would truncate in this column.
       .map(
         (m) =>
-          `<div class="breakdown-row"><span class="model-chip"><span class="code">${formatModelCode(m.modelName)}</span></span><span>${formatHistoryCost(m.cost, view.provider)}</span></div>`
+          `<div class="breakdown-row"><span class="model-chip"><span class="code">${formatModelCode(m.modelName, view.provider)}</span></span><span>${formatHistoryCost(m.cost, view.provider)}</span></div>`
       )
       .join("");
     renderWeeklyLimit(view);

@@ -39,7 +39,7 @@ function showDetail(d, view) {
         (m.reasoningOutputTokens || 0) +
         (m.cacheCreationTokens || 0) +
         (m.cacheReadTokens || 0);
-      return `<span class="model-chip"><span class="code">${formatModelCode(m.modelName)}</span>${formatHistoryCost(m.cost, view.provider)} ${formatTokens(tokens)}</span>`;
+      return `<span class="model-chip"><span class="code">${formatModelCode(m.modelName, view.provider)}</span>${formatHistoryCost(m.cost, view.provider)} ${formatTokens(tokens)}</span>`;
     })
     .join("");
 }

@@ -195,11 +195,13 @@ tray states, themes, permission sound/consent, and manual position reset are
 wired. Default placement remains under the tray, with D41's persisted drag
 override available when wanted.
 
-Current verified baseline: **108 Rust tests**, **42 frontend tests**, Rustfmt
-check, strict Clippy (`-D warnings`), and the Vite production build all pass.
+Current verified baseline: **114 Rust tests**, **46 frontend tests**, **36 visual
+baselines**, Rustfmt check, strict Clippy (`-D warnings`), and the Vite
+production build all pass.
 Frontend linting is not yet configured. Future work is tracked in the roadmap:
 Codex provider foundation and the complete dual-provider chassis are implemented;
 local rollout speed/model/thread telemetry and local estimated history are
-implemented; official App Server account data and provider-native permission
-hooks are implemented. Bun sidecar, Windows/Linux validation, and cross-surface
+implemented; official App Server account data, provider-native permission
+hooks, model presentation and conservative dual-provider tray summary are
+implemented. Bun sidecar, Windows/Linux validation, and trusted cross-surface
 release soak remain.

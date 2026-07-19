@@ -204,7 +204,14 @@ fn record_activity(
 ) -> Option<ModelActivity> {
     let mut activities = state.lock().unwrap();
     let is_newer = activities.get(&activity.provider).is_none_or(|current| {
-        (activity.observed_at_ms, activity.sequence) > (current.observed_at_ms, current.sequence)
+        if activity.observed_at_ms != current.observed_at_ms {
+            return activity.observed_at_ms > current.observed_at_ms;
+        }
+        if activity.session_or_thread_id == current.session_or_thread_id {
+            return activity.sequence > current.sequence;
+        }
+        (&activity.session_or_thread_id, &activity.model_id)
+            > (&current.session_or_thread_id, &current.model_id)
     });
     if !is_newer {
         return None;
@@ -376,5 +383,36 @@ mod tests {
         };
         assert_eq!(record_activity(&state, delayed), None);
         assert_eq!(state.lock().unwrap().get(&ProviderId::Codex), Some(&newer));
+    }
+
+    #[test]
+    fn activity_registry_uses_a_stable_cross_session_tie_break() {
+        let state = new_activity_state();
+        let root = ModelActivity {
+            provider: ProviderId::Codex,
+            model_id: "gpt-root".into(),
+            session_or_thread_id: "thread-z".into(),
+            observed_at_ms: 200,
+            sequence: 1,
+        };
+        let subagent = ModelActivity {
+            provider: ProviderId::Codex,
+            model_id: "gpt-subagent".into(),
+            session_or_thread_id: "thread-a".into(),
+            observed_at_ms: 200,
+            sequence: 99,
+        };
+        assert_eq!(
+            record_activity(&state, subagent),
+            Some(ModelActivity {
+                provider: ProviderId::Codex,
+                model_id: "gpt-subagent".into(),
+                session_or_thread_id: "thread-a".into(),
+                observed_at_ms: 200,
+                sequence: 99,
+            })
+        );
+        assert_eq!(record_activity(&state, root.clone()), Some(root.clone()));
+        assert_eq!(state.lock().unwrap().get(&ProviderId::Codex), Some(&root));
     }
 }

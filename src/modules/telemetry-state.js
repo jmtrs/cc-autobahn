@@ -46,6 +46,22 @@ export function setDisplayModeState(displayMode) {
   return true;
 }
 
+function isNewerModelActivity(activity, current) {
+  if (!current) return true;
+  if (activity.observedAtMs !== current.observedAtMs) {
+    return activity.observedAtMs > current.observedAtMs;
+  }
+  if (
+    activity.provider === current.provider &&
+    activity.sessionOrThreadId === current.sessionOrThreadId
+  ) {
+    return activity.sequence > current.sequence;
+  }
+  const tieKey = (value) =>
+    [value.provider, value.sessionOrThreadId ?? "", value.modelKey ?? "", value.label].join("\0");
+  return tieKey(activity) > tieKey(current);
+}
+
 export function recordModelActivity(activity) {
   const provider = providerIdFromPayload(activity);
   const observedAtMs = Number(activity?.observedAtMs);
@@ -63,14 +79,7 @@ export function recordModelActivity(activity) {
   }
   const providerState = state.providers[provider];
   const providerCurrent = providerState.lastModelActivity;
-  if (
-    providerCurrent &&
-    (observedAtMs < providerCurrent.observedAtMs ||
-      (observedAtMs === providerCurrent.observedAtMs && sequence <= providerCurrent.sequence))
-  ) {
-    return { providerAccepted: false, globalAccepted: false };
-  }
-  const accepted = {
+  const candidate = {
     provider,
     modelKey: activity.modelKey ?? null,
     label: activity.label,
@@ -78,15 +87,15 @@ export function recordModelActivity(activity) {
     observedAtMs,
     sequence,
   };
+  if (!isNewerModelActivity(candidate, providerCurrent)) {
+    return { providerAccepted: false, globalAccepted: false };
+  }
+  const accepted = candidate;
   providerState.lastModelActivity = accepted;
   providerState.nameplateLabel = accepted.label;
 
   const current = state.global.lastActiveModel;
-  if (
-    current &&
-    (observedAtMs < current.observedAtMs ||
-      (observedAtMs === current.observedAtMs && sequence <= current.sequence))
-  ) {
+  if (!isNewerModelActivity(accepted, current)) {
     return { providerAccepted: true, globalAccepted: false };
   }
   state.global.lastActiveModel = accepted;
