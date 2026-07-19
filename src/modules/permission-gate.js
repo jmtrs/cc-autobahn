@@ -12,6 +12,7 @@ import { setPermissionHead } from "./telemetry-state.js";
 
 let gateInvoke = null;
 let currentId = null;
+let currentProvider = null;
 let wasVisible = false;
 let timeoutTimer = null;
 
@@ -94,15 +95,16 @@ function closeAlwaysMenu() {
 }
 
 async function resolve(command) {
-  if (!gateInvoke || !currentId) return;
+  if (!gateInvoke || !currentId || !currentProvider) return;
   const id = currentId;
+  const provider = currentProvider;
   // Null out BEFORE the await: a fast double-click would otherwise fire a
   // second invoke with the same id, and the backend rightly errors with
   // "no such pending request" on it — noise in the console, not a real
   // failure (the first click already resolved it).
   currentId = null;
   try {
-    await gateInvoke(command, { id });
+    await gateInvoke(command, { provider, id });
   } catch (e) {
     // The invoke can fail before the backend sees it (IPC/runtime error). Keep
     // the current card actionable instead of leaving visible buttons wired to
@@ -122,6 +124,7 @@ async function resolve(command) {
 export function onPermissionPending(payload) {
   setPermissionHead(payload);
   currentId = payload.id;
+  currentProvider = payload.provider;
   document.getElementById("permission-provider").textContent =
     String(payload.provider ?? "claude").toUpperCase();
   document.getElementById("permission-tool").textContent = payload.toolName;
@@ -141,7 +144,11 @@ export function onPermissionPending(payload) {
   const badge = document.getElementById("permission-badge");
   const more = payload.pendingCount - 1;
   badge.hidden = more <= 0;
-  if (more > 0) badge.textContent = `+${more} more`;
+  if (more > 0) {
+    badge.textContent = `+${more} · ${payload.providerPendingCount} ${String(
+      payload.provider,
+    ).toUpperCase()}`;
+  }
 
   // The chevron only appears when the backend found a rule-able field for
   // this tool (Bash command / file path) — without one there's no safe
@@ -170,6 +177,7 @@ export function onPermissionPending(payload) {
 export function onPermissionResolved() {
   setPermissionHead(null);
   currentId = null;
+  currentProvider = null;
   wasVisible = false;
   clearInterval(timeoutTimer);
   closeAlwaysMenu();

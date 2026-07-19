@@ -1494,3 +1494,32 @@ confirmed initialize, rate limits and account usage.
 selection, account usage and input-size bounds have Rust fixtures. Full gate:
 98 Rust tests, 40 frontend tests, Rustfmt, strict Clippy, Vite production build
 and whitespace validation.
+
+## D49 — Provider-native permission hooks share routing, not policy
+
+**Identity and queue**: Claude and Codex hook processes generate one UUID per
+invocation and send a provider-discriminated request through the shared private
+Unix socket. The FIFO presentation queue permits identical request IDs across
+providers and every resolve command validates both provider and ID. Mixed
+counts remain global while the visible card names its provider explicitly.
+
+**Native decisions**: Claude keeps its opaque `permission_suggestions` →
+`updatedPermissions` round trip and existing compatibility fallback. Codex
+returns only its supported nested `PermissionRequest` allow/deny decision.
+Codex Always Allow is an exact process-memory key over provider, session, tool
+name and normalized input; it never writes execpolicy or network amendments.
+
+**Install and trust**: Codex installs one exactly-owned user-layer
+`hooks.json` entry with atomic merge, non-overwriting backup, post-write
+verification and rollback. Unrelated hooks are never matched by substring.
+The existing owned App Server probes stable `hooks/list` independently of
+account requests and reports discovered source, enabled state, trust status,
+hash and inventory freshness. A valid hook exchange is a separate activity
+signal; disabled or changed trust always outranks old activity.
+
+**Verification**: a read-only live probe against `codex-cli 0.144.6` confirmed
+enabled user source, SHA-256 hash and native `untrusted` state without changing
+the user's config. Queue namespace, exact session memory, installer shape and
+ownership, hook timeout isolation, trust precedence and UI lifecycle states
+have fixtures. Full gate: 108 Rust tests, 42 frontend tests, 36 visual
+baselines, Rustfmt, strict Clippy, Vite build and whitespace validation.

@@ -130,16 +130,14 @@ export async function wireEngine() {
     );
   });
   await listen("permission-pending", (e) => {
-    routeClaudePayload(e.payload, (payload) => {
-      console.info("[permission] pending:", payload);
-      onPermissionPending(payload);
-    });
+    const provider = providerIdFromPayload(e.payload);
+    if (!provider) return;
+    console.info("[permission] pending:", e.payload);
+    onPermissionPending(e.payload);
   });
-  await listen("permission-resolved", (e) => {
-    routeClaudePayload(e.payload, () => {
-      console.info("[permission] resolved");
-      onPermissionResolved();
-    });
+  await listen("permission-resolved", () => {
+    console.info("[permission] resolved");
+    onPermissionResolved();
   });
 
   try {

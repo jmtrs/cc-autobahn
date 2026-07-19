@@ -33,10 +33,10 @@ behavior, and an opt-in permission-decision bridge.
                  └──────────────┘          └───────────────────┘  └──────────────┘
 ```
 
-The permission path is intentionally separate from telemetry: Claude Code
-starts `cc-autobahn permission-hook`, that short-lived process connects to
-`~/.claude/cc-autobahn/permission.sock`, and the GUI's Rust listener queues
-the request until the user approves or denies it.
+The permission path is intentionally separate from telemetry: Claude Code or
+Codex starts `cc-autobahn permission-hook <provider>`, that short-lived process
+connects to `~/.cc-autobahn/permission.sock`, and the GUI's Rust listener
+queues the provider-tagged request until the user approves or denies it.
 
 ## Layers
 
@@ -82,13 +82,14 @@ Responsible for **all I/O**. Never blocks the UI.
   detects on the machine), fetched **on demand** (D33's 4th cadence class,
   alongside D13's three) — only when the History/Limits MFD page opens, not
   on a timer, cached client-side (`history-data.js`) for a few minutes.
-- **Permission hook** (`permission/`, D42): `install.rs` merges/unmerges the
-  Claude `hooks.PermissionRequest` array and refreshes its stable binary copy;
-  `hook_bin.rs` is the short-lived CLI mode; `mod.rs` owns the Unix-listener
-  thread, FIFO pending queue, Tauri commands, and events; `always_allow.rs`
-  owns the current exact-Bash-rule/session-memory behavior. The hook blocks,
-  never the UI thread, and fails open to Claude's terminal prompt when the
-  GUI/socket is unavailable.
+- **Permission hooks** (`permission/`, D42/Phase 5): `install.rs` and
+  `codex_install.rs` independently merge/unmerge Claude `settings.json` and
+  Codex user `hooks.json`; `hook_bin.rs` emits each provider's native decision;
+  `mod.rs` owns the Unix listener and provider-namespaced FIFO queue;
+  `always_allow.rs` owns Claude compatibility persistence plus exact
+  provider/session memory. Codex trust inventory comes from the existing App
+  Server's stable `hooks/list`. Hook processes block, never the UI thread, and
+  fail open to each provider's native approval UI when the GUI is unavailable.
 - **Window / tray**: split by concern — `window.rs` owns the native macOS
   `NSPanel` conversion/fullscreen-Space behavior, PIN state, hide-on-blur, and
   positioning under the icon; `tray.rs` owns the menu-bar icon
@@ -167,10 +168,11 @@ IPC/events.
    caches results/in-flight work separately for a few minutes. A normalized
    `history_sessions` command exists for both providers without exposing local
    project or rollout paths.
-7. **Permission requests** (D42) use an independent synchronous route:
-   Claude hook process → Unix socket → FIFO queue → `permission-pending` →
-   Approve/Deny/Always Allow command → socket response. A pending request
-   auto-opens the panel, alerts the tray, and can play the configured sound.
+7. **Permission requests** (D42/Phase 5) use an independent synchronous route:
+   Claude or Codex hook process → Unix socket → provider-namespaced FIFO queue
+   → `permission-pending` → Approve/Deny/Always Allow command → provider-native
+   socket response. A pending request auto-opens the panel, alerts the tray,
+   and can play the configured sound.
 
 ## Why Tauri (not Electron)
 
@@ -193,12 +195,11 @@ tray states, themes, permission sound/consent, and manual position reset are
 wired. Default placement remains under the tray, with D41's persisted drag
 override available when wanted.
 
-Current verified baseline: **98 Rust tests**, **40 frontend tests**, Rustfmt
+Current verified baseline: **108 Rust tests**, **42 frontend tests**, Rustfmt
 check, strict Clippy (`-D warnings`), and the Vite production build all pass.
 Frontend linting is not yet configured. Future work is tracked in the roadmap:
 Codex provider foundation and the complete dual-provider chassis are implemented;
 local rollout speed/model/thread telemetry and local estimated history are
-implemented; official App Server account data is implemented.
-Bun sidecar and
-Windows/Linux are optional, and permission request identity/native Claude
-permission suggestions are hardened; mixed-provider permission routing remains.
+implemented; official App Server account data and provider-native permission
+hooks are implemented. Bun sidecar, Windows/Linux validation, and cross-surface
+release soak remain.

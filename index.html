@@ -242,6 +242,8 @@
                        from this window instead of the terminal). -->
                   <div class="row header-sub"><span class="label">CLAUDE PERMISSION HOOK</span></div>
                   <button type="button" class="sensor-btn" id="permission-settings-btn">Connect</button>
+                  <div class="row header-sub"><span class="label">CODEX PERMISSION HOOK</span></div>
+                  <button type="button" class="sensor-btn" id="codex-permission-settings-btn">Connect</button>
                 </div>
               </div>
             </div>
@@ -283,7 +285,7 @@
                startup, since the hook is an optional extra capability. -->
           <div class="sensor-overlay" id="permission-consent-overlay" hidden>
             <div class="sensor-card">
-              <div class="sensor-title">PERMISSION HOOK</div>
+              <div class="sensor-title" id="permission-consent-title">PERMISSION HOOK</div>
               <div class="sensor-body" id="permission-consent-body"></div>
               <div class="sensor-actions">
                 <button class="sensor-btn ghost" id="permission-consent-cancel" hidden>Cancel</button>

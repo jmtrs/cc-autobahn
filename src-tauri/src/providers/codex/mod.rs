@@ -14,8 +14,11 @@ use tauri::AppHandle;
 use super::{emit_health, HealthStatus, ProviderComponent, ProviderId};
 
 pub const ID: ProviderId = ProviderId::Codex;
-pub const COMPONENTS: [ProviderComponent; 2] =
-    [ProviderComponent::Transcript, ProviderComponent::AppServer];
+pub const COMPONENTS: [ProviderComponent; 3] = [
+    ProviderComponent::Transcript,
+    ProviderComponent::AppServer,
+    ProviderComponent::Permissions,
+];
 
 const TAIL_INTERVAL_MS: u64 = 200;
 const RESCAN_SECS: u64 = 5;
@@ -62,8 +65,9 @@ mod tests {
     #[test]
     fn adapter_declares_rollout_transcript_once() {
         assert_eq!(ID, ProviderId::Codex);
-        assert_eq!(COMPONENTS.len(), 2);
+        assert_eq!(COMPONENTS.len(), 3);
         assert!(COMPONENTS.contains(&ProviderComponent::Transcript));
         assert!(COMPONENTS.contains(&ProviderComponent::AppServer));
+        assert!(COMPONENTS.contains(&ProviderComponent::Permissions));
     }
 }

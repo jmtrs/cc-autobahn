@@ -26,6 +26,7 @@ use crate::providers::{
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
+const HOOKS_POLL_INTERVAL: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const STALE_AFTER: Duration = Duration::from_secs(150);
 const UNAVAILABLE_AFTER_MS: i64 = 10 * 60 * 1000;
@@ -39,6 +40,18 @@ static SHUTTING_DOWN: AtomicBool = AtomicBool::new(false);
 pub struct AccountSensorSnapshot {
     pub rate_limits: Option<RateLimitSnapshot>,
     pub account_usage: Option<AccountUsageSnapshot>,
+    pub permission_hook: Option<CodexHookProbe>,
+    pub permission_hook_observed_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexHookProbe {
+    pub enabled: bool,
+    pub trust_status: String,
+    pub source_path: String,
+    pub current_hash: Option<String>,
+    pub observed_at_ms: i64,
 }
 
 pub type AccountSensorState = Arc<Mutex<AccountSensorSnapshot>>;
@@ -67,12 +80,20 @@ pub fn start(app: AppHandle) {
                 .try_state::<crate::path_state::PathState>()
                 .and_then(|state| crate::path_state::get(&state));
             let Some(executable) = resolve_executable("codex", path.as_deref()) else {
+                clear_hook_probe(&state);
                 emit_health(
                     &app,
                     ID,
                     ProviderComponent::AppServer,
                     HealthStatus::Unavailable,
                     Some("Codex executable not found".into()),
+                );
+                emit_health(
+                    &app,
+                    ID,
+                    ProviderComponent::Permissions,
+                    HealthStatus::Unavailable,
+                    Some("Codex executable not found; hook inventory unavailable".into()),
                 );
                 mark_stale_if_expired(&app, &state);
                 mark_unavailable_if_expired(&app, &state);
@@ -91,6 +112,14 @@ pub fn start(app: AppHandle) {
             }
             mark_stale_if_expired(&app, &state);
             mark_unavailable_if_expired(&app, &state);
+            clear_hook_probe(&state);
+            emit_health(
+                &app,
+                ID,
+                ProviderComponent::Permissions,
+                HealthStatus::Degraded,
+                Some("Codex hook inventory disconnected".into()),
+            );
             emit_health(
                 &app,
                 ID,
@@ -124,6 +153,7 @@ enum RequestKind {
     Initialize,
     RateLimits,
     AccountUsage,
+    Hooks,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -263,10 +293,12 @@ fn run_connection(
     let mut last_limits_official: Option<Instant> = None;
     let mut last_usage_official: Option<Instant> = None;
     let mut last_poll = Instant::now() - POLL_INTERVAL;
+    let mut last_hooks_poll = Instant::now() - HOOKS_POLL_INTERVAL;
     let mut limits_stale_emitted = false;
     let mut usage_stale_emitted = false;
     let mut rate_capability: Option<bool> = None;
     let mut usage_capability: Option<bool> = None;
+    let hooks_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
     let outcome = loop {
         if last_poll.elapsed() >= POLL_INTERVAL {
@@ -286,6 +318,17 @@ fn run_connection(
             )?;
             last_poll = Instant::now();
         }
+        if last_hooks_poll.elapsed() >= HOOKS_POLL_INTERVAL {
+            queue_probe_with_params(
+                &mut stdin,
+                &mut pending,
+                &mut next_id,
+                RequestKind::Hooks,
+                "hooks/list",
+                json!({ "cwds": [hooks_cwd] }),
+            )?;
+            last_hooks_poll = Instant::now();
+        }
 
         match receiver.recv_timeout(Duration::from_secs(1)) {
             Ok(ReaderEvent::Message(message)) => {
@@ -298,6 +341,19 @@ fn run_connection(
                         match kind {
                             RequestKind::RateLimits => rate_capability = Some(false),
                             RequestKind::AccountUsage => usage_capability = Some(false),
+                            RequestKind::Hooks => {
+                                clear_hook_probe(state);
+                                emit_health(
+                                    app,
+                                    ID,
+                                    ProviderComponent::Permissions,
+                                    HealthStatus::Degraded,
+                                    Some(format!(
+                                        "hooks/list unavailable: {}",
+                                        compact_error(error)
+                                    )),
+                                );
+                            }
                             RequestKind::Initialize => {}
                         }
                         emit_capability_health(
@@ -365,6 +421,7 @@ fn run_connection(
                                 );
                             }
                         }
+                        RequestKind::Hooks => store_hook_probe(app, state, result),
                         RequestKind::Initialize => {}
                     }
                 } else if message.get("method").and_then(Value::as_str)
@@ -423,10 +480,23 @@ fn run_connection(
             usage_stale_emitted = true;
         }
         mark_unavailable_if_expired(app, state);
-        if pending
-            .values()
-            .any(|pending_request| pending_request.sent_at.elapsed() >= REQUEST_TIMEOUT)
-        {
+        let timed_out = take_timed_out(&mut pending, REQUEST_TIMEOUT);
+        let mut account_request_timed_out = false;
+        for kind in timed_out {
+            if kind == RequestKind::Hooks {
+                clear_hook_probe(state);
+                emit_health(
+                    app,
+                    ID,
+                    ProviderComponent::Permissions,
+                    HealthStatus::Degraded,
+                    Some("hooks/list timed out".into()),
+                );
+            } else {
+                account_request_timed_out = true;
+            }
+        }
+        if account_request_timed_out {
             break Err("account capability request timed out".into());
         }
         if SHUTTING_DOWN.load(Ordering::Acquire) {
@@ -445,6 +515,21 @@ fn run_connection(
     outcome
 }
 
+fn take_timed_out(
+    pending: &mut HashMap<u64, PendingRequest>,
+    timeout: Duration,
+) -> Vec<RequestKind> {
+    let expired: Vec<_> = pending
+        .iter()
+        .filter(|(_, request)| request.sent_at.elapsed() >= timeout)
+        .map(|(id, request)| (*id, request.kind))
+        .collect();
+    for (id, _) in &expired {
+        pending.remove(id);
+    }
+    expired.into_iter().map(|(_, kind)| kind).collect()
+}
+
 fn queue_probe(
     stdin: &mut ChildStdin,
     pending: &mut HashMap<u64, PendingRequest>,
@@ -452,13 +537,24 @@ fn queue_probe(
     kind: RequestKind,
     method: &str,
 ) -> Result<(), String> {
+    queue_probe_with_params(stdin, pending, next_id, kind, method, Value::Null)
+}
+
+fn queue_probe_with_params(
+    stdin: &mut ChildStdin,
+    pending: &mut HashMap<u64, PendingRequest>,
+    next_id: &mut u64,
+    kind: RequestKind,
+    method: &str,
+    params: Value,
+) -> Result<(), String> {
     if pending
         .values()
         .any(|pending_request| pending_request.kind == kind)
     {
         return Ok(());
     }
-    send_request(stdin, *next_id, method, Value::Null)?;
+    send_request(stdin, *next_id, method, params)?;
     pending.insert(
         *next_id,
         PendingRequest {
@@ -771,6 +867,119 @@ fn store_and_emit_usage(
     let _ = app.emit("account-usage-update", snapshot);
 }
 
+fn store_hook_probe(app: &AppHandle, state: &AccountSensorState, value: &Value) {
+    let expected_path = crate::permission::codex_install::hooks_path();
+    let expected_path = expected_path.as_deref();
+    let probe = value
+        .get("data")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .flat_map(|entry| {
+            entry
+                .get("hooks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .find_map(|hook| normalize_hook_probe(hook, expected_path));
+    let observed_at_ms = now_epoch_ms();
+    {
+        let mut state = state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        state.permission_hook = probe.clone();
+        state.permission_hook_observed_at_ms = Some(observed_at_ms);
+    }
+
+    let active = app
+        .try_state::<crate::permission::PermissionActivityState>()
+        .is_some_and(|activity| {
+            activity
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains_key(&ID)
+        });
+    let (status, detail) = hook_health(probe.as_ref(), active);
+    emit_health(
+        app,
+        ID,
+        ProviderComponent::Permissions,
+        status,
+        Some(detail),
+    );
+}
+
+fn hook_health(probe: Option<&CodexHookProbe>, active: bool) -> (HealthStatus, String) {
+    match probe {
+        Some(probe) if !probe.enabled => (
+            HealthStatus::Unavailable,
+            "permission hook installed but disabled".to_string(),
+        ),
+        Some(probe) if probe.trust_status != "trusted" => (
+            HealthStatus::Degraded,
+            format!("permission hook awaiting trust ({})", probe.trust_status),
+        ),
+        Some(_) if active => (
+            HealthStatus::Connected,
+            "permission hook trusted and exchange observed".to_string(),
+        ),
+        Some(_) => (
+            HealthStatus::Degraded,
+            "permission hook trusted; no exchange observed yet".to_string(),
+        ),
+        None => (
+            HealthStatus::Unavailable,
+            "permission hook not discovered".to_string(),
+        ),
+    }
+}
+
+pub(crate) fn clear_hook_probe(state: &AccountSensorState) {
+    let mut state = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.permission_hook = None;
+    state.permission_hook_observed_at_ms = None;
+}
+
+fn normalize_hook_probe(hook: &Value, expected_path: Option<&Path>) -> Option<CodexHookProbe> {
+    let command = hook.get("command")?.as_str()?;
+    let expected_path = expected_path?;
+    let expected_command = crate::permission::codex_install::hook_command(expected_path.parent()?);
+    if command != expected_command
+        || hook.get("handlerType").and_then(Value::as_str) != Some("command")
+        || hook.get("source").and_then(Value::as_str) != Some("user")
+        || !matches!(
+            hook.get("eventName").and_then(Value::as_str),
+            Some("permissionRequest" | "permission_request")
+        )
+    {
+        return None;
+    }
+    let source_path = hook.get("sourcePath")?.as_str()?;
+    if !same_path(Path::new(source_path), expected_path) {
+        return None;
+    }
+    Some(CodexHookProbe {
+        enabled: hook.get("enabled")?.as_bool()?,
+        trust_status: hook.get("trustStatus")?.as_str()?.to_string(),
+        source_path: source_path.to_string(),
+        current_hash: hook
+            .get("currentHash")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        observed_at_ms: now_epoch_ms(),
+    })
+}
+
+fn same_path(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(left), Ok(right)) => left == right,
+        _ => left == right,
+    }
+}
+
 fn mark_stale_if_expired(app: &AppHandle, state: &AccountSensorState) {
     let now = now_epoch_ms();
     let stale_after_ms = STALE_AFTER.as_millis() as i64;
@@ -901,6 +1110,70 @@ fn resolve_executable(binary: &str, path: Option<&str>) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalizes_native_codex_hook_trust_state() {
+        let hook = json!({
+            "command": "\"/Users/me/.codex/cc-autobahn/cc-autobahn-codex-permission-hook\" permission-hook codex",
+            "eventName": "permissionRequest",
+            "handlerType": "command",
+            "source": "user",
+            "enabled": true,
+            "trustStatus": "untrusted",
+            "sourcePath": "/Users/me/.codex/hooks.json",
+            "currentHash": "sha256:abc"
+        });
+        let probe =
+            normalize_hook_probe(&hook, Some(Path::new("/Users/me/.codex/hooks.json"))).unwrap();
+        assert!(probe.enabled);
+        assert_eq!(probe.trust_status, "untrusted");
+        assert_eq!(probe.current_hash.as_deref(), Some("sha256:abc"));
+    }
+
+    #[test]
+    fn hook_timeout_is_removed_without_expiring_account_requests() {
+        let old = Instant::now() - Duration::from_secs(20);
+        let fresh = Instant::now();
+        let mut pending = HashMap::from([
+            (
+                1,
+                PendingRequest {
+                    kind: RequestKind::Hooks,
+                    sent_at: old,
+                },
+            ),
+            (
+                2,
+                PendingRequest {
+                    kind: RequestKind::RateLimits,
+                    sent_at: fresh,
+                },
+            ),
+        ]);
+        assert_eq!(
+            take_timed_out(&mut pending, Duration::from_secs(15)),
+            vec![RequestKind::Hooks]
+        );
+        assert_eq!(
+            pending.get(&2).map(|request| request.kind),
+            Some(RequestKind::RateLimits)
+        );
+    }
+
+    #[test]
+    fn disabled_or_modified_hook_never_becomes_connected_from_old_activity() {
+        let mut probe = CodexHookProbe {
+            enabled: false,
+            trust_status: "trusted".into(),
+            source_path: "/tmp/hooks.json".into(),
+            current_hash: Some("sha256:abc".into()),
+            observed_at_ms: 1,
+        };
+        assert_eq!(hook_health(Some(&probe), true).0, HealthStatus::Unavailable);
+        probe.enabled = true;
+        probe.trust_status = "modified".into();
+        assert_eq!(hook_health(Some(&probe), true).0, HealthStatus::Degraded);
+    }
 
     #[test]
     fn normalizes_selected_codex_bucket_and_preserves_all_buckets() {

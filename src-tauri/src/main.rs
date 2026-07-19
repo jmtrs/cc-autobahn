@@ -41,7 +41,11 @@ fn main() {
             return;
         }
         Some("permission-hook") => {
-            permission::hook_bin::run_permission_hook();
+            let provider = match args.next().as_deref() {
+                Some("codex") => providers::ProviderId::Codex,
+                _ => providers::ProviderId::Claude,
+            };
+            permission::hook_bin::run_permission_hook(provider);
             return;
         }
         _ => {}
@@ -69,6 +73,10 @@ fn main() {
             permission::install::permission_preview_install,
             permission::install::install_permission_hook,
             permission::install::uninstall_permission_hook,
+            permission::codex_install::codex_permission_status,
+            permission::codex_install::codex_permission_preview_install,
+            permission::codex_install::install_codex_permission_hook,
+            permission::codex_install::uninstall_codex_permission_hook,
             window::set_pinned,
             window::set_display_mode,
             window::reset_position,
@@ -86,6 +94,7 @@ fn main() {
             pathfix::apply(&app.handle().clone());
             sensor::install::refresh_if_stale();
             permission::install::refresh_if_stale();
+            permission::codex_install::refresh_if_stale();
 
             let handle = app.handle().clone();
             providers::start_enabled(handle.clone());

@@ -16,6 +16,7 @@ use std::time::Duration;
 use serde::Deserialize;
 
 use super::{socket_path, Decision, DecisionMsg, HookRequest};
+use crate::providers::ProviderId;
 
 /// Just under Claude Code's own 600s hook timeout, so this always loses the
 /// race and prints nothing rather than being killed mid-write.
@@ -33,6 +34,8 @@ const MAX_RESPONSE_BYTES: u64 = super::MAX_REQUEST_BYTES + 4 * 1024;
 struct CcHookInput {
     session_id: String,
     #[serde(default)]
+    turn_id: Option<String>,
+    #[serde(default)]
     prompt_id: Option<String>,
     tool_name: String,
     #[serde(default)]
@@ -40,21 +43,25 @@ struct CcHookInput {
     #[serde(default)]
     cwd: String,
     #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    permission_mode: Option<String>,
+    #[serde(default)]
     permission_suggestions: Vec<serde_json::Value>,
 }
 
 /// Generates an invocation identity independent of Claude's prompt
 /// correlation. Every hook invocation is a separate process, so process-local
 /// counters and PIDs cannot provide uniqueness after PID reuse.
-fn generate_request_id() -> String {
-    format!("claude-{}", uuid::Uuid::new_v4())
+fn generate_request_id(provider: ProviderId) -> String {
+    format!("{provider:?}-{}", uuid::Uuid::new_v4()).to_lowercase()
 }
 
 /// Entry point of `permission-hook` mode (`argv[1] == "permission-hook"`).
 /// Never panics on malformed stdin (mirrors `run_statusline`'s "always exits
 /// successfully" — a hook that crashes or hangs is worse than one that
 /// silently no-ops).
-pub fn run_permission_hook() {
+pub fn run_permission_hook(provider: ProviderId) {
     let mut buf = Vec::new();
     if std::io::stdin().read_to_end(&mut buf).is_err() {
         return;
@@ -63,9 +70,13 @@ pub fn run_permission_hook() {
         return;
     };
     let request = HookRequest {
-        request_id: generate_request_id(),
+        provider,
+        request_id: generate_request_id(provider),
         prompt_id: input.prompt_id,
         session_id: input.session_id,
+        turn_id: input.turn_id,
+        model: input.model,
+        permission_mode: input.permission_mode,
         tool_name: input.tool_name,
         tool_input: input.tool_input,
         cwd: input.cwd,
@@ -75,7 +86,7 @@ pub fn run_permission_hook() {
     let Some(decision) = ask_gui(&request) else {
         return; // no GUI running, or nobody answered in time — fail open, print nothing
     };
-    print_decision(decision);
+    print_decision(provider, decision);
 }
 
 /// Connects to the GUI's socket, sends the request, and blocks for a
@@ -126,14 +137,17 @@ fn ask_gui(_request: &HookRequest) -> Option<DecisionMsg> {
 /// this wrong is silent: Claude Code just doesn't recognize the output and
 /// falls back to its own terminal prompt, which is exactly what happened
 /// before this was fixed (D42 follow-up bug). PURE → testable without stdout.
-fn decision_output(response: DecisionMsg) -> serde_json::Value {
+fn decision_output(provider: ProviderId, response: DecisionMsg) -> serde_json::Value {
     let behavior = match response.decision {
         Decision::Allow => "allow",
         Decision::Deny => "deny",
     };
     let mut decision = serde_json::json!({ "behavior": behavior });
-    if !response.updated_permissions.is_empty() {
+    if provider == ProviderId::Claude && !response.updated_permissions.is_empty() {
         decision["updatedPermissions"] = serde_json::Value::Array(response.updated_permissions);
+    }
+    if provider == ProviderId::Codex && matches!(response.decision, Decision::Deny) {
+        decision["message"] = serde_json::json!("Denied in cc-autobahn");
     }
     serde_json::json!({
         "hookSpecificOutput": {
@@ -150,8 +164,8 @@ fn decision_output(response: DecisionMsg) -> serde_json::Value {
 /// moment a real decision was about to be delivered. `writeln!` on a
 /// `Write` value returns a `Result` instead, so a failed write is just
 /// ignored like every other fallible step in this file.
-fn print_decision(response: DecisionMsg) {
-    let out = decision_output(response);
+fn print_decision(provider: ProviderId, response: DecisionMsg) {
+    let out = decision_output(provider, response);
     let mut stdout = std::io::stdout();
     let _ = writeln!(stdout, "{out}");
     let _ = stdout.flush();
@@ -163,7 +177,7 @@ mod tests {
 
     #[test]
     fn allow_uses_nested_behavior_shape() {
-        let v = decision_output(DecisionMsg::plain(Decision::Allow));
+        let v = decision_output(ProviderId::Claude, DecisionMsg::plain(Decision::Allow));
         assert_eq!(
             v["hookSpecificOutput"]["hookEventName"],
             "PermissionRequest"
@@ -177,7 +191,7 @@ mod tests {
 
     #[test]
     fn deny_uses_nested_behavior_shape() {
-        let v = decision_output(DecisionMsg::plain(Decision::Deny));
+        let v = decision_output(ProviderId::Claude, DecisionMsg::plain(Decision::Deny));
         assert_eq!(v["hookSpecificOutput"]["decision"]["behavior"], "deny");
     }
 
@@ -189,9 +203,10 @@ mod tests {
             "behavior": "allow",
             "destination": "localSettings"
         });
-        let v = decision_output(DecisionMsg::allow_with_permissions(
-            vec![suggestion.clone()],
-        ));
+        let v = decision_output(
+            ProviderId::Claude,
+            DecisionMsg::allow_with_permissions(vec![suggestion.clone()]),
+        );
         assert_eq!(
             v["hookSpecificOutput"]["decision"]["updatedPermissions"][0],
             suggestion
@@ -207,7 +222,22 @@ mod tests {
         }))
         .unwrap();
         assert!(input.prompt_id.is_none());
-        assert_ne!(generate_request_id(), generate_request_id());
+        assert_ne!(
+            generate_request_id(ProviderId::Claude),
+            generate_request_id(ProviderId::Claude)
+        );
+    }
+
+    #[test]
+    fn codex_uses_native_decision_without_claude_permission_updates() {
+        let v = decision_output(
+            ProviderId::Codex,
+            DecisionMsg::allow_with_permissions(vec![serde_json::json!({ "ignored": true })]),
+        );
+        assert_eq!(v["hookSpecificOutput"]["decision"]["behavior"], "allow");
+        assert!(v["hookSpecificOutput"]["decision"]
+            .get("updatedPermissions")
+            .is_none());
     }
 
     #[test]

@@ -61,7 +61,7 @@ reimplemented: ccusage does the hard, error-prone part (parsing JSONL,
 pricing, deduplicating the shared 5h block, the Opus multiplier) and does it
 well. The usage-specific calculation kept in-house is `tok/s` **per
 response**, which ccusage doesn't offer. The app also owns native window/tray
-behavior and the optional Claude Code permission bridge.
+behavior and optional provider-native permission bridges.
 
 ## Features
 
@@ -77,10 +77,10 @@ behavior and the optional Claude Code permission bridge.
 - **Tray icon as a live gauge** — a progress ring for the remaining 5h
   window, redrawn at runtime instead of a static icon; critical usage and
   pending permission requests switch it into an alert state.
-- **Permission decisions in the cluster** — an opt-in Claude Code
-  `PermissionRequest` hook queues concurrent requests and exposes Approve,
-  Deny, and supported Always Allow actions. It fails open to Claude Code's
-  own terminal prompt when the GUI is unavailable.
+- **Permission decisions in the cluster** — opt-in Claude Code and Codex
+  `PermissionRequest` hooks share a provider-namespaced queue with Approve,
+  Deny, and supported Always Allow actions. Both fail open to their native
+  approval UI when the GUI is unavailable; Codex hook trust remains native.
 - **Anchored or movable** — opens under the menu-bar icon by default; drag
   the header or model selector to save a manual position, then reset it from
   Settings or the tray menu.
@@ -90,8 +90,8 @@ behavior and the optional Claude Code permission bridge.
 - **Zero setup** — no ccusage or Bun on the machine? one button installs
   both and starts polling, no terminal required.
 
-Current verified baseline: `cargo test` **80/80**, `npm run test:frontend`
-**26/26**, 36 pixel-compared Playwright baselines across Claude, Codex and
+Current verified baseline: `cargo test` **108/108**, `npm run test:frontend`
+**42/42**, 36 pixel-compared Playwright baselines across Claude, Codex and
 Both in amber, emerald and magenta at **550×150 / 550×290**, `cargo fmt --check`,
 `cargo clippy --all-targets --all-features -- -D warnings`, and
 `npm run build` all pass.
@@ -125,7 +125,7 @@ Both in amber, emerald and magenta at **550×150 / 550×290**, `cargo fmt --chec
 | Tail of `~/.claude/projects/**/*.jsonl` | 200 ms file follow + 5 s discovery | partial/final `tok/s` ticks per response |
 | Statusline JSON (auto-installed sensor) | push | official `rate_limits.five_hour`/`seven_day` |
 | `ccusage claude daily --json` | on demand | History/Limits totals and per-model cost |
-| `PermissionRequest` hook | event-driven request/response | queued tool approvals over a Unix socket |
+| Claude/Codex `PermissionRequest` hooks | event-driven request/response | provider-namespaced tool approvals over a Unix socket |
 
 > **It's not token-stream telemetry.** The tail can emit a partial tick when
 > Claude writes an intermediate assistant/tool-use message and a final tick
@@ -192,7 +192,7 @@ The full per-file breakdown lives in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.
 - [docs/DATA-ENGINE.md](./docs/DATA-ENGINE.md) — ccusage, statusline, OTEL, comparison.
 - [docs/DECISIONS.md](./docs/DECISIONS.md) — decision log (ADR) and rationale.
 - [docs/ROADMAP.md](./docs/ROADMAP.md) — implementation phases.
-- [docs/CODEX-INTEGRATION-ASSESSMENT.md](./docs/CODEX-INTEGRATION-ASSESSMENT.md) — verified Claude/Codex plan; provider contracts, dual-provider UI, local telemetry/history and the official App Server account sensor are implemented; provider-native permissions remain.
+- [docs/CODEX-INTEGRATION-ASSESSMENT.md](./docs/CODEX-INTEGRATION-ASSESSMENT.md) — verified Claude/Codex plan; phases 0–5 are implemented, including provider-native permission hooks.
 
 ## Roadmap
 
@@ -202,8 +202,7 @@ settings pages, redline feedback, movable positioning, and the permission
 gate). The real, up-to-date checklist lives in
 [docs/ROADMAP.md](./docs/ROADMAP.md) — don't duplicate it here, it gets out
 of sync. Future work includes packaging Bun as a Tauri sidecar,
-Windows/Linux validation, and mixed-provider
-permission routing.
+Windows/Linux validation, and cross-surface release soak.
 
 ## Credits
 

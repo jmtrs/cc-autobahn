@@ -28,12 +28,14 @@ use std::sync::{Arc, Mutex};
 
 use tauri::{AppHandle, Manager};
 
+use crate::providers::ProviderId;
 use crate::sensor::{read_settings_for_install, write_settings_atomic, SETTINGS_WRITE_LOCK};
 
-/// `(session_id, tool_name, matched_field)` tuples marked Always-Allow for
-/// tools Claude Code itself does NOT persist to disk for (Read/Edit/Write).
+/// `(provider, session_id, tool_name, exact_input)` tuples marked Always-Allow.
+/// Codex always uses this process-local session cache; Claude uses it for
+/// non-Bash compatibility fallback and briefly after a persisted Bash rule.
 /// Tauri-managed state, sibling to `PendingQueue`.
-pub(crate) type AlwaysAllowSet = Arc<Mutex<HashSet<(String, String, String)>>>;
+pub(crate) type AlwaysAllowSet = Arc<Mutex<HashSet<(ProviderId, String, String, String)>>>;
 
 pub(crate) fn new_set() -> AlwaysAllowSet {
     Arc::new(Mutex::new(HashSet::new()))
@@ -43,11 +45,13 @@ pub(crate) fn new_set() -> AlwaysAllowSet {
 /// Always-Allow for a non-Bash tool in this GUI process's lifetime.
 pub(crate) fn is_remembered(
     set: &AlwaysAllowSet,
+    provider: ProviderId,
     session_id: &str,
     tool_name: &str,
     matched: &str,
 ) -> bool {
     set.lock().unwrap().contains(&(
+        provider,
         session_id.to_string(),
         tool_name.to_string(),
         matched.to_string(),
@@ -125,6 +129,7 @@ pub(crate) fn apply_bash_allow_rule(settings: &mut serde_json::Value, command: &
 /// caller.
 pub(crate) fn remember(
     app: &AppHandle,
+    provider: ProviderId,
     session_id: &str,
     tool_name: &str,
     cwd: &str,
@@ -133,15 +138,16 @@ pub(crate) fn remember(
     let remember_in_memory = || {
         let set = app.state::<AlwaysAllowSet>();
         set.lock().unwrap().insert((
+            provider,
             session_id.to_string(),
             tool_name.to_string(),
             matched.to_string(),
         ));
     };
 
-    if tool_name != "Bash" {
+    if provider == ProviderId::Codex || tool_name != "Bash" {
         remember_in_memory();
-        return Ok(()); // Read/Edit/Write: in-memory only, matches CC's own "until session end"
+        return Ok(());
     }
 
     let path = bash_settings_path(Path::new(cwd));
