@@ -6,6 +6,7 @@
   "description": "Mercedes W203 amber trip-computer for Claude Code token usage. Chassis only.",
   "scripts": {
     "dev": "vite",
+    "test:frontend": "node --test src/modules/*.test.js",
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
