@@ -7,13 +7,13 @@
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <main class="cluster" data-tauri-drag-region>
-      <div class="screen">
+    <main class="cluster" data-app-chassis data-tauri-drag-region>
+      <div class="screen" data-provider-module="claude">
         <div class="display">
           <!-- Top band: model nameplate badge (editable), header-hint (what's under
                the cursor, replaces native title tooltips, D-review), page label + MFD/PIN. -->
           <div class="row header">
-            <span class="nameplate" id="nameplate" data-no-drag></span>
+            <span class="nameplate" id="nameplate" data-chassis-role="nameplate" data-no-drag></span>
             <span class="header-hint" id="header-hint"></span>
             <span class="header-right">
               <span class="label" id="page-label">SINCE START</span>

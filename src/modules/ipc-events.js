@@ -11,6 +11,7 @@ import {
 import { onPermissionPending, onPermissionResolved } from "./permission-gate.js";
 import { onBurnTick } from "./speedometer.js";
 import { onBlocksUpdate, onSensorState, onSensorUpdate } from "./trip-computer.js";
+import { claudeView } from "./provider-view.js";
 import { hydrateProviderHealth, routeClaudePayload } from "./provider-routing.js";
 import { updateProviderHealth } from "./telemetry-state.js";
 
@@ -37,25 +38,25 @@ export async function wireEngine() {
     routeClaudePayload(e.payload, (payload) => {
       console.info("[engine] blocks-update:", payload);
       showEngineOverlay(false);
-      onBlocksUpdate(payload);
+      onBlocksUpdate(payload, claudeView);
     });
   });
   await listen("burn-tick", (e) => {
     routeClaudePayload(e.payload, (payload) => {
       console.info("[burn] tok/s per response:", payload);
-      onBurnTick(payload);
+      onBurnTick(payload, claudeView);
     });
   });
   await listen("sensor-update", (e) => {
     routeClaudePayload(e.payload, (payload) => {
       console.info("[sensor] official:", payload);
-      onSensorUpdate(payload);
+      onSensorUpdate(payload, claudeView);
     }, "sensor-update");
   });
   await listen("sensor-state", (e) => {
     routeClaudePayload(e.payload, (payload) => {
       console.info("[sensor] state:", payload);
-      onSensorState(payload);
+      onSensorState(payload, claudeView);
     }, "sensor-state");
   });
   await listen("permission-pending", (e) => {
@@ -79,10 +80,20 @@ export async function wireEngine() {
   try {
     const snapshot = await invoke("sensor_snapshot");
     if (snapshot?.update) {
-      routeClaudePayload(snapshot.update, onSensorUpdate, "sensor-update", true);
+      routeClaudePayload(
+        snapshot.update,
+        (payload) => onSensorUpdate(payload, claudeView),
+        "sensor-update",
+        true,
+      );
     }
     if (snapshot?.state) {
-      routeClaudePayload(snapshot.state, onSensorState, "sensor-state", true);
+      routeClaudePayload(
+        snapshot.state,
+        (payload) => onSensorState(payload, claudeView),
+        "sensor-state",
+        true,
+      );
     }
   } catch (e) {
     console.error("[sensor] snapshot:", e);

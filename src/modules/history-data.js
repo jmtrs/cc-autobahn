@@ -6,7 +6,7 @@
 // avoid re-spawning ccusage on every page flip.
 
 const CACHE_MS = 5 * 60 * 1000;
-let cache = null; // { at, days }
+const caches = new Map(); // provider -> { at, days }
 
 // Shared loading indicator for the first (uncached) `loadHistory()` call —
 // reuses the CHECK ENGINE overlay's "VFD scanner" (.engine-spinner, D36)
@@ -18,12 +18,14 @@ export const SPINNER_HTML =
   "</div>";
 
 /** `Array<{date, totalCost, totalTokens, modelBreakdowns}>`, oldest first. */
-export async function loadHistory(force = false) {
+export async function loadHistory(provider = "claude", force = false) {
+  const cache = caches.get(provider) ?? null;
   if (!force && cache && Date.now() - cache.at < CACHE_MS) return cache.days;
   if (!("__TAURI_INTERNALS__" in window)) return cache?.days ?? [];
+  if (provider !== "claude") return [];
   const { invoke } = await import("@tauri-apps/api/core");
   const days = await invoke("history_daily");
-  cache = { at: Date.now(), days };
+  caches.set(provider, { at: Date.now(), days });
   return days;
 }
 

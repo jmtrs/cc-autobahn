@@ -10,8 +10,8 @@
 import { formatHMin } from "./format.js";
 import { hintOnHover } from "./header-hint.js";
 import { updateRedline } from "./redline.js";
-import { claudeState as state } from "./telemetry-state.js";
 import { loadGlobalSetting, saveGlobalSetting } from "./app-settings.js";
+import { claudeView } from "./provider-view.js";
 
 const PACE_WINDOW_MS = 5 * 60 * 1000; // recent window for PACE
 const PACE_MIN_BLOCK_ELAPSED_MIN = 1; // minimum block elapsed before trusting blockAvg
@@ -29,7 +29,7 @@ let footerMetric = loadGlobalSetting("footerMetric");
  *  (output only) below it, close to -100% regardless of actual activity).
  *  The block average is computed by hand from `tokenCounts.outputTokens`, the
  *  SAME magnitude as `burn-tick` — comparing apples to apples. */
-function computePace() {
+function computePace(state) {
   const now = Date.now();
   state.recentTicks = state.recentTicks.filter((t) => now - t.recvAt <= PACE_WINDOW_MS);
   const outputTokens = Number(state.lastBlock?.tokenCounts?.outputTokens);
@@ -66,7 +66,7 @@ function computePace() {
  *  remaining until `fiveHourResetsAtMs` — that reset happens regardless of
  *  whether you use 100% of the quota or not. Without this cap, a slow pace
  *  would show more autonomy than actually exists (misleading info). */
-function computeAdjustedAutonomy() {
+function computeAdjustedAutonomy(state) {
   if (!state.sensorConnected) return null;
   const now = Date.now();
   state.recentPct = state.recentPct.filter((p) => now - p.recvAt <= AUTONOMY_WINDOW_MS);
@@ -91,11 +91,11 @@ function computeAdjustedAutonomy() {
  *  Both PACE and AUTO are always computed here, regardless of which one is
  *  displayed — updateRedline() needs both to decide if the whole instrument
  *  should react, not just whichever text happens to be showing. */
-export function renderFooterMetric() {
-  const label = document.getElementById("footer-metric-label");
-  const value = document.getElementById("footer-metric-value");
-  const deltaPct = computePace();
-  const minutesLeft = computeAdjustedAutonomy();
+export function renderFooterMetric(view = claudeView) {
+  const label = view.element("footer-metric-label");
+  const value = view.element("footer-metric-value");
+  const deltaPct = computePace(view.state);
+  const minutesLeft = computeAdjustedAutonomy(view.state);
 
   if (footerMetric === "autonomy") {
     label.textContent = "AUTO";
@@ -110,16 +110,16 @@ export function renderFooterMetric() {
       value.textContent = `${arrow} ${sign}${Math.round(deltaPct)}%`;
     }
   }
-  updateRedline(deltaPct, minutesLeft);
+  updateRedline(deltaPct, minutesLeft, view);
 }
 
 /** Clicking the footer toggles PACE/AUTO, persisted to localStorage. */
-export function wireFooterToggle() {
-  const el = document.getElementById("footer-metric");
+export function wireFooterToggle(view = claudeView) {
+  const el = view.element("footer-metric");
   hintOnHover(el, "PACE: rate/avg ⇄ AUTO: Range at this pace");
   el.onclick = () => {
     footerMetric = footerMetric === "pace" ? "autonomy" : "pace";
     saveGlobalSetting("footerMetric", footerMetric);
-    renderFooterMetric();
+    renderFooterMetric(view);
   };
 }

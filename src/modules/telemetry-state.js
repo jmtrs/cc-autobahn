@@ -45,9 +45,8 @@ export const state = {
   },
 };
 
-// Existing renderers remain intentionally Claude-bound until Phase 2 creates
-// provider-scoped DOM roots. This explicit alias prevents a Codex event from
-// mutating the legacy singleton UI by accident.
+// Compatibility alias for non-rendering callers. Provider renderers resolve
+// their own state through provider-view.js.
 export const claudeState = state.providers.claude;
 
 export function providerIdFromPayload(payload) {

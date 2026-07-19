@@ -9,22 +9,24 @@
 import { formatModelCode, formatTokens, formatUsd } from "./format.js";
 import { hintOnHover } from "./header-hint.js";
 import { latestDay, loadHistory, SPINNER_HTML } from "./history-data.js";
+import { claudeView } from "./provider-view.js";
 
-let allDays = [];
+const allDaysByProvider = new Map();
+const wiringByProvider = new Map();
 
 /** Fills the detail readout: date, day total, and the top 3 models by cost
  *  with their own cost + tokens. Single-letter codes (formatModelCode) reuse
  *  the PRND lettering so a row never has to truncate a long model id. */
-function showDetail(d) {
-  document.getElementById("hd-date").textContent = d.date;
-  document.getElementById("hd-total").textContent =
+function showDetail(d, view) {
+  view.element("hd-date").textContent = d.date;
+  view.element("hd-total").textContent =
     `${formatUsd(d.totalCost)} · ${formatTokens(d.totalTokens)} tok`;
 
   const top3 = (d.modelBreakdowns ?? [])
     .slice()
     .sort((a, b) => (b.cost || 0) - (a.cost || 0))
     .slice(0, 3);
-  document.getElementById("hd-models").innerHTML = top3
+  view.element("hd-models").innerHTML = top3
     .map((m) => {
       const tokens =
         (m.inputTokens || 0) +
@@ -36,15 +38,15 @@ function showDetail(d) {
     .join("");
 }
 
-function showMessage(text) {
-  document.getElementById("hd-date").textContent = text;
-  document.getElementById("hd-total").textContent = "";
-  document.getElementById("hd-models").innerHTML = "";
+function showMessage(text, view) {
+  view.element("hd-date").textContent = text;
+  view.element("hd-total").textContent = "";
+  view.element("hd-models").innerHTML = "";
 }
 
-function render(days) {
-  allDays = days;
-  const bar = document.getElementById("history-bars");
+function render(days, view) {
+  allDaysByProvider.set(view.provider, days);
+  const bar = view.element("history-bars");
   bar.innerHTML = "";
   const max = Math.max(0.01, ...days.map((d) => Number(d.totalCost) || 0));
   days.forEach((d) => {
@@ -55,38 +57,53 @@ function render(days) {
     const pct = ((Number(d.totalCost) || 0) / max) * 100;
     fill.style.height = `${Math.max(2, Math.round(pct))}%`;
     col.appendChild(fill);
-    col.addEventListener("mouseenter", () => showDetail(d));
+    col.addEventListener("mouseenter", () => showDetail(d, view));
     col.addEventListener("mouseleave", () => {
-      const latest = latestDay(allDays);
-      if (latest) showDetail(latest);
+      const latest = latestDay(allDaysByProvider.get(view.provider) ?? []);
+      if (latest) showDetail(latest, view);
     });
     bar.appendChild(col);
   });
   const total = days.reduce((sum, d) => sum + (Number(d.totalCost) || 0), 0);
-  document.getElementById("history-total").textContent = formatUsd(total);
+  view.element("history-total").textContent = formatUsd(total);
 
   const latest = latestDay(days);
-  if (latest) showDetail(latest);
-  else showMessage("no usage in range");
+  if (latest) showDetail(latest, view);
+  else showMessage("no usage in range", view);
 }
 
-async function refresh() {
+async function refresh(view, isMounted) {
   // Bars stay empty on a cold load (nothing rendered yet) — without this,
   // the whole page looks stuck for however long ccusage takes to spawn.
-  document.getElementById("history-bars").innerHTML = SPINNER_HTML;
-  showMessage("loading…");
+  view.element("history-bars").innerHTML = SPINNER_HTML;
+  showMessage("loading…", view);
   try {
-    render(await loadHistory());
+    const days = await loadHistory(view.provider);
+    if (isMounted()) render(days, view);
   } catch (e) {
-    showMessage("no data");
-    console.error("[history] history_daily:", e);
+    if (isMounted()) showMessage("no data", view);
+    console.error(`[history:${view.provider}] history_daily:`, e);
   }
 }
 
-export function wireHistoryPage() {
-  hintOnHover(document.getElementById("history-bars"), "Hover a day for its cost and tokens");
-  hintOnHover(document.getElementById("history-total"), "Sum of cost across the shown days");
-  document.addEventListener("mfd-page-changed", (e) => {
-    if (e.detail.page === 1) refresh();
-  });
+export function wireHistoryPage(view = claudeView) {
+  if (wiringByProvider.has(view.provider)) return wiringByProvider.get(view.provider);
+  hintOnHover(view.element("history-bars"), "Hover a day for its cost and tokens");
+  hintOnHover(view.element("history-total"), "Sum of cost across the shown days");
+  let mounted = true;
+  const onPageChanged = (e) => {
+    if (e.detail.page === 1) refresh(view, () => mounted);
+  };
+  document.addEventListener("mfd-page-changed", onPageChanged);
+  const dispose = () => {
+    if (!mounted) return;
+    mounted = false;
+    document.removeEventListener("mfd-page-changed", onPageChanged);
+    allDaysByProvider.delete(view.provider);
+    if (wiringByProvider.get(view.provider) === dispose) {
+      wiringByProvider.delete(view.provider);
+    }
+  };
+  wiringByProvider.set(view.provider, dispose);
+  return dispose;
 }

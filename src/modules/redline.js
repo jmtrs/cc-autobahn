@@ -4,10 +4,13 @@
 // as the PRND pulse (setGear() in trip-computer.js) and the 7d .screen.warn
 // tint, reused here instead of inventing a new mechanism.
 
+import { claudeView } from "./provider-view.js";
+
 const PACE_CRITICAL_PCT = 50; // recent pace >= 50% above the block average
 const AUTO_CRITICAL_MIN = 15; // <= 15 min of autonomy left
 
-let wasRedline = false;
+const wasRedlineByProvider = new Map();
+let trayAlertActive = false;
 let trayInvoke = null;
 
 /** One-time Tauri IPC wiring for the tray icon alert bridge (set_tray_alert,
@@ -29,6 +32,19 @@ function notifyTrayAlert(active) {
   );
 }
 
+function syncTrayAlert() {
+  const active = [...wasRedlineByProvider.values()].some(Boolean);
+  if (active === trayAlertActive) return;
+  trayAlertActive = active;
+  notifyTrayAlert(active);
+}
+
+/** Removes a provider from aggregate tray arbitration when its view unmounts. */
+export function clearProviderRedline(view = claudeView) {
+  wasRedlineByProvider.delete(view.provider);
+  syncTrayAlert();
+}
+
 /** Re-triggerable one-shot animation, same pattern as setGear()'s .pulse
  *  (trip-computer.js): force a reflow so it can replay even if the class
  *  never fully left the element, clean up via animationend. */
@@ -43,13 +59,14 @@ function pulseOnce(el, className) {
 /** Evaluates PACE/AUTO on every footer render (both, regardless of which one
  *  is currently displayed) and drives the redline state: a sustained tint
  *  while critical, plus a one-shot flash/spike the instant it's crossed. */
-export function updateRedline(pacePct, autoMinutesLeft) {
+export function updateRedline(pacePct, autoMinutesLeft, view = claudeView) {
+  const wasRedline = wasRedlineByProvider.get(view.provider) ?? false;
   const critical =
     (pacePct != null && pacePct >= PACE_CRITICAL_PCT) ||
     (autoMinutesLeft != null && autoMinutesLeft <= AUTO_CRITICAL_MIN);
 
-  const screen = document.querySelector(".screen");
-  const segments = document.getElementById("segments");
+  const screen = view.root();
+  const segments = view.element("segments");
   if (!screen || !segments) return;
 
   screen.classList.toggle("redline", critical);
@@ -58,18 +75,16 @@ export function updateRedline(pacePct, autoMinutesLeft) {
   // Only notify the tray on the edge — the IPC round-trip has real cost,
   // unlike the local classList.toggle() above, so it shouldn't fire on
   // every render while sustained-critical holds steady.
-  if (critical !== wasRedline) {
-    notifyTrayAlert(critical);
-  }
+  wasRedlineByProvider.set(view.provider, critical);
+  syncTrayAlert();
 
   if (critical && !wasRedline) {
     pulseOnce(screen, "redline-enter");
-    pulseOnce(document.getElementById("footer-metric-value"), "spike");
-    pulseOnce(document.getElementById("burn"), "spike");
+    pulseOnce(view.element("footer-metric-value"), "spike");
+    pulseOnce(view.element("burn"), "spike");
     segments.querySelectorAll(".seg").forEach((seg, i) => {
       seg.style.setProperty("--i", i);
       pulseOnce(seg, "ripple");
     });
   }
-  wasRedline = critical;
 }

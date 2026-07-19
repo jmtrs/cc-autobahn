@@ -15,10 +15,11 @@ import { wireMfdNav } from "./modules/mfd-nav.js";
 import { wirePermissionConsent } from "./modules/permission-consent.js";
 import { wirePermissionGate } from "./modules/permission-gate.js";
 import { wirePinButton } from "./modules/pin-button.js";
+import { claudeView } from "./modules/provider-view.js";
 import { wireRedlineTray } from "./modules/redline.js";
 import { wireSensorUi } from "./modules/sensor-consent.js";
 import { wireSettingsPage } from "./modules/settings-page.js";
-import { burnFrame } from "./modules/speedometer.js";
+import { startBurnAnimation } from "./modules/speedometer.js";
 import { initTheme } from "./modules/theme.js";
 import {
   buildSegments,
@@ -32,9 +33,9 @@ async function init() {
   initTheme();
   wireCursor();
   // Autonomy bar empty until the first blocks-update (no data yet).
-  buildSegments(0);
-  tickClock();
-  setInterval(tickClock, 1000);
+  buildSegments(0, claudeView);
+  tickClock(claudeView);
+  setInterval(() => tickClock(claudeView), 1000);
   wireEngineOverlay();
   await wireEngine();
   wireSensorUi();
@@ -44,18 +45,18 @@ async function init() {
   wireWindowDrag();
   wireResetPositionButton();
   wireRedlineTray();
-  wireFooterToggle();
-  wireNameplateEdit();
-  wireTripComputerHints();
+  wireFooterToggle(claudeView);
+  wireNameplateEdit(claudeView);
+  wireTripComputerHints(claudeView);
   // Page listeners wired before wireMfdNav() so its initial activate() (which
   // may land on Page 1/2 if that's the saved default) is already observed.
-  wireHistoryPage();
-  wireLimitsPage();
+  wireHistoryPage(claudeView);
+  wireLimitsPage(claudeView);
   wireSettingsPage();
   wireMfdNav();
-  renderFooterMetric();
-  setGear(["opus"]); // positions the marker against the HTML's default gear
-  requestAnimationFrame(burnFrame); // starts idle (pos=0), true to the car
+  renderFooterMetric(claudeView);
+  setGear(["opus"], claudeView); // positions the marker against the HTML's default gear
+  startBurnAnimation(claudeView); // starts idle (pos=0), true to the car
 }
 
 window.addEventListener("DOMContentLoaded", init);

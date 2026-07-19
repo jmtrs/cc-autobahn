@@ -4,21 +4,30 @@
 
 import { formatTps } from "./format.js";
 import { renderFooterMetric } from "./footer-metric.js";
-import { claudeState as state } from "./telemetry-state.js";
+import { claudeView } from "./provider-view.js";
 
-const burn = {
-  target: 0, // target tok/s (last tick, or decaying while idle)
-  pos: 0, // displayed value (animated by the spring)
-  vel: 0, // spring velocity → mechanical overshoot
-  lastTickAt: 0, // performance.now() of the last burn-tick
-  SPRING_K: 0.2, // spring stiffness
-  SPRING_DAMP: 0.75, // damping (>0 = underdamped, overshoot)
-  IDLE_AFTER_MS: 2000, // no fresh tick → idle
-  IDLE_DECAY: 0.95, // per frame, the target decays toward 0
-};
+const burns = new Map();
 
-/** Spring animation loop. Always runs (also to decay). */
-export function burnFrame(now) {
+function burnFor(view) {
+  if (!burns.has(view.provider)) {
+    burns.set(view.provider, {
+      target: 0,
+      pos: 0,
+      vel: 0,
+      lastTickAt: 0,
+      SPRING_K: 0.2,
+      SPRING_DAMP: 0.75,
+      IDLE_AFTER_MS: 2000,
+      IDLE_DECAY: 0.95,
+      animation: null,
+    });
+  }
+  return burns.get(view.provider);
+}
+
+/** Advances one spring frame. Scheduling is owned by startBurnAnimation(). */
+export function burnFrame(now, view = claudeView) {
+  const burn = burnFor(view);
   // Idle: no fresh tick, the target decays toward 0.
   if (burn.lastTickAt && now - burn.lastTickAt > burn.IDLE_AFTER_MS) {
     burn.target *= burn.IDLE_DECAY;
@@ -30,12 +39,39 @@ export function burnFrame(now) {
   burn.pos += burn.vel;
   if (burn.pos < 0) burn.pos = 0;
 
-  document.getElementById("burn").textContent = formatTps(burn.pos);
-  requestAnimationFrame(burnFrame);
+  view.element("burn").textContent = formatTps(burn.pos);
+}
+
+/** Starts at most one animation loop per provider and returns its disposer. */
+export function startBurnAnimation(
+  view = claudeView,
+  requestFrame = requestAnimationFrame,
+  cancelFrame = cancelAnimationFrame,
+) {
+  const burn = burnFor(view);
+  if (burn.animation) return burn.animation.stop;
+
+  const animation = { frameId: null, running: true, stop: null };
+  const frame = (now) => {
+    if (!animation.running) return;
+    burnFrame(now, view);
+    animation.frameId = requestFrame(frame);
+  };
+  animation.stop = () => {
+    if (!animation.running) return;
+    animation.running = false;
+    if (animation.frameId != null) cancelFrame(animation.frameId);
+    burn.animation = null;
+  };
+  burn.animation = animation;
+  animation.frameId = requestFrame(frame);
+  return animation.stop;
 }
 
 /** Handles a burn-tick from the backend (closed turn or intermediate message, D27). */
-export function onBurnTick(payload) {
+export function onBurnTick(payload, view = claudeView) {
+  const burn = burnFor(view);
+  const state = view.state;
   // payload = { tokPerS, turnOutputTokens, turnDurationMs, messageId, timestamp, isPartial }
   const tps = Number(payload?.tokPerS) || 0;
   burn.target = tps;
@@ -48,5 +84,5 @@ export function onBurnTick(payload) {
   if (tokens > 0 && !payload?.isPartial) {
     state.recentTicks.push({ recvAt: Date.now(), tokens });
   }
-  renderFooterMetric();
+  renderFooterMetric(view);
 }

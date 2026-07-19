@@ -8,12 +8,13 @@
 import { formatModelCode, formatResetAt, formatUsd } from "./format.js";
 import { hintOnHover } from "./header-hint.js";
 import { latestDay, loadHistory, SPINNER_HTML } from "./history-data.js";
-import { claudeState as state } from "./telemetry-state.js";
+import { claudeView } from "./provider-view.js";
 
 const LIMIT_SEGMENTS = 12;
+const wiringByProvider = new Map();
 
-function paintWeeklyBar(pct) {
-  const bar = document.getElementById("limit-bar");
+function paintWeeklyBar(pct, view) {
+  const bar = view.element("limit-bar");
   bar.innerHTML = "";
   const filled = Math.max(0, Math.min(LIMIT_SEGMENTS, Math.round((LIMIT_SEGMENTS * pct) / 100)));
   for (let i = 0; i < LIMIT_SEGMENTS; i++) {
@@ -23,17 +24,19 @@ function paintWeeklyBar(pct) {
   }
 }
 
-function renderWeeklyLimit() {
+function renderWeeklyLimit(view) {
+  const state = view.state;
   const hasData = state.sevenDayResetsAtMs > 0;
   const pct = Number(state.sevenDayPct) || 0;
-  document.getElementById("limit-pct").textContent = hasData ? `${Math.round(pct)}%` : "—";
-  paintWeeklyBar(pct);
-  document.getElementById("limit-reset").textContent = hasData
+  view.element("limit-pct").textContent = hasData ? `${Math.round(pct)}%` : "—";
+  paintWeeklyBar(pct, view);
+  view.element("limit-reset").textContent = hasData
     ? `resets ${formatResetAt(state.sevenDayResetsAtMs)}`
     : "no official data yet";
 }
 
-function renderBurnRates() {
+function renderBurnRates(view) {
+  const state = view.state;
   const block = state.lastBlock;
   const instant = Number(block?.burnRate?.costPerHour) || 0;
   const startedAt = block?.startTime ? Date.parse(block.startTime) : NaN;
@@ -41,18 +44,20 @@ function renderBurnRates() {
     ? Math.max((Date.now() - startedAt) / 3_600_000, 1 / 60)
     : 0;
   const avg = elapsedHr > 0 ? (Number(block?.costUsd) || 0) / elapsedHr : 0;
-  document.getElementById("burn-instant").textContent = block ? `${formatUsd(instant)}/h` : "—";
-  document.getElementById("burn-avg").textContent = block ? `${formatUsd(avg)}/h` : "—";
+  view.element("burn-instant").textContent = block ? `${formatUsd(instant)}/h` : "—";
+  view.element("burn-avg").textContent = block ? `${formatUsd(avg)}/h` : "—";
 }
 
-async function renderBreakdown() {
-  const list = document.getElementById("breakdown-list");
+async function renderBreakdown(view, isMounted) {
+  const list = view.element("breakdown-list");
   // Same cold-load gap as History (D-review): on a first, uncached
   // loadHistory() call this list otherwise stays empty/stale with no
   // indication anything is happening.
   list.innerHTML = SPINNER_HTML;
   try {
-    const today = latestDay(await loadHistory());
+    const days = await loadHistory(view.provider);
+    if (!isMounted()) return;
+    const today = latestDay(days);
     const models = today?.modelBreakdowns ?? [];
     if (models.length === 0) {
       list.innerHTML = `<div class="ghost">no usage today</div>`;
@@ -69,35 +74,50 @@ async function renderBreakdown() {
       )
       .join("");
   } catch (e) {
-    list.innerHTML = `<div class="ghost">no data</div>`;
-    console.error("[limits] history_daily:", e);
+    if (isMounted()) list.innerHTML = `<div class="ghost">no data</div>`;
+    console.error(`[limits:${view.provider}] history_daily:`, e);
   }
 }
 
-function isPageActive() {
-  return document.getElementById("page-2")?.classList.contains("active");
+function isPageActive(view) {
+  return view.element("page-2")?.classList.contains("active");
 }
 
-export function wireLimitsPage() {
+export function wireLimitsPage(view = claudeView) {
+  if (wiringByProvider.has(view.provider)) return wiringByProvider.get(view.provider);
   // Whole column (%, bar, reset time) as one hint zone — same reasoning as
   // Page 0's .row.gauge, it's one gauge, not three things to explain.
   hintOnHover(
-    document.querySelector(".limits-col"),
+    view.query(".limits-col"),
     "Official 7-day usage window, resets weekly"
   );
-  hintOnHover(document.getElementById("breakdown-list"), "Cost by model, today");
-  hintOnHover(document.querySelector(".burn-rates"), "Instant vs. this block's average $/h");
-  document.addEventListener("mfd-page-changed", (e) => {
+  hintOnHover(view.element("breakdown-list"), "Cost by model, today");
+  hintOnHover(view.query(".burn-rates"), "Instant vs. this block's average $/h");
+  let mounted = true;
+  const onPageChanged = (e) => {
     if (e.detail.page !== 2) return;
-    renderWeeklyLimit();
-    renderBurnRates();
-    renderBreakdown();
-  });
+    renderWeeklyLimit(view);
+    renderBurnRates(view);
+    renderBreakdown(view, () => mounted);
+  };
   // Keep the two cheap fields live while the page is on screen — the
   // breakdown (today's cost split) doesn't need second-by-second refresh.
-  document.addEventListener("telemetry-tick", () => {
-    if (!isPageActive()) return;
-    renderWeeklyLimit();
-    renderBurnRates();
-  });
+  const onTelemetryTick = (e) => {
+    if (e.detail?.provider !== view.provider || !isPageActive(view)) return;
+    renderWeeklyLimit(view);
+    renderBurnRates(view);
+  };
+  document.addEventListener("mfd-page-changed", onPageChanged);
+  document.addEventListener("telemetry-tick", onTelemetryTick);
+  const dispose = () => {
+    if (!mounted) return;
+    mounted = false;
+    document.removeEventListener("mfd-page-changed", onPageChanged);
+    document.removeEventListener("telemetry-tick", onTelemetryTick);
+    if (wiringByProvider.get(view.provider) === dispose) {
+      wiringByProvider.delete(view.provider);
+    }
+  };
+  wiringByProvider.set(view.provider, dispose);
+  return dispose;
 }

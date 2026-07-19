@@ -6,14 +6,24 @@
 import { formatDurationMs, formatHMin, formatModelCode, formatTokens } from "./format.js";
 import { renderFooterMetric } from "./footer-metric.js";
 import { hintOnHover, setHeaderHint } from "./header-hint.js";
-import { claudeState as state } from "./telemetry-state.js";
 import { loadGlobalSetting, saveGlobalSetting } from "./app-settings.js";
+import { claudeView } from "./provider-view.js";
 
 export const SEGMENT_COUNT = 12;
 const WINDOW_MIN = 300; // 5h billing window, in minutes
 
-let lastGearHit = null; // last active model painted, to know if the "gear changed"
-let lastCustomLabel = ""; // sticky: last detected non-Claude code, for the "C" slot's hover hint
+const runtimeByProvider = new Map();
+
+function runtime(view) {
+  if (!runtimeByProvider.has(view.provider)) {
+    runtimeByProvider.set(view.provider, {
+      lastGearHit: null,
+      lastCustomLabel: "",
+      currentGearHit: null,
+    });
+  }
+  return runtimeByProvider.get(view.provider);
+}
 
 // Model badge, Mercedes trim-nameplate style — one per active model (D-review naming session).
 // User-editable (click the badge); custom text persists per model in localStorage.
@@ -26,19 +36,17 @@ const NAMEPLATES = {
 // Per-slot hover labels for the gear column (wireTripComputerHints) — plain
 // model names, "custom" resolved dynamically at hover time instead (varies).
 const GEAR_LABELS = { opus: "Opus", sonnet: "Sonnet", haiku: "Haiku", fable: "Fable" };
-let currentGearHit = null; // which model key the visible nameplate belongs to, for saving edits
-
 function loadNameplateOverrides() {
   return loadGlobalSetting("nameplates");
 }
 
-function getNameplate(hit) {
-  return loadNameplateOverrides()[`claude:${hit}`] || NAMEPLATES[hit];
+function getNameplate(hit, view) {
+  return loadNameplateOverrides()[`${view.provider}:${hit}`] || NAMEPLATES[hit];
 }
 
 /** Build the autonomie segment bar (fuel-gauge style). */
-export function buildSegments(filled) {
-  const bar = document.getElementById("segments");
+export function buildSegments(filled, view = claudeView) {
+  const bar = view.element("segments");
   bar.innerHTML = "";
   for (let i = 0; i < SEGMENT_COUNT; i++) {
     const seg = document.createElement("div");
@@ -53,8 +61,9 @@ export function buildSegments(filled) {
  *  active letter and, if it changed gear relative to the previous one,
  *  triggers a glow pulse (D-review: animate the change instead of just
  *  switching color abruptly). */
-export function setGear(models) {
+export function setGear(models, view = claudeView) {
   if (!Array.isArray(models) || models.length === 0) return;
+  const local = runtime(view);
   const order = ["opus", "sonnet", "haiku", "fable"];
   const hit = order.find((m) =>
     models.some((id) => String(id).toLowerCase().includes(m))
@@ -65,28 +74,28 @@ export function setGear(models) {
   const customId = hit ? null : models.find((id) => id);
   if (!hit && !customId) return;
   const gearKey = hit || "custom";
-  if (customId) lastCustomLabel = formatModelCode(customId);
+  if (customId) local.lastCustomLabel = formatModelCode(customId);
 
-  currentGearHit = gearKey;
-  const nameplateEl = document.getElementById("nameplate");
+  local.currentGearHit = gearKey;
+  const nameplateEl = view.chassisElement("nameplate");
   // Don't overwrite mid-edit — the user is typing (D-review: a live model
   // tick landing while editing would clobber the in-progress text).
   if (nameplateEl && nameplateEl.contentEditable !== "true") {
     // Custom slot shows the real detected model code (e.g. "GLM5") instead
     // of a decorative trim name — "custom" isn't a fixed model identity like
     // the other 4, so there's no stable NAMEPLATES entry for it.
-    nameplateEl.textContent = hit ? getNameplate(hit) : formatModelCode(customId);
+    nameplateEl.textContent = hit ? getNameplate(hit, view) : formatModelCode(customId);
   }
 
   let activeEl = null;
-  document.querySelectorAll(".gear .g").forEach((el) => {
+  view.queryAll(".gear .g").forEach((el) => {
     const isActive = el.dataset.model === gearKey;
     el.classList.toggle("active", isActive);
     if (isActive) activeEl = el;
   });
 
-  const gearEl = document.getElementById("gear");
-  const marker = document.getElementById("gear-marker");
+  const gearEl = view.element("gear");
+  const marker = view.element("gear-marker");
   if (activeEl && gearEl && marker) {
     // translateY relative to .gear itself — robust against font-size/gap
     // changes, doesn't depend on assuming a fixed row height.
@@ -94,7 +103,7 @@ export function setGear(models) {
     marker.style.transform = `translateY(${targetY}px)`;
   }
 
-  if (gearKey !== lastGearHit && lastGearHit !== null && activeEl) {
+  if (gearKey !== local.lastGearHit && local.lastGearHit !== null && activeEl) {
     activeEl.classList.remove("pulse");
     // Force reflow so the animation can re-trigger if it returns to the same letter.
     void activeEl.offsetWidth;
@@ -105,15 +114,16 @@ export function setGear(models) {
       { once: true }
     );
   }
-  lastGearHit = gearKey;
+  local.lastGearHit = gearKey;
 }
 
 /** Click the nameplate badge to rewrite it for the current model. Empty
  *  input reverts to the built-in default (D-review: needs an escape hatch,
  *  otherwise a typo is permanent). Persisted per model so switching gears
  *  doesn't lose the customization. */
-export function wireNameplateEdit() {
-  const el = document.getElementById("nameplate");
+export function wireNameplateEdit(view = claudeView) {
+  const local = runtime(view);
+  const el = view.chassisElement("nameplate");
   // No `title` (D-review): a native browser tooltip is dark-gray/sans-serif
   // OS chrome, breaks the amber VFD look with no CSS-reachable fix — same
   // reason the MFD/PIN buttons and PACE/AUTO toggle don't have one either.
@@ -123,7 +133,7 @@ export function wireNameplateEdit() {
     // The "custom" slot isn't one fixed model identity (D-review) — it can
     // be a different proxy from one block to the next, so a saved rename
     // would go stale exactly where accuracy matters most. Not editable.
-    if (currentGearHit === "custom") return;
+    if (local.currentGearHit === "custom") return;
     el.contentEditable = "true";
     el.focus();
     const range = document.createRange();
@@ -135,16 +145,16 @@ export function wireNameplateEdit() {
   const commit = () => {
     if (el.contentEditable !== "true") return;
     el.contentEditable = "false";
-    if (!currentGearHit) return;
+    if (!local.currentGearHit) return;
     const overrides = loadNameplateOverrides();
     const value = el.textContent.trim().toUpperCase();
-    if (!value || value === NAMEPLATES[currentGearHit]) {
-      delete overrides[`claude:${currentGearHit}`];
+    if (!value || value === NAMEPLATES[local.currentGearHit]) {
+      delete overrides[`${view.provider}:${local.currentGearHit}`];
     } else {
-      overrides[`claude:${currentGearHit}`] = value;
+      overrides[`${view.provider}:${local.currentGearHit}`] = value;
     }
     saveGlobalSetting("nameplates", overrides);
-    el.textContent = getNameplate(currentGearHit);
+    el.textContent = getNameplate(local.currentGearHit, view);
   };
   el.onblur = commit;
   el.onkeydown = (e) => {
@@ -152,7 +162,7 @@ export function wireNameplateEdit() {
       e.preventDefault();
       el.blur();
     } else if (e.key === "Escape") {
-      el.textContent = getNameplate(currentGearHit);
+      el.textContent = getNameplate(local.currentGearHit, view);
       el.blur();
     }
   };
@@ -167,11 +177,11 @@ function segmentsForMinutes(min) {
 }
 
 /** Autonomy bar + text + gear from ccusage's PROJECTION (estimated). */
-export function applyEstimated(block) {
+export function applyEstimated(block, view = claudeView) {
   const remaining = Number(block?.projection?.remainingMinutes);
-  document.getElementById("autonomie").textContent = `EST ${formatHMin(remaining)}`;
-  buildSegments(Number.isFinite(remaining) ? segmentsForMinutes(remaining) : 0);
-  setGear(block?.models);
+  view.element("autonomie").textContent = `EST ${formatHMin(remaining)}`;
+  buildSegments(Number.isFinite(remaining) ? segmentsForMinutes(remaining) : 0, view);
+  setGear(block?.models, view);
 }
 
 /** Paints the bar + text for quota mode, from the last known official data
@@ -183,17 +193,18 @@ export function applyEstimated(block) {
  *  the quota view permanently. Falls back to quota if the toggle is on but
  *  `resetsAt` never arrived (partial payload) — same "don't force a value
  *  that isn't known" rule as everywhere else in this file. */
-function paintQuotaGauge() {
+function paintQuotaGauge(view) {
+  const state = view.state;
   if (state.autonomieShowTime && state.fiveHourResetsAtMs > 0) {
     const remainMin = (state.fiveHourResetsAtMs - Date.now()) / 60000;
-    document.getElementById("autonomie").textContent =
+    view.element("autonomie").textContent =
       remainMin > 0 ? formatHMin(remainMin) : "—";
-    buildSegments(segmentsForMinutes(Math.max(0, remainMin)));
+    buildSegments(segmentsForMinutes(Math.max(0, remainMin)), view);
     return;
   }
   const pct = state.fiveHourPct;
-  buildSegments(Math.round((SEGMENT_COUNT * (100 - pct)) / 100));
-  document.getElementById("autonomie").textContent = `${Math.round(100 - pct)}%`;
+  buildSegments(Math.round((SEGMENT_COUNT * (100 - pct)) / 100), view);
+  view.element("autonomie").textContent = `${Math.round(100 - pct)}%`;
 }
 
 /** Re-paints the "autonomie" row on each clock tick (D40). In official mode
@@ -203,14 +214,15 @@ function paintQuotaGauge() {
  *  countdown, unchanged from before D40: keeps counting even while
  *  `sensorConnected` is momentarily false — the known reset doesn't stop
  *  being valid just because the sensor is quiet for a while. */
-export function refreshAutonomie() {
+export function refreshAutonomie(view = claudeView) {
+  const state = view.state;
   if (state.everQuotaConnected) {
-    paintQuotaGauge();
+    paintQuotaGauge(view);
     return;
   }
   if (state.fiveHourResetsAtMs <= 0) return;
   const remainMin = (state.fiveHourResetsAtMs - Date.now()) / 60000;
-  document.getElementById("autonomie").textContent =
+  view.element("autonomie").textContent =
     remainMin > 0 ? formatHMin(remainMin) : "—";
 }
 
@@ -218,15 +230,17 @@ export function refreshAutonomie() {
  *  remaining and time-until-reset, both bar and text together (never a mix,
  *  D40). No-op in estimated mode — there's no quota to toggle to, so the
  *  row is left showing ccusage's time projection either way. */
-export function toggleAutonomieView() {
+export function toggleAutonomieView(view = claudeView) {
+  const state = view.state;
   if (!state.everQuotaConnected) return;
   state.autonomieShowTime = !state.autonomieShowTime;
-  paintQuotaGauge();
+  paintQuotaGauge(view);
 }
 
 /** Paints the ccusage active block's data. odo/trip/avg always; the
  *  derived ones (segments/autonomie/gear) only if there is NO official sensor connected. */
-export function onBlocksUpdate(block) {
+export function onBlocksUpdate(block, view = claudeView) {
+  const state = view.state;
   // block = camelCase Block from engine.rs (totalTokens, costUsd, projection, models, startTime).
   // If the 5h block rotates (new id), the previous block's PACE buffer is no
   // longer comparable — clearing it avoids mixing "recent" data from one
@@ -237,18 +251,18 @@ export function onBlocksUpdate(block) {
   }
   state.lastBlock = block;
   const tokens = Number(block?.totalTokens) || 0;
-  document.getElementById("odo").textContent = formatTokens(tokens);
+  view.element("odo").textContent = formatTokens(tokens);
 
   const startedAt = block?.startTime ? Date.parse(block.startTime) : NaN;
   if (Number.isFinite(startedAt)) {
-    document.getElementById("session-time").textContent = formatDurationMs(
+    view.element("session-time").textContent = formatDurationMs(
       Date.now() - startedAt
     );
   }
 
   const costUsd = Number(block?.costUsd) || 0;
   const perMtok = tokens > 0 ? (costUsd / tokens) * 1e6 : 0;
-  document.getElementById("avg").textContent = `$${perMtok.toFixed(2)}`;
+  view.element("avg").textContent = `$${perMtok.toFixed(2)}`;
 
   // Only if quota data NEVER arrived — once it did, a momentary pause
   // shouldn't let ccusage override the official data (D-review). Gated on
@@ -256,13 +270,14 @@ export function onBlocksUpdate(block) {
   // user's sensor connects but never carries quota, so ccusage's time
   // estimate must keep serving as the permanent fallback for them, not just
   // until the sensor's first (quota-less) payload.
-  if (!state.everQuotaConnected) applyEstimated(block);
+  if (!state.everQuotaConnected) applyEstimated(block, view);
   // Lets Page 2 (limits-page.js) keep its instant/avg burn rate live while visible.
-  document.dispatchEvent(new Event("telemetry-tick"));
+  view.emit("telemetry-tick");
 }
 
 /** OFFICIAL data from the statusLine: overwrites segments/autonomie/gear/warn. */
-export function onSensorUpdate(p) {
+export function onSensorUpdate(p, view = claudeView) {
+  const state = view.state;
   state.sensorConnected = true;
   state.everSensorConnected = true;
   const pctFinite = Number.isFinite(p?.fiveHourPct);
@@ -278,21 +293,21 @@ export function onSensorUpdate(p) {
   if (pctFinite) {
     state.everQuotaConnected = true;
     state.fiveHourPct = pct;
-    paintQuotaGauge();
+    paintQuotaGauge(view);
   }
-  if (p?.modelId) setGear([p.modelId]);
+  if (p?.modelId) setGear([p.modelId], view);
   // Official 7d rate-limit window — full numbers live on Page 2 (limits-page.js);
   // the border tint here stays as the always-visible "check engine"-style warning.
   const sevenDayPct = Number(p?.sevenDayPct) || 0;
   state.sevenDayPct = sevenDayPct;
   state.sevenDayResetsAtMs = p?.sevenDayResetsAt ? Number(p.sevenDayResetsAt) * 1000 : 0;
-  document.querySelector(".screen").classList.toggle("warn", sevenDayPct > 80);
+  view.root().classList.toggle("warn", sevenDayPct > 80);
   // Sliding buffer for the footer's AUTO metric (see footer-metric.js).
   if (Number.isFinite(pct)) {
     state.recentPct.push({ recvAt: Date.now(), pct });
   }
-  renderFooterMetric();
-  document.dispatchEvent(new Event("telemetry-tick"));
+  renderFooterMetric(view);
+  view.emit("telemetry-tick");
 }
 
 /** Sensor connection. If official data NEVER arrived, falls back to the
@@ -301,15 +316,16 @@ export function onSensorUpdate(p) {
  *  projection here is an independent 5h window system and the jump
  *  looked like an absurd number (e.g. official "0h17" → ccusage's
  *  "EST 4h31", found in review). */
-export function onSensorState(p) {
+export function onSensorState(p, view = claudeView) {
+  const state = view.state;
   state.sensorConnected = !!p?.connected;
   if (state.sensorConnected) return;
   if (state.everQuotaConnected) return; // frozen: don't touch anything
-  document.querySelector(".screen").classList.remove("warn");
-  if (state.lastBlock) applyEstimated(state.lastBlock);
+  view.root().classList.remove("warn");
+  if (state.lastBlock) applyEstimated(state.lastBlock, view);
   else {
-    document.getElementById("autonomie").textContent = "EST —";
-    buildSegments(0);
+    view.element("autonomie").textContent = "EST —";
+    buildSegments(0, view);
   }
 }
 
@@ -319,28 +335,29 @@ export function onSensorState(p) {
  *  they're one gauge, not three separate things to explain. `#burn`/`#avg`
  *  get one despite already having a unit label: D8/D11 are this project's
  *  most-documented points of confusion (tok/s isn't live, cost is estimated). */
-export function wireTripComputerHints() {
+export function wireTripComputerHints(view = claudeView) {
+  const local = runtime(view);
   // Per-letter hints (not one static hintOnHover on the whole .gear): each
   // slot names its own model even when it isn't the active one, and the
   // active slot is called out explicitly. "custom" has no fixed identity
   // (D-review) so its label is resolved live from the last detected id.
-  document.querySelectorAll(".gear .g").forEach((el) => {
+  view.queryAll(".gear .g").forEach((el) => {
     const model = el.dataset.model;
     el.addEventListener("mouseenter", () => {
       const label =
-        model === "custom" ? lastCustomLabel || "Custom (non-Claude model)" : GEAR_LABELS[model];
-      setHeaderHint(currentGearHit === model ? `Active model: ${label}` : label);
+        model === "custom" ? local.lastCustomLabel || "Custom (non-Claude model)" : GEAR_LABELS[model];
+      setHeaderHint(local.currentGearHit === model ? `Active model: ${label}` : label);
     });
     el.addEventListener("mouseleave", () => setHeaderHint(""));
   });
-  const gaugeRow = document.querySelector(".row.gauge");
+  const gaugeRow = view.query(".row.gauge");
   hintOnHover(gaugeRow, "5h quota remaining — click for reset time");
-  gaugeRow.onclick = toggleAutonomieView;
+  gaugeRow.onclick = () => toggleAutonomieView(view);
   hintOnHover(
-    document.getElementById("burn"),
+    view.element("burn"),
     "Per-response rate"
   );
-  hintOnHover(document.getElementById("avg"), "Estimated cost, not official");
-  hintOnHover(document.getElementById("odo"), "Total tokens since this block started");
-  hintOnHover(document.getElementById("session-time"), "Elapsed time in this 5h block");
+  hintOnHover(view.element("avg"), "Estimated cost, not official");
+  hintOnHover(view.element("odo"), "Total tokens since this block started");
+  hintOnHover(view.element("session-time"), "Elapsed time in this 5h block");
 }

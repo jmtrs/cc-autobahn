@@ -768,7 +768,7 @@ Areas to improve as part of the expansion:
 
 - Frontend unit tests now cover provider state, routing, health hydration and
   replay rejection; a configured linter is still missing.
-- Live documentation is synchronized to 77 Rust and 9 frontend tests; lower counts in the
+- Live documentation is synchronized to 80 Rust and 17 frontend tests; lower counts in the
   decision log and completed roadmap phases are intentional point-in-time
   verification records.
 - Several visual behaviors rely on manual verification.
@@ -813,7 +813,7 @@ The following commands passed during the 2026-07-19 re-audit:
 
 ```text
 npm run build
-npm run test:frontend              # 11 passed
+npm run test:frontend              # 17 passed
 npm run test:visual                # 4 screens at 550 × 150
 cargo test                         # 80 passed
 cargo fmt --check
@@ -822,9 +822,10 @@ cargo clippy --all-targets --all-features -- -D warnings
 
 Confirmed structural facts:
 
-- 145 tracked or newly added delivery files, including this assessment document.
+- 158 tracked or newly added delivery files, including this assessment document.
 - One frontend entrypoint and 27 small frontend modules with global chassis
-  state plus isolated Claude/Codex provider state; DOM rendering remains singleton.
+  state, isolated Claude/Codex provider state and a provider-root-scoped renderer
+  boundary; only the Claude module is mounted so DOM presentation remains single-provider.
 - 23 Rust source files across providers, engine, burn, sensor, permission,
   tray and native-window concerns.
 - A Node frontend test runner is configured; no lint script exists yet.
@@ -891,10 +892,12 @@ idempotent legacy migration are implemented first: display mode, global
 preferences, provider namespaces and `provider:model` nameplate keys now live
 in schema v2 while old keys remain available for rollback. A serialized native
 transition now enforces 550 × 150 for single-provider modes and 550 × 290 for
-Both, preserving and monitor-clamping the top-left point. Provider-scoped DOM
-renderers and the Settings display-mode control remain.
+Both, preserving and monitor-clamping the top-left point. Telemetry, model
+selector, History, Limits, burn animation, warning state and history caches now
+resolve through an injected provider view; only Claude is mounted in this
+behavior-preserving cut. The dual layout and Settings display-mode control remain.
 
-- Convert telemetry, model selector, History and Limits into provider-scoped renderers.
+- [x] Convert telemetry, model selector, History and Limits into provider-scoped renderers.
 - Preserve the existing header and dynamic nameplate as shared chassis elements.
 - Add Claude, Codex and Both display modes.
 - Implement synchronized MFD navigation and one shared Settings page.
