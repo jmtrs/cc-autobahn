@@ -870,11 +870,12 @@ Practical delivery levels:
 
 ### Phase 1 — Provider foundation
 
-**Status:** provider lifecycle and first foundation cut implemented on `develop`:
+**Status:** complete on `develop`. Provider lifecycle and the first foundation cut include:
 normalized Rust contracts, provider-discriminated Claude payloads, component
 health registry and snapshots, startup-safe sensor hydration, global/per-provider
 frontend state, strict Claude-only legacy routing, CI frontend tests and replay
-guards. Broader visual regression coverage remains before this phase is complete.
+guards. Playwright locks all four current Claude MFD screens to the real 550 × 150
+viewport with clipping/overflow checks and committed visual baselines.
 
 - Define normalized domain contracts.
 - Move current Claude implementations behind a Claude provider without changing behavior.

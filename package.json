@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "vite",
     "test:frontend": "node --test src/modules/*.test.js",
+    "test:visual": "node scripts/visual-regression.mjs",
+    "capture:visual-baseline": "node scripts/visual-regression.mjs --update",
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
