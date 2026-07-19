@@ -161,10 +161,12 @@ IPC/events.
    footer. In parallel, the tray icon receives the same remaining-autonomy %
    and redraws its progress ring (D30) — this doesn't go through the frontend,
    it's computed directly in Rust at the point where each event is emitted.
-6. **On demand only** (D33): when the user cycles the MFD to History or
-   Limits, the frontend calls the `history_daily` command — a one-off
-   `ccusage claude daily --json` run, not part of the loop above — and
-   caches the result client-side for a few minutes.
+6. **On demand only** (D33/D47): when the user cycles the MFD to History or
+   Limits, the frontend calls provider-discriminated `history_daily`; native
+   code runs `ccusage claude daily` or `ccusage codex daily --speed auto` and
+   caches results/in-flight work separately for a few minutes. A normalized
+   `history_sessions` command exists for both providers without exposing local
+   project or rollout paths.
 7. **Permission requests** (D42) use an independent synchronous route:
    Claude hook process → Unix socket → FIFO queue → `permission-pending` →
    Approve/Deny/Always Allow command → socket response. A pending request
@@ -191,12 +193,12 @@ tray states, themes, permission sound/consent, and manual position reset are
 wired. Default placement remains under the tray, with D41's persisted drag
 override available when wanted.
 
-Current verified baseline: **87 Rust tests**, **28 frontend tests**, Rustfmt
+Current verified baseline: **89 Rust tests**, **36 frontend tests**, Rustfmt
 check, strict Clippy (`-D warnings`), and the Vite production build all pass.
 Frontend linting is not yet configured. Future work is tracked in the roadmap:
 Codex provider foundation and the complete dual-provider chassis are implemented;
-local rollout speed/model/thread telemetry is implemented; Codex history and
-App Server account data remain.
+local rollout speed/model/thread telemetry and local estimated history are
+implemented; App Server account data remains.
 Bun sidecar and
 Windows/Linux are optional, and permission request identity/native Claude
 permission suggestions are hardened; mixed-provider permission routing remains.

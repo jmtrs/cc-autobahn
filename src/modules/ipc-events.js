@@ -13,17 +13,23 @@ import { onBurnTick } from "./speedometer.js";
 import { onBlocksUpdate, onSensorState, onSensorUpdate } from "./trip-computer.js";
 import { claudeView, codexView } from "./provider-view.js";
 import { hydrateProviderHealth, routeClaudePayload } from "./provider-routing.js";
-import { providerIdFromPayload, updateProviderHealth } from "./telemetry-state.js";
+import { providerIdFromPayload, state, updateProviderHealth } from "./telemetry-state.js";
 import { setProviderAvailability } from "./provider-status.js";
 import { setGear } from "./trip-computer.js";
 
 const providerViews = { claude: claudeView, codex: codexView };
 
+function syncCodexAvailability() {
+  const health = state.providers.codex.health;
+  const available = ["transcript", "history"].some(
+    (component) => health[component]?.status === "connected",
+  );
+  setProviderAvailability("codex", available);
+}
+
 function applyHealth(payload) {
   if (!updateProviderHealth(payload)) return false;
-  if (payload.provider === "codex" && payload.component === "transcript") {
-    setProviderAvailability("codex", payload.status === "connected");
-  }
+  if (payload.provider === "codex") syncCodexAvailability();
   return true;
 }
 
@@ -99,11 +105,7 @@ export async function wireEngine() {
   try {
     const snapshot = await invoke("provider_health_snapshot");
     hydrateProviderHealth(snapshot);
-    snapshot?.forEach((health) => {
-      if (health.provider === "codex" && health.component === "transcript") {
-        setProviderAvailability("codex", health.status === "connected");
-      }
-    });
+    syncCodexAvailability();
   } catch (e) {
     console.error("[provider] health snapshot:", e);
   }

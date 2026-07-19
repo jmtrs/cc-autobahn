@@ -6,9 +6,14 @@
 // so anything positioned relative to a hovered bar clips against an edge
 // somewhere. A fixed panel below the bars can't overflow (D-review).
 
-import { formatModelCode, formatTokens, formatUsd } from "./format.js";
+import { formatModelCode, formatTokens } from "./format.js";
 import { hintOnHover } from "./header-hint.js";
-import { latestDay, loadHistory, SPINNER_HTML } from "./history-data.js";
+import {
+  formatHistoryCost,
+  latestDay,
+  loadHistory,
+  SPINNER_HTML,
+} from "./history-data.js";
 import { claudeView } from "./provider-view.js";
 
 const allDaysByProvider = new Map();
@@ -20,7 +25,7 @@ const wiringByProvider = new Map();
 function showDetail(d, view) {
   view.element("hd-date").textContent = d.date;
   view.element("hd-total").textContent =
-    `${formatUsd(d.totalCost)} · ${formatTokens(d.totalTokens)} tok`;
+    `${formatHistoryCost(d.totalCost, view.provider)} · ${formatTokens(d.totalTokens)} tok`;
 
   const top3 = (d.modelBreakdowns ?? [])
     .slice()
@@ -31,9 +36,10 @@ function showDetail(d, view) {
       const tokens =
         (m.inputTokens || 0) +
         (m.outputTokens || 0) +
+        (m.reasoningOutputTokens || 0) +
         (m.cacheCreationTokens || 0) +
         (m.cacheReadTokens || 0);
-      return `<span class="model-chip"><span class="code">${formatModelCode(m.modelName)}</span>${formatUsd(m.cost)} ${formatTokens(tokens)}</span>`;
+      return `<span class="model-chip"><span class="code">${formatModelCode(m.modelName)}</span>${formatHistoryCost(m.cost, view.provider)} ${formatTokens(tokens)}</span>`;
     })
     .join("");
 }
@@ -65,7 +71,7 @@ function render(days, view) {
     bar.appendChild(col);
   });
   const total = days.reduce((sum, d) => sum + (Number(d.totalCost) || 0), 0);
-  view.element("history-total").textContent = formatUsd(total);
+  view.element("history-total").textContent = formatHistoryCost(total, view.provider);
 
   const latest = latestDay(days);
   if (latest) showDetail(latest, view);
@@ -73,7 +79,9 @@ function render(days, view) {
 }
 
 async function refresh(view, isMounted) {
-  if (view.root().dataset.providerAvailable === "false" || view.provider !== "claude") {
+  const nativeHistoryAvailable =
+    typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  if (view.root().dataset.providerAvailable === "false" && !nativeHistoryAvailable) {
     view.element("history-bars").innerHTML = "";
     view.element("history-total").textContent = "—";
     showMessage("data source unavailable", view);

@@ -192,7 +192,7 @@ The full per-file breakdown lives in [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.
 - [docs/DATA-ENGINE.md](./docs/DATA-ENGINE.md) — ccusage, statusline, OTEL, comparison.
 - [docs/DECISIONS.md](./docs/DECISIONS.md) — decision log (ADR) and rationale.
 - [docs/ROADMAP.md](./docs/ROADMAP.md) — implementation phases.
-- [docs/CODEX-INTEGRATION-ASSESSMENT.md](./docs/CODEX-INTEGRATION-ASSESSMENT.md) — verified Claude/Codex plan; provider contracts, isolated state, dual-provider UI and local rollout speed/model/thread telemetry are implemented; Codex history and App Server data remain.
+- [docs/CODEX-INTEGRATION-ASSESSMENT.md](./docs/CODEX-INTEGRATION-ASSESSMENT.md) — verified Claude/Codex plan; provider contracts, isolated state, dual-provider UI and Phase 3 local telemetry/history are implemented; App Server data remains.
 
 ## Roadmap
 
@@ -201,7 +201,7 @@ statusline sensor, zero friction, tray/menu-bar, polish, MFD history/limits/
 settings pages, redline feedback, movable positioning, and the permission
 gate). The real, up-to-date checklist lives in
 [docs/ROADMAP.md](./docs/ROADMAP.md) — don't duplicate it here, it gets out
-of sync. Future work includes Codex history and App Server account adapters,
+of sync. Future work includes Codex App Server account adapters,
 packaging Bun as a Tauri sidecar, Windows/Linux validation, and mixed-provider
 permission routing.
 

@@ -151,14 +151,14 @@ Implementation order, one layer at a time, verifying before moving forward.
       Always Allow, configurable built-in/custom/off alert sound.
 - [x] Themes, reorderable optional MFD screens, synthetic VFD cursor, and
       current Settings controls wired without changing the 550 × 150 panel.
-- [x] Current quality gate: 87 Rust tests, 28 frontend tests, Rustfmt, strict Clippy, and Vite
+- [x] Current quality gate: 89 Rust tests, 36 frontend tests, Rustfmt, strict Clippy, and Vite
       production build pass.
 
 ## Follow-up work
 
-- [ ] Codex support: architecture, provider foundation, dual-provider UI and
-      local rollout speed/model/thread telemetry complete; Codex history and
-      App Server account data remain. See
+- [ ] Codex support: architecture, provider foundation, dual-provider UI,
+      local rollout speed/model/thread telemetry and estimated history complete;
+      App Server account data remains. See
       [CODEX-INTEGRATION-ASSESSMENT.md](./CODEX-INTEGRATION-ASSESSMENT.md).
 - [x] Permission identity: replace Claude `prompt_id` as queue identity with
       a generated per-hook-invocation ID; retain `prompt_id` as optional

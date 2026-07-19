@@ -52,6 +52,7 @@ fn main() {
             engine::engine_status,
             engine::install::install_bun,
             engine::history::history_daily,
+            engine::history::history_sessions,
             sensor::install::sensor_status,
             sensor::sensor_snapshot,
             sensor::install::sensor_preview_install,

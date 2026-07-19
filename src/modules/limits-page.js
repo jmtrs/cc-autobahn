@@ -7,7 +7,12 @@
 
 import { formatModelCode, formatResetAt, formatUsd } from "./format.js";
 import { hintOnHover } from "./header-hint.js";
-import { latestDay, loadHistory, SPINNER_HTML } from "./history-data.js";
+import {
+  formatHistoryCost,
+  loadHistory,
+  SPINNER_HTML,
+  todayEntry,
+} from "./history-data.js";
 import { claudeView } from "./provider-view.js";
 
 const LIMIT_SEGMENTS = 12;
@@ -56,7 +61,9 @@ function renderBurnRates(view) {
 
 async function renderBreakdown(view, isMounted) {
   const list = view.element("breakdown-list");
-  if (view.root().dataset.providerAvailable === "false" || view.provider !== "claude") {
+  const nativeHistoryAvailable =
+    typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
+  if (view.root().dataset.providerAvailable === "false" && !nativeHistoryAvailable) {
     list.innerHTML = `<div class="ghost">data source unavailable</div>`;
     return;
   }
@@ -67,7 +74,7 @@ async function renderBreakdown(view, isMounted) {
   try {
     const days = await loadHistory(view.provider);
     if (!isMounted()) return;
-    const today = latestDay(days);
+    const today = todayEntry(days);
     const models = today?.modelBreakdowns ?? [];
     if (models.length === 0) {
       list.innerHTML = `<div class="ghost">no usage today</div>`;
@@ -80,9 +87,10 @@ async function renderBreakdown(view, isMounted) {
       // id like "claude-haiku-4-5-20251001" would truncate in this column.
       .map(
         (m) =>
-          `<div class="breakdown-row"><span class="model-chip"><span class="code">${formatModelCode(m.modelName)}</span></span><span>${formatUsd(m.cost)}</span></div>`
+          `<div class="breakdown-row"><span class="model-chip"><span class="code">${formatModelCode(m.modelName)}</span></span><span>${formatHistoryCost(m.cost, view.provider)}</span></div>`
       )
       .join("");
+    renderWeeklyLimit(view);
   } catch (e) {
     if (isMounted()) list.innerHTML = `<div class="ghost">no data</div>`;
     console.error(`[limits:${view.provider}] history_daily:`, e);

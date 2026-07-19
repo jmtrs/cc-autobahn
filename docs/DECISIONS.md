@@ -1432,3 +1432,33 @@ duplicate records, normalized frontend routing, provider buffer isolation, and
 a privacy-preserving bootstrap against a real local rollout pass. Full baseline:
 87 Rust tests, 28 frontend tests, Rustfmt, strict Clippy, Vite production build,
 and whitespace validation.
+
+## D47 — Codex history never allocates aggregate cost heuristically
+
+**Observed wire contract**: `ccusage 20.0.17 codex daily/session` returns
+aggregate `costUSD` and a model-keyed token map. It does not return Claude's
+`modelBreakdowns[].cost`. Both commands support `--speed auto`, which reads
+the relevant Codex `config.toml` service tier.
+
+**Normalization**: `history_daily` now requires a provider and
+`history_sessions` exposes the parallel normalized contract. Claude and Codex
+wire DTOs remain separate; normalized entries carry provider and estimated
+source quality. Codex model maps are sorted deterministically. Aggregate cost
+is assigned to a model only when exactly one model exists; with multiple
+models, per-model cost is `null` and the UI renders `—`. Aggregate Codex costs
+render as `EST`. Session file and project directory fields are never serialized
+across IPC.
+
+**Caching and availability**: daily/session caches and pending promises are
+keyed by report kind + provider, so History and Limits share one spawn without
+cross-provider reuse. History can load without a currently fresh rollout;
+successful history health is itself a valid Codex data-source capability.
+Today's model list selects the actual local date instead of relabeling the most
+recent stale usage as today.
+
+**Verification**: real local CLI schemas were inspected without printing
+conversation contents or paths. Fixtures cover both providers, sole/multiple
+model cost semantics, privacy, spoof rejection, malformed input, cache
+isolation, in-flight coalescing, retry and stale-day handling. Full baseline:
+89 Rust tests, 36 frontend tests, Rustfmt, strict Clippy, Vite production build
+and whitespace validation.

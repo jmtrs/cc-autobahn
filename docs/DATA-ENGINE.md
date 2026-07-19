@@ -17,15 +17,18 @@ Reference version: **20.0.17**.
 ```bash
 ccusage blocks --active --json         # active 5h block: burnRate, projection, start/end
 ccusage claude daily --json --since …  # daily history (History/Limits pages, D33)
-ccusage session --json                 # per session (not used yet)
+ccusage claude session --json          # normalized Claude session report
+ccusage codex daily --json --speed auto   # estimated Codex daily cost/tokens
+ccusage codex session --json --speed auto # normalized Codex thread/session report
 ```
 
 **Scoping matters**: cc-autobahn's History page calls `ccusage claude daily`,
 not the bare `ccusage daily`. The top-level command aggregates every agent
 ccusage detects on the machine (Codex, Gemini, etc.) if the user has those
 CLIs installed too — confirmed by running both against real data. The
-`claude` subcommand scopes to Claude Code only, which is the only thing
-this project's numbers should ever reflect.
+Provider subcommands keep Claude and Codex reports isolated. Codex model maps
+contain per-model tokens but only aggregate `costUSD`; cc-autobahn leaves
+multi-model cost allocation unknown rather than distributing it heuristically.
 
 ### Fields per object
 
