@@ -18,11 +18,22 @@ use tauri::{AppHandle, Manager, Wry};
 use crate::providers::{ProviderId, RateLimitSnapshot, SourceQuality};
 
 const S: u32 = 44; // 22pt @2x retina, same as the previous static icon
-const OUTER_R: f64 = S as f64 * 0.42;
-const INNER_R: f64 = S as f64 * 0.28;
+                   // D53: bumped outward (0.42/0.28 -> 0.46/0.32) rather than growing S itself —
+                   // macOS auto-fits NSStatusItem's button image to the fixed menu-bar row
+                   // height regardless of the source buffer's pixel size, so a bigger S risks
+                   // being silently rescaled back down. Filling more of the same S×S canvas
+                   // (ring keeps its ~0.14*S thickness, just sits closer to the edge) reliably
+                   // reads as bigger without fighting that. Still ~1.7px of edge margin left.
+const OUTER_R: f64 = S as f64 * 0.46;
+const INNER_R: f64 = S as f64 * 0.32;
 const TRACK_ALPHA: u8 = 55; // faint track, always visible (100% reference)
 const ARC_ALPHA: u8 = 255; // progress arc, opaque
 const ALERT_BLINK_MS: u64 = 450; // on/off half-period while critical (D37/D-review)
+const EXCLAMATION_STEM_HALF_W: f64 = S as f64 * 0.05;
+const EXCLAMATION_STEM_TOP_FRAC: f64 = 0.68; // * INNER_R above center
+const EXCLAMATION_STEM_BOTTOM_FRAC: f64 = 0.05; // * INNER_R below center
+const EXCLAMATION_DOT_R: f64 = S as f64 * 0.055;
+const EXCLAMATION_DOT_CENTER_FRAC: f64 = 0.6; // * INNER_R below center
 
 /// 5h billing window in minutes — same as WINDOW_MIN in main.js.
 pub const WINDOW_MIN: f64 = 300.0;
@@ -270,15 +281,22 @@ fn ensure_blink_thread(app: AppHandle) {
     });
 }
 
-/// Either urgency (`alert` or `pending_permission`) keeps the blink thread
-/// running — the ring doesn't need to visually distinguish which reason to a
-/// user glancing at the menu bar, the gate panel is where that distinction
-/// actually matters.
+/// Both urgencies keep the same blink thread running, but `pending_permission`
+/// paints an exclamation mark inside the ring (D53) — a session is blocked
+/// waiting on a human, which is a different kind of urgent than PACE/AUTO
+/// budget pressure (`alert` alone). Template icons (D30) are alpha-only, so a
+/// color difference was never on the table (D37); shape is the only channel
+/// left to tell them apart at a glance, before the gate panel is even open.
 fn paint_blink_frame(app: &AppHandle, alpha: u8) -> bool {
     let s = state().lock().unwrap();
     let active = s.alert || s.pending_permission;
     if active {
-        paint(app, render_uniform(alpha));
+        let buf = if s.pending_permission {
+            render_uniform_with_exclamation(alpha)
+        } else {
+            render_uniform(alpha)
+        };
+        paint(app, buf);
     }
     active
 }
@@ -326,6 +344,40 @@ fn render(pct: f64) -> Vec<u8> {
 /// Whole ring at one flat alpha — the alert blink's two frames.
 fn render_uniform(alpha: u8) -> Vec<u8> {
     render_ring(|_angle| alpha)
+}
+
+/// Whole ring plus an exclamation mark in its hole, both at the same alpha —
+/// the pending-permission blink's two frames (D53).
+fn render_uniform_with_exclamation(alpha: u8) -> Vec<u8> {
+    let mut buf = render_uniform(alpha);
+    draw_exclamation(&mut buf, alpha);
+    buf
+}
+
+/// Paints a filled exclamation mark (stem + dot) into the ring's empty
+/// center hole. Geometry is fractions of `INNER_R` so it stays clear of the
+/// ring annulus by construction — verified in `exclamation_stays_inside_hole`.
+fn draw_exclamation(buf: &mut [u8], alpha: u8) {
+    let cx = S as f64 / 2.0;
+    let cy = S as f64 / 2.0;
+    let stem_top = cy - INNER_R * EXCLAMATION_STEM_TOP_FRAC;
+    let stem_bottom = cy + INNER_R * EXCLAMATION_STEM_BOTTOM_FRAC;
+    let dot_cy = cy + INNER_R * EXCLAMATION_DOT_CENTER_FRAC;
+    for y in 0..S {
+        for x in 0..S {
+            let px = x as f64 + 0.5;
+            let py = y as f64 + 0.5;
+            let in_stem =
+                (px - cx).abs() <= EXCLAMATION_STEM_HALF_W && py >= stem_top && py <= stem_bottom;
+            let dx = px - cx;
+            let dy = py - dot_cy;
+            let in_dot = (dx * dx + dy * dy).sqrt() <= EXCLAMATION_DOT_R;
+            if in_stem || in_dot {
+                let i = ((y * S + x) * 4) as usize;
+                buf[i + 3] = alpha;
+            }
+        }
+    }
 }
 
 /// Shared ring geometry: in template mode (D24) macOS ignores RGB and uses
@@ -404,6 +456,69 @@ mod tests {
         assert_eq!(
             candidates.tooltip(),
             "cc-autobahn · Claude 40% · Codex 40% · showing Claude"
+        );
+    }
+
+    fn pixel_alpha(buf: &[u8], x: u32, y: u32) -> u8 {
+        buf[((y * S + x) * 4 + 3) as usize]
+    }
+
+    fn distance_from_center(x: u32, y: u32) -> f64 {
+        let cx = S as f64 / 2.0;
+        let cy = S as f64 / 2.0;
+        let dx = x as f64 + 0.5 - cx;
+        let dy = y as f64 + 0.5 - cy;
+        (dx * dx + dy * dy).sqrt()
+    }
+
+    #[test]
+    fn plain_alert_blink_leaves_the_hole_empty() {
+        let buf = render_uniform(ARC_ALPHA);
+        for y in 0..S {
+            for x in 0..S {
+                if distance_from_center(x, y) < INNER_R {
+                    assert_eq!(
+                        pixel_alpha(&buf, x, y),
+                        0,
+                        "plain alert frame must not paint inside the ring's hole"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn exclamation_stays_inside_hole_and_is_opaque() {
+        // draw_exclamation in isolation, on a blank buffer — render_uniform's
+        // ring annulus itself legitimately spans INNER_R..=OUTER_R, so
+        // asserting on the combined frame would conflate ring pixels with
+        // glyph pixels.
+        let mut buf = vec![0u8; (S * S * 4) as usize];
+        draw_exclamation(&mut buf, ARC_ALPHA);
+        let mut painted_inside_hole = false;
+        for y in 0..S {
+            for x in 0..S {
+                if pixel_alpha(&buf, x, y) == 0 {
+                    continue;
+                }
+                assert!(
+                    distance_from_center(x, y) < INNER_R,
+                    "exclamation pixel at ({x},{y}) leaked outside the ring's hole"
+                );
+                painted_inside_hole = true;
+            }
+        }
+        assert!(
+            painted_inside_hole,
+            "exclamation mark did not paint anything inside the hole"
+        );
+    }
+
+    #[test]
+    fn exclamation_frame_differs_from_plain_frame() {
+        assert_ne!(
+            render_uniform(ARC_ALPHA),
+            render_uniform_with_exclamation(ARC_ALPHA)
         );
     }
 }
