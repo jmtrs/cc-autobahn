@@ -151,7 +151,7 @@ Implementation order, one layer at a time, verifying before moving forward.
       Always Allow, configurable built-in/custom/off alert sound.
 - [x] Themes, reorderable optional MFD screens, synthetic VFD cursor, and
       current Settings controls wired without changing the 550 × 150 panel.
-- [x] Current quality gate: 136 Rust tests, 59 frontend tests, 45 visual baselines,
+- [x] Current quality gate: 140 Rust tests, 59 frontend tests, 45 visual baselines,
       Rustfmt, strict Clippy, and Vite
       production build pass.
 
@@ -162,6 +162,8 @@ Implementation order, one layer at a time, verifying before moving forward.
       history, official App Server account sensor, provider-native permission hooks,
       provider-aware model presentation, dual-provider tray arbitration and fixtures. See
       [CODEX-INTEGRATION-ASSESSMENT.md](./CODEX-INTEGRATION-ASSESSMENT.md).
+- [x] Live context-window fill and prompt-cache hit rate, derived per-turn (not
+      cumulative) for both providers (D51).
 - [ ] Complete the trusted-hook and version/auth cross-surface soak. This needs
       explicit native `/hooks` trust and cannot be automated by the installer.
 - [x] Permission identity: replace Claude `prompt_id` as queue identity with
@@ -183,7 +185,7 @@ npm run test:visual              # 36 page/theme/mode screens + 9 state snapshot
 npm run capture:visual-states    # verify the 36 screens; update only the 9 state snapshots
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml # 136 tests
+cargo test --manifest-path src-tauri/Cargo.toml # 140 tests
 ```
 
 For interaction changes, also run `npm run tauri dev` and verify native tray,

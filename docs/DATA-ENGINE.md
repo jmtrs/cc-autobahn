@@ -104,6 +104,8 @@ the full JSON to `~/.claude/cc-autobahn-status.json`, which the GUI tails. This 
 - `rate_limits.seven_day` → **weekly needle** (ccusage doesn't frame it this way).
 - `model.id` → PRND selector. `effort.level` is parsed but not rendered (D29).
 - `cost.total_cost_usd` → session price.
+- `context_window.used_percentage` → **context-fill gauge**, taken as-is (Claude's own figure, not recomputed).
+- `context_window.current_usage` → the one in-house derived figure from this source: **prompt-cache hit rate**, `cache_read_input_tokens / (cache_read_input_tokens + cache_creation_input_tokens + input_tokens)` (D51). Codex derives the same two metrics from its own `last_token_usage` rollout field instead.
 
 Docs: <https://code.claude.com/docs/en/statusline>
 

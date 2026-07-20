@@ -33,6 +33,13 @@ behavior, and an opt-in permission-decision bridge.
                  └──────────────┘          └───────────────────┘  └──────────────┘
 ```
 
+The diagram above shows the Claude data path only. Codex mirrors it with its
+own adapters instead of ccusage/JSONL/statusline: a rollout JSONL tail under
+`CODEX_HOME` (`providers/codex/rollout.rs`, D46) and an owned
+`codex app-server --stdio` child for official account/rate-limit data
+(`providers/codex/app_server.rs`, D48). Both providers feed the same
+normalized contracts in `providers/mod.rs` (D45) before reaching the frontend.
+
 The permission path is intentionally separate from telemetry: Claude Code or
 Codex starts `cc-autobahn permission-hook <provider>`, that short-lived process
 connects to `~/.cc-autobahn/permission.sock`, and the GUI's Rust listener
@@ -195,7 +202,7 @@ tray states, themes, permission sound/consent, and manual position reset are
 wired. Default placement remains under the tray, with D41's persisted drag
 override available when wanted.
 
-Current verified baseline: **136 Rust tests**, **59 frontend tests**, **45 visual
+Current verified baseline: **140 Rust tests**, **59 frontend tests**, **45 visual
 baselines**, Rustfmt check, strict Clippy (`-D warnings`), and the Vite
 production build all pass.
 Frontend linting is not yet configured. Future work is tracked in the roadmap:

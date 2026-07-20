@@ -4,7 +4,7 @@ Decisions made during design, with their reasoning. Lightweight format.
 
 > Test counts inside individual decisions are point-in-time verification
 > records for that change, not the current repository total. The current
-> automated baseline is 77 Rust and 9 frontend tests; see `README.md` and `docs/ROADMAP.md`.
+> automated baseline is 140 Rust and 59 frontend tests; see `README.md` and `docs/ROADMAP.md`.
 
 ## D1 — Don't reinvent the data engine
 
@@ -1548,3 +1548,29 @@ cross-provider tray arbitration have Rust tests. Full automated gate: 136 Rust
 tests, 59 frontend tests, 45 visual baselines, Rustfmt, strict Clippy, Vite
 build and whitespace validation. Native trusted-hook/version/auth soak remains
 an explicit release operation.
+
+## D51 — Live context and prompt-cache telemetry, per-turn not cumulative
+
+**Problem**: neither provider's turn-rate telemetry surfaced context-window
+fill or prompt-cache effectiveness, though both providers already report the
+raw numbers needed to derive them — Claude via the statusline's
+`context_window` field, Codex via `last_token_usage` on each `token_count`
+rollout event.
+
+**Decision**: derive `context_used_pct` and `cache_hit_pct` from the *current
+turn's* usage figures, not the session-wide cumulative counters, since the
+cumulative ones keep growing past the window size and don't answer "how much
+room is left." Claude: `context_used_pct` is Claude Code's own
+`context_window.used_percentage`, taken as-is (D1–D3: don't recompute what the
+provider already reports); `cache_hit_pct` is derived as
+`cache_read_input_tokens / (cache_read_input_tokens + cache_creation_input_tokens
++ input_tokens)` from `context_window.current_usage`. Codex: both are derived
+from the same `last_token_usage` object as the existing `output_tokens` turn
+rate — `context_used_pct` from `total_tokens / model_context_window`,
+`cache_hit_pct` from `cached_input_tokens / input_tokens` (a subset, not
+additional to, `input_tokens` in Codex's schema). Both fields are `Option<f64>`
+end to end and stay `None` when either provider omits the underlying figures,
+rather than rendering a misleading zero.
+
+**Verification**: 140 Rust tests, 59 frontend tests, 45 visual baselines,
+Rustfmt, strict Clippy and the Vite production build pass.

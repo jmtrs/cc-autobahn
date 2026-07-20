@@ -94,6 +94,10 @@ with no CSS-reachable fix).
 | `--bg`         | `#0a0705`  | display glass                          |
 | `--bezel`      | `#17120d`  | surrounding frame                      |
 
+The default skin is amber; built-in emerald and magenta themes swap these
+variables wholesale and are covered by their own visual baselines
+(`docs/screenshots/*-emerald-baseline/`, `*-magenta-baseline/`).
+
 ## Style details (VFD effect)
 
 - Near-black background with a soft radial gradient (top glow).
