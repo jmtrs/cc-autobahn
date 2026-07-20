@@ -4,6 +4,7 @@
 
 import { formatTps } from "./format.js";
 import { renderFooterMetric } from "./footer-metric.js";
+import { paintTurnContext } from "./trip-computer.js";
 import { claudeView } from "./provider-view.js";
 
 const burns = new Map();
@@ -99,5 +100,9 @@ export function onBurnTick(payload, view = claudeView) {
   if (tokens > 0 && !partial) {
     state.recentTicks.push({ recvAt: Date.now(), tokens });
   }
+  // Codex's burn-tick carries context/cache figures piggybacked from the same
+  // rollout token_count read (see trip-computer.js). Claude's doesn't — a
+  // no-op there, official numbers keep arriving via onSensorUpdate instead.
+  paintTurnContext(payload, view);
   renderFooterMetric(view);
 }

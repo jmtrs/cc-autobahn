@@ -255,14 +255,27 @@ impl Decoder {
 
     fn decode_token_count(&mut self, payload: &Value, observed_at_ms: i64) -> Option<DecodedEvent> {
         let info = payload.get("info")?.as_object()?;
-        let output_tokens = info
-            .get("last_token_usage")?
-            .get("output_tokens")?
-            .as_u64()?;
+        let last_usage = info.get("last_token_usage")?;
+        let output_tokens = last_usage.get("output_tokens")?.as_u64()?;
         let total_output = info
             .get("total_token_usage")
             .and_then(|usage| usage.get("output_tokens"))
             .and_then(Value::as_u64);
+        // Context window fill + cache hit rate, both from the SAME `last_token_usage`
+        // (current turn, not the session-wide `total_token_usage` cumulative counter —
+        // that one keeps growing past the window size and isn't what's "left").
+        let context_used_pct = last_usage
+            .get("total_tokens")
+            .and_then(Value::as_u64)
+            .zip(info.get("model_context_window").and_then(Value::as_u64))
+            .filter(|(_, window)| *window > 0)
+            .map(|(used, window)| (used as f64 / window as f64 * 100.0).min(100.0));
+        let cache_hit_pct = last_usage
+            .get("cached_input_tokens")
+            .and_then(Value::as_u64)
+            .zip(last_usage.get("input_tokens").and_then(Value::as_u64))
+            .filter(|(_, input)| *input > 0)
+            .map(|(cached, input)| (cached as f64 / input as f64 * 100.0).min(100.0));
 
         if total_output.is_some() && total_output == self.last_total_output {
             return None;
@@ -290,6 +303,8 @@ impl Decoder {
             elapsed_ms,
             tokens_per_second,
             partial: false,
+            context_used_pct,
+            cache_hit_pct,
         }))
     }
 }

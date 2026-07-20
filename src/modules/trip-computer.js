@@ -3,7 +3,7 @@
 // (D11: official data is never presented as estimated). Wired in Phase 3
 // Track A/B.
 
-import { formatDurationMs, formatHMin, formatTokens } from "./format.js";
+import { formatDurationMs, formatHMin, formatResetAt, formatTokens } from "./format.js";
 import { renderFooterMetric } from "./footer-metric.js";
 import { hintOnHover, setHeaderHint } from "./header-hint.js";
 import { loadGlobalSetting, saveGlobalSetting } from "./app-settings.js";
@@ -232,8 +232,14 @@ function paintQuotaGauge(view) {
   if (state.rateLimitSourceQuality === "unavailable") {
     view.element("autonomie").textContent = "UNAVAILABLE";
     buildSegments(0, view);
+    view.element("gauge-reset-label").textContent = "";
     return;
   }
+  // Small date/time above the bar (D-review): "154h23" alone doesn't say
+  // *when* the window resets, only how far away. Same reset timestamp the
+  // countdown/quota text below is already derived from.
+  view.element("gauge-reset-label").textContent =
+    state.fiveHourResetsAtMs > 0 ? formatResetAt(state.fiveHourResetsAtMs) : "";
   const qualityPrefix = state.rateLimitSourceQuality === "stale" ? "STALE " : "";
   if (state.autonomieShowTime && state.fiveHourResetsAtMs > 0) {
     const remainMin = (state.fiveHourResetsAtMs - Date.now()) / 60000;
@@ -368,8 +374,27 @@ export function onSensorUpdate(p, view = claudeView) {
   if (pctFinite) {
     state.recentPct.push({ recvAt: Date.now(), pct });
   }
+  paintTurnContext(p, view);
   renderFooterMetric(view);
   view.emit("telemetry-tick");
+}
+
+/** Third column of Page 0: current-turn context window fill + prompt-cache
+ *  hit rate. Fed by two different pipelines depending on provider — Claude's
+ *  numbers arrive via the statusLine's official `context_window` (onSensorUpdate),
+ *  Codex's via the rollout-derived `burn-tick` (onBurnTick, same source as tok/s).
+ *  Only touches an element when its figure is present (D-review convention,
+ *  see paintQuotaGauge): a tick from the OTHER pipeline (e.g. Claude's
+ *  output-only burn-tick) must not blank out what the other one already painted. */
+export function paintTurnContext(payload, view = claudeView) {
+  const contextUsedPct = Number(payload?.contextUsedPct);
+  if (Number.isFinite(contextUsedPct)) {
+    view.element("context-left").textContent = `${Math.round(100 - contextUsedPct)}%`;
+  }
+  const cacheHitPct = Number(payload?.cacheHitPct);
+  if (Number.isFinite(cacheHitPct)) {
+    view.element("cache-hit").textContent = `${Math.round(cacheHitPct)}%`;
+  }
 }
 
 /** Provider-neutral official rate-limit contract from Codex App Server. */
@@ -541,4 +566,6 @@ export function wireTripComputerHints(view = claudeView) {
     view.element("session-time"),
     view.provider === "codex" ? "current local thread elapsed" : "active interval elapsed",
   );
+  hintOnHover(view.element("context-left"), "context window remaining, current turn");
+  hintOnHover(view.element("cache-hit"), "prompt cache hit rate, current turn");
 }

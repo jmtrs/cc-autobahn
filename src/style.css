@@ -386,8 +386,8 @@ body {
 
 .grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px 16px;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 2px 12px;
   margin: 2px 0;
 }
 
@@ -431,6 +431,11 @@ body {
   font-size: 7px;
   letter-spacing: 0.12em;
   opacity: 0.65;
+}
+
+.footer .gauge-reset-label {
+  font-size: 10px;
+  opacity: 0.5;
 }
 
 /* segment gauge (autonomie / 5h window) — click toggles quota % <-> reset
@@ -1082,6 +1087,26 @@ body {
   flex-direction: column;
   gap: 4px;
   min-width: 0;
+}
+
+/* Page 0 only has 3 rows (grid/footer/gauge) against a fixed-height panel —
+   packed at the top like every other page left a dead strip below the gauge
+   bar (D-review). A deliberate top gap under the header spends part of that
+   slack where breathing room is normal in this UI (every other page's
+   header-sub row gets the same separation from its content); the rest is
+   absorbed below the grid so the gauge still always lands flush at the
+   bottom, but the leftover auto-gap reads as a normal beat instead of one
+   oversized dead strip. AVG/reset stay pinned to the gauge (page's own 4px
+   gap) — they're its caption, not part of the grid's breathing room.
+   (D-review follow-up #1: spreading the grid's own 2 rows apart with
+   align-content separated "tok" from "tok/s", a paired reading — reverted.
+   #2: dumping 100% of the slack into one auto-gap looked unbalanced even
+   though the position was right — this splits it instead.) */
+.page[data-page="0"] {
+  padding-top: 10px;
+}
+.page[data-page="0"] .grid {
+  margin-bottom: auto;
 }
 
 .page.active {

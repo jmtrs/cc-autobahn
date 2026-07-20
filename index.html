@@ -42,6 +42,15 @@
                   <span class="big" id="session-time">0:40</span>
                   <span class="unit" id="session-unit">h</span>
                 </div>
+                <!-- Third column: current-turn context window fill + prompt-cache
+                     hit rate. Claude: official statusLine `context_window`
+                     (D-review: don't recompute what Claude Code already reports).
+                     Codex: derived from rollout's `token_count.info` (same
+                     source as tok/s), piggybacked on burn-tick. -->
+                <div class="cell">
+                  <span class="big" id="context-left">—</span>
+                  <span class="unit" id="context-left-unit">CTX</span>
+                </div>
 
                 <div class="cell">
                   <span class="big" id="burn">4.1k</span>
@@ -54,14 +63,22 @@
                   <span class="big" id="footer-metric-value">—</span>
                   <span class="unit" id="footer-metric-label">PACE</span>
                 </div>
+                <div class="cell">
+                  <span class="big" id="cache-hit">—</span>
+                  <span class="unit" id="cache-hit-unit">CACHE</span>
+                </div>
               </div>
 
-              <!-- Bottom line: avg cost. Clock moved to the shared header. -->
+              <!-- Bottom line: avg cost, plus the gauge's reset day/time on the
+                   same line (D-review: a separate row left a big empty gap) —
+                   a bare "154h23" countdown below doesn't say *when* the
+                   window actually resets. -->
               <div class="row footer">
                 <span class="ghost" id="avg-metric">
                   <span class="ghost-label" id="avg-label">AVG</span>
                   <span id="avg">$0.42</span><span class="unit" id="avg-unit">/Mtok</span>
                 </span>
+                <span class="ghost gauge-reset-label" id="gauge-reset-label"></span>
               </div>
 
               <!-- Primary quota segment bar, like the coolant gauge -->

@@ -116,6 +116,13 @@ pub struct TurnRate {
     pub elapsed_ms: i64,
     pub tokens_per_second: f64,
     pub partial: bool,
+    /// Current turn's context window fill, 0-100 (`last_token_usage.total_tokens /
+    /// model_context_window`). `None` when either figure was missing from the payload.
+    pub context_used_pct: Option<f64>,
+    /// Current turn's prompt-cache hit rate, 0-100 (`cached_input_tokens / input_tokens`
+    /// from `last_token_usage` — `cached_input_tokens` is a subset of `input_tokens` in
+    /// Codex's schema, not additional to it).
+    pub cache_hit_pct: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -794,6 +801,8 @@ mod tests {
             elapsed_ms: 1_000,
             tokens_per_second: 10.0,
             partial: false,
+            context_used_pct: None,
+            cache_hit_pct: None,
         })
         .unwrap();
         assert_eq!(value["sourceQuality"], "local");

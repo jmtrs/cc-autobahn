@@ -266,6 +266,8 @@ pub(crate) struct StatusInput {
     rate_limits: Option<RateLimits>,
     #[serde(default)]
     effort: Option<EffortInfo>,
+    #[serde(default)]
+    context_window: Option<ContextWindowInfo>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -306,6 +308,27 @@ struct EffortInfo {
     level: Option<String>,
 }
 
+/// Official per-turn context usage (docs/DATA-ENGINE.md source 3). `used_percentage`
+/// is Claude Code's own figure — not recomputed here (D1-D3: don't reimplement
+/// usage accounting). `current_usage` only feeds the derived cache-hit ratio.
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct ContextWindowInfo {
+    #[serde(default)]
+    current_usage: Option<ContextUsage>,
+    #[serde(default)]
+    used_percentage: Option<f64>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
+struct ContextUsage {
+    #[serde(default)]
+    input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u64>,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Payload of the `sensor-update` event to the frontend
 // ─────────────────────────────────────────────────────────────────────────────
@@ -324,6 +347,8 @@ struct SensorUpdate {
     effort_level: Option<String>,
     cost_usd: Option<f64>,
     session_id: Option<String>,
+    context_used_pct: Option<f64>,
+    cache_hit_pct: Option<f64>,
 }
 
 impl SensorUpdate {
@@ -340,6 +365,15 @@ impl SensorUpdate {
             .and_then(|r| r.seven_day.as_ref())
             .map(|w| (w.used_percentage, w.resets_at))
             .unwrap_or((None, None));
+        let context_used_pct = i.context_window.as_ref().and_then(|c| c.used_percentage);
+        let cache_hit_pct = i.context_window.as_ref().and_then(|c| {
+            let usage = c.current_usage.as_ref()?;
+            let read = usage.cache_read_input_tokens?;
+            let creation = usage.cache_creation_input_tokens.unwrap_or(0);
+            let fresh = usage.input_tokens.unwrap_or(0);
+            let total = read + creation + fresh;
+            (total > 0).then(|| read as f64 / total as f64 * 100.0)
+        });
         SensorUpdate {
             provider: crate::providers::ProviderId::Claude,
             observed_at_ms: crate::providers::now_epoch_ms(),
@@ -351,6 +385,8 @@ impl SensorUpdate {
             effort_level: i.effort.as_ref().and_then(|e| e.level.clone()),
             cost_usd: i.cost.as_ref().and_then(|c| c.total_cost_usd),
             session_id: i.session_id.clone(),
+            context_used_pct,
+            cache_hit_pct,
         }
     }
 }
