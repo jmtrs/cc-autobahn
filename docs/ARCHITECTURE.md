@@ -202,7 +202,7 @@ tray states, themes, permission sound/consent, and manual position reset are
 wired. Default placement remains under the tray, with D41's persisted drag
 override available when wanted.
 
-Current verified baseline: **140 Rust tests**, **59 frontend tests**, **45 visual
+Current verified baseline: **143 Rust tests**, **59 frontend tests**, **45 visual
 baselines**, Rustfmt check, strict Clippy (`-D warnings`), and the Vite
 production build all pass.
 Frontend linting is not yet configured. Future work is tracked in the roadmap:

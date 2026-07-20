@@ -90,7 +90,7 @@ behavior and optional provider-native permission bridges.
 - **Zero setup** — no ccusage or Bun on the machine? one button installs
   both and starts polling, no terminal required.
 
-Current verified baseline: `cargo test` **140/140**, `npm run test:frontend`
+Current verified baseline: `cargo test` **143/143**, `npm run test:frontend`
 **59/59**, 45 pixel-compared Playwright baselines across Claude, Codex and
 Both in amber, emerald and magenta at **550×150 / 550×290**, `cargo fmt --check`,
 `cargo clippy --all-targets --all-features -- -D warnings`, and

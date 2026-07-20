@@ -4,7 +4,7 @@ Decisions made during design, with their reasoning. Lightweight format.
 
 > Test counts inside individual decisions are point-in-time verification
 > records for that change, not the current repository total. The current
-> automated baseline is 140 Rust and 59 frontend tests; see `README.md` and `docs/ROADMAP.md`.
+> automated baseline is 143 Rust and 59 frontend tests; see `README.md` and `docs/ROADMAP.md`.
 
 ## D1 — Don't reinvent the data engine
 
@@ -1574,3 +1574,54 @@ rather than rendering a misleading zero.
 
 **Verification**: 140 Rust tests, 59 frontend tests, 45 visual baselines,
 Rustfmt, strict Clippy and the Vite production build pass.
+
+## D52 — Remove the header's immutable provider tag
+
+**Problem**: D50 added a compact `CLAUDE`/`CODEX` tag beside the header
+nameplate so a renamed nameplate couldn't hide which provider it tracked
+(`docs/CODEX-INTEGRATION-ASSESSMENT.md`'s "Provider identity" invariants).
+In practice it read as visual noise, especially in single-provider use,
+where the tag is redundant with the rest of the chassis (only one provider
+module is ever visible).
+
+**Decision**: remove `#active-provider-tag` from `index.html`, its CSS rule,
+and the two call sites that kept it in sync (`display-mode.js`'s
+`paintDisplayMode`, `trip-computer.js`'s model-activity handler). Provider
+identity in Both mode still holds without it: each provider module keeps its
+own fixed `CLAUDE`/`CODEX` label (`.provider-label`, unaffected), plus
+provider-scoped hover hints, alerts and permission gates — the header tag was
+one of several redundant identity signals, not the only one.
+`scripts/visual-regression.mjs` asserted the tag's text as a structural
+correctness check across all 45 baselines; that assertion is removed along
+with the element, and baselines are regenerated.
+
+**Verification**: 143 Rust tests, 59 frontend tests, 45 visual baselines
+(regenerated), Rustfmt, strict Clippy and the Vite production build pass.
+
+## D53 — Tray icon: bigger ring, exclamation mark for pending permission
+
+**Problem**: two user requests on the tray icon (`tray_icon.rs`, D30). First,
+it read as small — `OUTER_R`/`INNER_R` (0.42/0.28 of `S`) left visible margin
+inside the 44×44 (22pt@2x) canvas. Second, `alert` (PACE/AUTO budget pressure)
+and `pending_permission` (a session blocked waiting on a human) shared the
+same plain blink with no way to tell them apart from the menu bar alone —
+`paint_blink_frame`'s prior design explicitly deferred that distinction to the
+gate panel. D37 already ruled out a color difference: template icons (D30)
+are alpha-only, so a color tint would break light/dark adaptation.
+
+**Decision**: bump `OUTER_R`/`INNER_R` to 0.46/0.32 of `S` — same ~0.14×`S`
+ring thickness, just closer to the canvas edge, so it reads bigger without
+risking macOS silently rescaling a larger `S` back down to fit the fixed
+menu-bar row height. For `pending_permission`, `paint_blink_frame` now paints
+an exclamation mark (`draw_exclamation`: a stem rect + dot, sized as fractions
+of `INNER_R`) inside the ring's hole on top of the normal blink, using shape —
+the one channel a template icon has left — instead of color. `alert` alone
+still blinks the plain ring.
+
+**Verification**: pixel geometry checked with a throwaway test that dumped
+the raw RGBA buffers to PNG for visual inspection (removed before commit, not
+kept as a debug artifact) — both the bigger ring and the exclamation mark
+read clearly at the actual 44px render size. 143 Rust tests (3 new: hole
+stays empty for a plain alert, exclamation glyph stays inside the hole and
+paints something, the two frames differ), 59 frontend tests, 45 visual
+baselines, Rustfmt, strict Clippy and the Vite production build pass.
