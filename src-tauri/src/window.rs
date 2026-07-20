@@ -12,6 +12,10 @@ use tauri::{AppHandle, LogicalSize, Manager, PhysicalPosition, Rect, WebviewWind
 
 const PANEL_GAP: f64 = 4.0;
 
+fn panel_y_below_tray(tray_y: f64, tray_height: f64, work_top: f64) -> f64 {
+    (tray_y + tray_height + PANEL_GAP).max(work_top + PANEL_GAP)
+}
+
 /// PIN button state (frontend): if active, hide-on-blur doesn't hide
 /// the panel when it loses focus.
 pub type PinnedState = Arc<Mutex<bool>>;
@@ -228,21 +232,20 @@ pub fn show_for_permission(app: &AppHandle) {
     let _ = show_panel(&window);
 }
 
-/// Shows the cluster as a native panel. `orderFrontRegardless` is essential
-/// on macOS: a non-activating NSPanel can become key over another app's
-/// fullscreen Space without trying (and failing) to activate this accessory
-/// application first.
+/// Shows the cluster and, on macOS, orders its non-activating utility window in
+/// front of the current Space without activating the accessory application.
 pub fn show_panel(window: &WebviewWindow) -> tauri::Result<()> {
     #[cfg(target_os = "macos")]
     {
+        window.show()?;
         let window = window.clone();
         window.clone().run_on_main_thread(move || {
             let ns_window = window
                 .ns_window()
                 .expect("cc-autobahn: panel lost its native NSWindow");
-            let panel: &objc2_app_kit::NSPanel = unsafe { &*ns_window.cast() };
-            panel.orderFrontRegardless();
-            panel.makeKeyWindow();
+            let native_window: &objc2_app_kit::NSWindow = unsafe { &*ns_window.cast() };
+            native_window.orderFrontRegardless();
+            native_window.makeKeyWindow();
         })
     }
 
@@ -336,88 +339,77 @@ pub fn wire(
     Ok((last_blur_hide, auto_reposition_guard))
 }
 
-/// Swizzles tao's `TaoWindow` into a real `NSPanel` subclass and applies the
-/// AppKit contract required for an accessory window to join native fullscreen
-/// Spaces. Changing only `NSWindow.collectionBehavior` is insufficient on the
-/// affected macOS versions (D43); the runtime class is the material difference.
+/// Gives Tao's existing NSWindow panel behavior without replacing its
+/// Objective-C class. An `object_setClass` conversion to an unrelated NSPanel
+/// subclass loses Tao/Wry behavior and can leave WKWebView content unpainted.
+/// Adding the small panel method surface to TaoWindow preserves its identity,
+/// KVO bookkeeping and renderer while still allowing the window into native
+/// fullscreen Spaces.
 #[cfg(target_os = "macos")]
 fn configure_fullscreen_panel(window: &WebviewWindow) -> tauri::Result<()> {
-    use std::ffi::c_void;
-    use std::sync::OnceLock;
+    use std::ffi::{c_char, c_void};
 
-    use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
-    use objc2::{sel, ClassType};
-    use objc2_app_kit::{
-        NSPanel, NSScreenSaverWindowLevel, NSWindowCollectionBehavior, NSWindowStyleMask,
-    };
+    use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
+    use objc2::{msg_send, sel};
+    use objc2_app_kit::{NSScreenSaverWindowLevel, NSWindowCollectionBehavior, NSWindowStyleMask};
 
-    // A borderless NSPanel normally refuses key status. The override preserves
-    // the existing clickable/keyboard-capable cluster behavior while the
-    // NonactivatingPanel style keeps the fullscreen application frontmost.
-    extern "C-unwind" fn can_become_key_window(_: &AnyObject, _: Sel) -> Bool {
+    extern "C-unwind" fn return_yes(_: &AnyObject, _: Sel) -> Bool {
         Bool::YES
     }
 
-    fn panel_class() -> &'static AnyClass {
-        static CLASS: OnceLock<&'static AnyClass> = OnceLock::new();
-        CLASS.get_or_init(|| {
-            let name = c"CcAutobahnPanel";
-            if let Some(existing) = AnyClass::get(name) {
-                return existing;
-            }
-            let mut builder = ClassBuilder::new(name, NSPanel::class())
-                .expect("cc-autobahn: failed to create NSPanel subclass");
-            unsafe {
-                builder.add_method(
-                    sel!(canBecomeKeyWindow),
-                    can_become_key_window as extern "C-unwind" fn(_, _) -> _,
-                );
-            }
-            builder.register()
-        })
-    }
-
     unsafe extern "C" {
-        fn object_setClass(object: *mut c_void, class: *const AnyClass) -> *const AnyClass;
+        fn class_addMethod(
+            class: *const AnyClass,
+            selector: Sel,
+            implementation: *const c_void,
+            types: *const c_char,
+        ) -> bool;
     }
 
     let raw = window.ns_window()?;
     let object: &AnyObject = unsafe { &*raw.cast() };
-    let target = panel_class();
-    let current = object.class();
+    let class = object.class();
+    let implementation = return_yes as *const c_void;
+    let bool_method_types = c"c@:".as_ptr();
 
-    if current != target {
-        // TaoWindow carries one small `focusable` ivar, so its allocation is
-        // at least as large as our ivar-free NSPanel subclass. Refuse the swap
-        // if a future tao/AppKit change invalidates that safety condition.
-        assert!(
-            current.instance_size() >= target.instance_size(),
-            "cannot convert {} ({} bytes) to {} ({} bytes)",
-            current.name().to_string_lossy(),
-            current.instance_size(),
-            target.name().to_string_lossy(),
-            target.instance_size()
+    // Adding an existing method returns false, which is harmless on repeated
+    // setup. Do not replace the class: WKWebView/Tao retain its real identity.
+    unsafe {
+        class_addMethod(
+            class,
+            sel!(canBecomeKeyWindow),
+            implementation,
+            bool_method_types,
         );
-        let previous = unsafe { object_setClass(raw, target) };
-        assert_eq!(
-            previous, current as *const AnyClass,
-            "NSPanel conversion raced with another Objective-C class change"
+        class_addMethod(
+            class,
+            sel!(canBecomeMainWindow),
+            implementation,
+            bool_method_types,
+        );
+        class_addMethod(
+            class,
+            sel!(_isNonactivatingPanel),
+            implementation,
+            bool_method_types,
         );
     }
 
-    let panel: &NSPanel = unsafe { &*raw.cast() };
-    panel.setStyleMask(NSWindowStyleMask::NonactivatingPanel);
-    panel.setFloatingPanel(true);
-    panel.setHidesOnDeactivate(false);
-    panel.setBecomesKeyOnlyIfNeeded(false);
-    panel.setCollectionBehavior(
+    let native_window: &objc2_app_kit::NSWindow = unsafe { &*raw.cast() };
+    native_window.setStyleMask(native_window.styleMask() | NSWindowStyleMask::NonactivatingPanel);
+    native_window.setHidesOnDeactivate(false);
+    native_window.setCollectionBehavior(
         NSWindowCollectionBehavior::CanJoinAllSpaces
             | NSWindowCollectionBehavior::FullScreenAuxiliary,
     );
-    // The screen-saver level is the lowest level consistently reported above
-    // native fullscreen content on current macOS; unlike the discarded
-    // maximumWindow experiment it does not outrank the highest system UI.
-    panel.setLevel(NSScreenSaverWindowLevel);
+    native_window.setLevel(NSScreenSaverWindowLevel);
+
+    // NonactivatingPanel normally sets this WindowServer tag during NSPanel
+    // initialization. Tao created an NSWindow, so apply the equivalent private
+    // AppKit setter after adding `_isNonactivatingPanel`.
+    unsafe {
+        let _: () = msg_send![native_window, _setPreventsActivation: Bool::YES];
+    }
 
     Ok(())
 }
@@ -441,9 +433,16 @@ pub fn position_under_tray(
     // the tray lives on a monitor with a different DPI in multi-monitor setups).
     // Both axes must match: with displays stacked vertically the x-ranges
     // overlap, so an x-only check can pick the wrong monitor.
-    let find_host = |scale: f64| {
+    let tray_geometry = |scale: f64| {
+        // `tray-icon` already converts AppKit's bottom-left coordinates to
+        // top-left screen coordinates on macOS. Converting the Y axis again
+        // here places the panel outside the visible monitor.
         let pos = tray_rect.position.to_physical::<f64>(scale);
         let size = tray_rect.size.to_physical::<f64>(scale);
+        (pos, size)
+    };
+    let find_host = |scale: f64| {
+        let (pos, size) = tray_geometry(scale);
         let center_x = pos.x + size.width / 2.0;
         let center_y = pos.y + size.height / 2.0;
         monitors
@@ -470,18 +469,25 @@ pub fn position_under_tray(
         .map(|m| m.scale_factor())
         .unwrap_or(guess_scale);
 
-    let tray_pos = tray_rect.position.to_physical::<f64>(scale);
-    let tray_size = tray_rect.size.to_physical::<f64>(scale);
+    let (tray_pos, tray_size) = tray_geometry(scale);
     let tray_center_x = tray_pos.x + tray_size.width / 2.0;
     let mut x = tray_center_x - (win_size.width as f64) / 2.0;
-    let y = tray_pos.y + tray_size.height + PANEL_GAP;
+    let mut y = tray_pos.y + tray_size.height + PANEL_GAP;
 
     if let Some(m) = host {
         let mp = m.position();
         let ms = m.size();
+        let work_area = m.work_area();
+        let work_top = work_area.position.y as f64;
+        let work_bottom = work_top + work_area.size.height as f64;
         let min_x = mp.x as f64 + PANEL_GAP;
         let max_x = mp.x as f64 + ms.width as f64 - win_size.width as f64 - PANEL_GAP;
         x = x.clamp(min_x, max_x.max(min_x));
+        // Some macOS versions report a zero-height tray rect. The work area
+        // still gives the exact first visible row below the menu bar.
+        y = panel_y_below_tray(tray_pos.y, tray_size.height, work_top);
+        let max_y = work_bottom - win_size.height as f64 - PANEL_GAP;
+        y = y.clamp(work_top + PANEL_GAP, max_y.max(work_top + PANEL_GAP));
     }
 
     *lock(auto_guard) = Instant::now();
@@ -607,5 +613,11 @@ mod display_mode_tests {
         assert_eq!(both.0, single.0);
         assert!(both.1 > single.1);
         assert_eq!(both, (550.0, 290.0));
+    }
+
+    #[test]
+    fn zero_height_tray_uses_visible_work_area() {
+        assert_eq!(panel_y_below_tray(0.0, 0.0, 68.0), 72.0);
+        assert_eq!(panel_y_below_tray(10.0, 58.0, 68.0), 72.0);
     }
 }

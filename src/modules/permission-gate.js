@@ -15,6 +15,10 @@ let currentId = null;
 let currentProvider = null;
 let wasVisible = false;
 let timeoutTimer = null;
+let actionablePayload = null;
+const desktopPermissions = new Map();
+const desktopPermissionTimers = new Map();
+const DESKTOP_PERMISSION_TTL_MS = 120_000;
 
 /** Ticks the "auto-clears in Ns" label against the backend's own deadline
  *  for this entry (D-review) — Claude Code has no documented way to tell our
@@ -122,11 +126,17 @@ async function resolve(command) {
  *  count, whether this arrival became the visible request or just landed
  *  behind an existing one — repaint unconditionally from the payload. */
 export function onPermissionPending(payload) {
+  actionablePayload = payload;
+  renderActionablePermission(payload);
+}
+
+function renderActionablePermission(payload) {
   setPermissionHead(payload);
   currentId = payload.id;
   currentProvider = payload.provider;
   document.getElementById("permission-provider").textContent =
     String(payload.provider ?? "claude").toUpperCase();
+  document.getElementById("permission-kind").textContent = "PERMISSION REQUEST";
   document.getElementById("permission-tool").textContent = payload.toolName;
   // Shell-prompt cue for Bash only — other tools show the raw field
   // (a file path reads fine on its own, "$ " would be misleading).
@@ -141,14 +151,7 @@ export function onPermissionPending(payload) {
     ? `${payload.project} · ${payload.branch}`
     : payload.project;
 
-  const badge = document.getElementById("permission-badge");
-  const more = payload.pendingCount - 1;
-  badge.hidden = more <= 0;
-  if (more > 0) {
-    badge.textContent = `+${more} · ${payload.providerPendingCount} ${String(
-      payload.provider,
-    ).toUpperCase()}`;
-  }
+  updateActionableBadge(payload);
 
   // The chevron only appears when the backend found a rule-able field for
   // this tool (Bash command / file path) — without one there's no safe
@@ -156,6 +159,10 @@ export function onPermissionPending(payload) {
   // request: this payload is a fresh card, its state must not leak over.
   closeAlwaysMenu();
   document.getElementById("permission-chevron").hidden = !payload.alwaysAllowAvailable;
+  document.getElementById("permission-timeout").hidden = false;
+  document.getElementById("permission-desktop-status").hidden = true;
+  document.getElementById("permission-deny").hidden = false;
+  document.getElementById("permission-split").hidden = false;
 
   startTimeoutCountdown(payload.expiresAtMs);
 
@@ -176,8 +183,111 @@ export function onPermissionPending(payload) {
 /** `permission-resolved` event: queue is empty, hide the panel. */
 export function onPermissionResolved() {
   setPermissionHead(null);
+  actionablePayload = null;
   currentId = null;
   currentProvider = null;
+  clearInterval(timeoutTimer);
+  closeAlwaysMenu();
+  const latest = [...desktopPermissions.values()].at(-1);
+  if (latest) {
+    renderDesktopPermission(latest);
+  } else {
+    hidePermissionGate();
+  }
+}
+
+/** Informational mirror of a permission prompt owned by ChatGPT Desktop.
+ *  cc-autobahn must never expose approval controls for this path because it
+ *  only observes the rollout log; the native ChatGPT dialog remains the
+ *  authority that resolves the request. */
+export function onDesktopPermissionPending(payload) {
+  if (!payload?.id) return;
+  const isNew = !desktopPermissions.has(payload.id);
+  desktopPermissions.delete(payload.id);
+  desktopPermissions.set(payload.id, payload);
+  clearTimeout(desktopPermissionTimers.get(payload.id));
+  desktopPermissionTimers.set(
+    payload.id,
+    setTimeout(() => onDesktopPermissionResolved({ id: payload.id }), DESKTOP_PERMISSION_TTL_MS),
+  );
+  if (!actionablePayload) {
+    renderDesktopPermission(payload);
+  } else {
+    updateActionableBadge(actionablePayload);
+    if (isNew) {
+      const gate = document.getElementById("permission-gate");
+      pulseOnce(gate.querySelector(".sensor-card"), "permission-gate-enter");
+      playPermissionSound();
+    }
+  }
+}
+
+export function onDesktopPermissionResolved(payload) {
+  if (!payload?.id) return;
+  desktopPermissions.delete(payload.id);
+  clearTimeout(desktopPermissionTimers.get(payload.id));
+  desktopPermissionTimers.delete(payload.id);
+  if (actionablePayload) {
+    updateActionableBadge(actionablePayload);
+    return;
+  }
+  const latest = [...desktopPermissions.values()].at(-1);
+  if (latest) renderDesktopPermission(latest);
+  else hidePermissionGate();
+}
+
+function renderDesktopPermission(payload) {
+  currentId = null;
+  currentProvider = null;
+  clearInterval(timeoutTimer);
+  closeAlwaysMenu();
+  document.getElementById("permission-provider").textContent = "CODEX";
+  document.getElementById("permission-kind").textContent = "DESKTOP PERMISSION";
+  document.getElementById("permission-tool").textContent = payload.toolName ?? "Command";
+  document.getElementById("permission-summary").textContent = payload.toolInputSummary ?? "Elevated command requested";
+  document.getElementById("permission-cwd").textContent = payload.cwd ?? "";
+  document.getElementById("permission-context").textContent = projectFromCwd(payload.cwd);
+
+  const badge = document.getElementById("permission-badge");
+  const more = desktopPermissions.size - 1;
+  badge.hidden = more <= 0;
+  badge.textContent = more > 0 ? `+${more}` : "";
+  document.getElementById("permission-timeout").hidden = true;
+  const desktopStatus = document.getElementById("permission-desktop-status");
+  desktopStatus.textContent = "Resolve in ChatGPT Desktop";
+  desktopStatus.hidden = false;
+  document.getElementById("permission-deny").hidden = true;
+  document.getElementById("permission-split").hidden = true;
+
+  const gate = document.getElementById("permission-gate");
+  gate.hidden = false;
+  if (!wasVisible) {
+    pulseOnce(gate.querySelector(".sensor-card"), "permission-gate-enter");
+    playPermissionSound();
+  }
+  wasVisible = true;
+}
+
+function projectFromCwd(cwd) {
+  const parts = String(cwd ?? "").split(/[\\/]/).filter(Boolean);
+  return parts.at(-1) ?? "ChatGPT Desktop";
+}
+
+function updateActionableBadge(payload) {
+  const badge = document.getElementById("permission-badge");
+  const hookMore = Math.max(0, Number(payload.pendingCount ?? 1) - 1);
+  const parts = [];
+  if (hookMore > 0) {
+    parts.push(
+      `+${hookMore} · ${payload.providerPendingCount} ${String(payload.provider).toUpperCase()}`,
+    );
+  }
+  if (desktopPermissions.size > 0) parts.push(`${desktopPermissions.size} DESKTOP`);
+  badge.hidden = parts.length === 0;
+  badge.textContent = parts.join(" · ");
+}
+
+function hidePermissionGate() {
   wasVisible = false;
   clearInterval(timeoutTimer);
   closeAlwaysMenu();

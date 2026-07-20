@@ -9,6 +9,7 @@
     "test:frontend": "node --test src/modules/*.test.js",
     "test:visual": "node scripts/visual-regression.mjs",
     "capture:visual-baseline": "node scripts/visual-regression.mjs --update",
+    "capture:visual-states": "node scripts/visual-regression.mjs --update-states",
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",

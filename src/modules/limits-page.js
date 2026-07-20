@@ -5,7 +5,7 @@
 // reduced to a border tint or never painted at all (D-review). This page
 // is where they finally get real numbers, without crowding Page 0.
 
-import { formatModelCode, formatResetAt, formatUsd } from "./format.js";
+import { formatDurationMs, formatModelCode, formatResetAt, formatTokens, formatUsd } from "./format.js";
 import { hintOnHover } from "./header-hint.js";
 import {
   formatHistoryCost,
@@ -56,6 +56,12 @@ export function renderWeeklyLimit(view) {
 }
 
 function renderBurnRates(view) {
+  if (view.provider === "codex") {
+    renderAccountUsage(view);
+    return;
+  }
+  view.element("burn-left-label").textContent = "INSTANT";
+  view.element("burn-right-label").textContent = "AVG";
   const state = view.state;
   const block = state.lastBlock;
   const instant = Number(block?.burnRate?.costPerHour) || 0;
@@ -66,6 +72,31 @@ function renderBurnRates(view) {
   const avg = elapsedHr > 0 ? (Number(block?.costUsd) || 0) / elapsedHr : 0;
   view.element("burn-instant").textContent = block ? `${formatUsd(instant)}/h` : "—";
   view.element("burn-avg").textContent = block ? `${formatUsd(avg)}/h` : "—";
+}
+
+export function renderAccountUsage(view) {
+  const usage = view.state.accountUsage;
+  const quality = usage?.sourceQuality ?? "unavailable";
+  view.element("burn-left-label").textContent = `ACCOUNT · ${quality.toUpperCase()}`;
+  view.element("burn-right-label").textContent = "STREAK · TURN";
+  if (!usage || quality === "unavailable") {
+    view.element("burn-instant").textContent = "—";
+    view.element("burn-avg").textContent = "—";
+    return;
+  }
+  const lifetime = Number.isFinite(usage.lifetimeTokens)
+    ? `${formatTokens(usage.lifetimeTokens)} tok`
+    : "—";
+  const peak = Number.isFinite(usage.peakDailyTokens)
+    ? `peak ${formatTokens(usage.peakDailyTokens)}`
+    : "peak —";
+  view.element("burn-instant").textContent = `${lifetime} · ${peak}`;
+  const current = Number.isFinite(usage.currentStreakDays) ? usage.currentStreakDays : "—";
+  const longest = Number.isFinite(usage.longestStreakDays) ? usage.longestStreakDays : "—";
+  const turn = Number.isFinite(usage.longestRunningTurnSeconds)
+    ? formatDurationMs(usage.longestRunningTurnSeconds * 1000)
+    : "—";
+  view.element("burn-avg").textContent = `${current}/${longest}d · ${turn}`;
 }
 
 async function renderBreakdown(view, isMounted) {
@@ -121,7 +152,12 @@ export function wireLimitsPage(view = claudeView) {
       : "Official 7-day usage window, resets weekly"
   );
   hintOnHover(view.element("breakdown-list"), "Cost by model, today");
-  hintOnHover(view.query(".burn-rates"), "Instant vs. this block's average $/h");
+  hintOnHover(
+    view.query(".burn-rates"),
+    view.provider === "codex"
+      ? "Official account lifetime, peak, streak and longest turn"
+      : "Instant vs. this block's average $/h"
+  );
   let mounted = true;
   const onPageChanged = (e) => {
     if (e.detail.page !== 2) return;

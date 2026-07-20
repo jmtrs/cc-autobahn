@@ -1544,7 +1544,7 @@ discarding underlying quota state.
 
 **Verification**: provider model mappings and unknown fallbacks have frontend
 tests and visual fixtures; independent root/subagent rollout decoders and
-cross-provider tray arbitration have Rust tests. Full automated gate: 114 Rust
-tests, 46 frontend tests, 36 visual baselines, Rustfmt, strict Clippy, Vite
+cross-provider tray arbitration have Rust tests. Full automated gate: 136 Rust
+tests, 59 frontend tests, 45 visual baselines, Rustfmt, strict Clippy, Vite
 build and whitespace validation. Native trusted-hook/version/auth soak remains
 an explicit release operation.

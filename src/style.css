@@ -156,6 +156,7 @@ body {
 }
 
 .provider-display {
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -170,15 +171,16 @@ body {
 .provider-label {
   position: absolute;
   z-index: 2;
-  top: 3px;
-  right: 2px;
-  max-height: calc(100% - 6px);
-  writing-mode: vertical-rl;
+  top: 5px;
+  right: 8px;
+  max-width: 110px;
   overflow: hidden;
-  font-size: 6px;
-  letter-spacing: 0.14em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 7px;
+  letter-spacing: 0.12em;
   color: var(--amber);
-  opacity: 0.5;
+  opacity: 0.62;
   pointer-events: none;
 }
 
@@ -422,19 +424,6 @@ body {
   font-size: 8px;
   letter-spacing: 0.15em;
   opacity: 0.8;
-}
-
-.footer .clock {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--amber-glow);
-}
-
-.header .clock {
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--amber-glow);
-  font-variant-numeric: tabular-nums;
 }
 
 .provider-tag {
@@ -710,6 +699,47 @@ body {
   gap: 6px;
 }
 
+.diagnostics-card {
+  max-width: 520px;
+}
+
+.diagnostics-body {
+  white-space: normal;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  gap: 2px;
+  font-size: 9px;
+}
+
+.diagnostics-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.diagnostics-label {
+  min-width: 92px;
+  color: var(--amber);
+  font-weight: 700;
+}
+
+.diagnostics-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.diagnostics-provider {
+  margin-top: 3px;
+  border-top: 1px solid rgba(var(--amber-glow-rgb), 0.25);
+  padding-top: 2px;
+}
+
+.diagnostics-detail {
+  opacity: 0.65;
+}
+
 /* Continuous glow pulse (D-review: reuses the redlinePulse idiom below — a
    session blocked waiting on a human is just as attention-worthy as a PACE/
    AUTO critical) — runs the whole time the card is visible, not just on
@@ -745,6 +775,18 @@ body {
   font-weight: 400;
   letter-spacing: 0;
   opacity: 0.7;
+}
+
+.permission-desktop-status {
+  margin-left: auto;
+  color: var(--amber-glow);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.permission-split[hidden] {
+  display: none;
 }
 
 /* Context row, top-right of the gate card: "project · branch" of the
@@ -1065,6 +1107,24 @@ body {
 
 .header-sub {
   margin-top: 2px;
+}
+
+/* Provider identity now lives in the module's top-right corner. Reserve that
+   corner on pages whose own headings also use the right edge, so totals and
+   labels never sit underneath CLAUDE/CODEX. */
+.provider-display [data-page="2"] .limits-col:last-child > .header-sub {
+  padding-right: 48px;
+}
+
+.provider-display [data-page="1"] > .header-sub {
+  position: relative;
+}
+
+.provider-display [data-provider-role="history-total"] {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 .small-total {

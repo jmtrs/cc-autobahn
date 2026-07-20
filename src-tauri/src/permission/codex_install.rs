@@ -100,12 +100,13 @@ pub fn codex_permission_status(app: AppHandle) -> Result<CodexPermissionStatus, 
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .permission_hook
         .clone();
-    let observed = app
+    let activity = app
         .state::<super::PermissionActivityState>()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&crate::providers::ProviderId::Codex)
-        .copied();
+        .cloned();
+    let active = activity_matches_probe(probe.as_ref(), activity.as_ref());
     Ok(CodexPermissionStatus {
         configured_locally: is_configured(
             &path,
@@ -114,8 +115,8 @@ pub fn codex_permission_status(app: AppHandle) -> Result<CodexPermissionStatus, 
         installed: probe.is_some(),
         enabled: probe.as_ref().map(|probe| probe.enabled),
         trust_status: probe.as_ref().map(|probe| probe.trust_status.clone()),
-        active: observed.is_some(),
-        last_observed_at_ms: observed,
+        active,
+        last_observed_at_ms: activity.map(|activity| activity.observed_at_ms),
         source_path: probe.as_ref().map(|probe| probe.source_path.clone()),
         current_hash: probe.as_ref().and_then(|probe| probe.current_hash.clone()),
         inventory_observed_at_ms: app
@@ -124,6 +125,21 @@ pub fn codex_permission_status(app: AppHandle) -> Result<CodexPermissionStatus, 
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .permission_hook_observed_at_ms,
     })
+}
+
+pub(crate) fn activity_matches_probe(
+    probe: Option<&crate::providers::codex::app_server::CodexHookProbe>,
+    activity: Option<&super::PermissionActivity>,
+) -> bool {
+    match (probe, activity) {
+        (Some(probe), Some(activity)) => {
+            probe.enabled
+                && probe.trust_status == "trusted"
+                && probe.current_hash.is_some()
+                && activity.hook_hash == probe.current_hash
+        }
+        _ => false,
+    }
 }
 
 #[tauri::command]
@@ -332,7 +348,11 @@ pub fn uninstall_codex_permission_hook(app: AppHandle) -> Result<(), String> {
 
 fn invalidate_probe(app: &AppHandle) {
     let state = app.state::<crate::providers::codex::app_server::AccountSensorState>();
-    crate::providers::codex::app_server::clear_hook_probe(&state);
+    crate::providers::codex::app_server::invalidate_hook_probe(&state);
+    app.state::<super::PermissionActivityState>()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&crate::providers::ProviderId::Codex);
 }
 
 pub fn refresh_if_stale() {
@@ -435,5 +455,27 @@ mod tests {
             }
         }))
         .is_err());
+    }
+
+    #[test]
+    fn activity_is_valid_only_for_the_current_trusted_hash() {
+        let probe = crate::providers::codex::app_server::CodexHookProbe {
+            enabled: true,
+            trust_status: "trusted".into(),
+            source_path: "/tmp/hooks.json".into(),
+            current_hash: Some("hash-2".into()),
+            observed_at_ms: 10,
+        };
+        let current = crate::permission::PermissionActivity {
+            observed_at_ms: 11,
+            hook_hash: Some("hash-2".into()),
+        };
+        let stale = crate::permission::PermissionActivity {
+            observed_at_ms: 9,
+            hook_hash: Some("hash-1".into()),
+        };
+        assert!(activity_matches_probe(Some(&probe), Some(&current)));
+        assert!(!activity_matches_probe(Some(&probe), Some(&stale)));
+        assert!(!activity_matches_probe(None, Some(&current)));
     }
 }

@@ -68,7 +68,9 @@ fn main() {
             permission::permission_pending_snapshot,
             providers::provider_health_snapshot,
             providers::provider_activity_snapshot,
+            providers::provider_diagnostics_snapshot,
             providers::codex::app_server::codex_account_snapshot,
+            providers::codex::codex_desktop_permission_snapshot,
             permission::install::permission_status,
             permission::install::permission_preview_install,
             permission::install::install_permission_hook,
@@ -89,6 +91,9 @@ fn main() {
         .manage::<providers::ProviderActivityState>(providers::new_activity_state())
         .manage::<providers::codex::app_server::AccountSensorState>(
             providers::codex::app_server::new_state(),
+        )
+        .manage::<providers::codex::DesktopPermissionState>(
+            providers::codex::new_desktop_permission_state(),
         )
         .setup(|app| {
             pathfix::apply(&app.handle().clone());
@@ -126,8 +131,23 @@ fn main() {
             // no-op if either isn't managed yet.
             permission::start(handle);
 
-            let tray_handle =
-                tray::build(app, last_blur_hide, auto_reposition_guard, position_state)?;
+            let tray_handle = tray::build(
+                app,
+                last_blur_hide,
+                auto_reposition_guard.clone(),
+                position_state.clone(),
+            )?;
+
+            // A direct app launch must produce visible feedback. The window is
+            // declared hidden to avoid flashing before NSPanel conversion and
+            // tray-relative positioning, then shown here once both are ready.
+            let saved_position = *window::lock(&position_state);
+            if let Some((x, y)) = saved_position {
+                let _ = window::position_at(&win, x, y, &auto_reposition_guard);
+            } else if let Ok(Some(rect)) = tray_handle.rect() {
+                window::position_under_tray(&win, &rect, &auto_reposition_guard);
+            }
+            window::show_panel(&win)?;
 
             // Initial state: full ring (100%) until the first real data from
             // engine::poll or sensor::tail (D-review: tray icon as a

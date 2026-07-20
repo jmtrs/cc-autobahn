@@ -77,20 +77,54 @@ const PEER_PROBE_TIMEOUT_SECS: u64 = 1;
 /// case instead of up to 550s.
 const DECISION_POLL_SECS: u64 = 1;
 
+/// Codex/OWL denies Unix-domain socket connects from its tool sandbox. The
+/// file bridge below is the sandbox-compatible fallback; short polling keeps
+/// approval latency imperceptible without busy-spinning either process.
+const FILE_BRIDGE_POLL_MS: u64 = 100;
+
 /// Generous headroom over any realistic `tool_input` (even a large file
 /// write), but still a hard cap: without one, a stuck or wrong-protocol
 /// connection sending bytes without a `\n` would grow this long-running
 /// process's memory without bound.
 const MAX_REQUEST_BYTES: u64 = 1024 * 1024;
 
-/// `~/.cc-autobahn/permission.sock` — provider-neutral request/response
-/// bridge between a blocking hook process and this GUI.
+/// `${TMPDIR}/.cc-autobahn/permission.sock` — provider-neutral
+/// request/response bridge between a blocking hook process and this GUI.
+///
+/// Codex/OWL sandboxes may deny Unix-socket connections under `$HOME` even
+/// when the hook command itself is trusted. Their private temporary directory
+/// remains available to local tools, so prefer it and retain the historical
+/// home-directory location only as a fallback for environments without
+/// `TMPDIR`.
 pub(crate) fn socket_path() -> Option<PathBuf> {
-    Some(
-        PathBuf::from(crate::env_lock::var_os("HOME")?)
-            .join(".cc-autobahn")
-            .join("permission.sock"),
+    socket_path_from(
+        crate::env_lock::var_os("TMPDIR"),
+        crate::env_lock::var_os("HOME"),
     )
+}
+
+fn socket_path_from(
+    tmpdir: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    let root = tmpdir
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| home.map(PathBuf::from))?;
+    Some(root.join(".cc-autobahn").join("permission.sock"))
+}
+
+fn file_bridge_dirs() -> Option<(PathBuf, PathBuf)> {
+    let root = socket_path()?.parent()?.to_path_buf();
+    Some((root.join("requests"), root.join("responses")))
+}
+
+fn safe_request_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -186,8 +220,14 @@ struct PendingSlot {
 }
 
 type PendingQueue = Arc<Mutex<VecDeque<PendingSlot>>>;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PermissionActivity {
+    pub(crate) observed_at_ms: i64,
+    pub(crate) hook_hash: Option<String>,
+}
+
 pub(crate) type PermissionActivityState =
-    Arc<Mutex<std::collections::HashMap<crate::providers::ProviderId, i64>>>;
+    Arc<Mutex<std::collections::HashMap<crate::providers::ProviderId, PermissionActivity>>>;
 
 /// Serializes queue snapshots with their tray/frontend side effects. Queue
 /// mutations release `PendingQueue` before calling [`emit_state`], so without
@@ -569,7 +609,9 @@ fn spawn_listener(app: AppHandle, queue: PendingQueue) {
         let Some(parent) = path.parent().map(|p| p.to_path_buf()) else {
             return;
         };
-        let _ = std::fs::create_dir_all(&parent);
+        if std::fs::create_dir_all(&parent).is_err() || set_directory_private(&parent).is_err() {
+            return;
+        }
         let listener = match bind_listener(&path) {
             Ok(Some(listener)) => listener,
             // Another live cc-autobahn owns the socket. Never unlink it: doing
@@ -582,6 +624,8 @@ fn spawn_listener(app: AppHandle, queue: PendingQueue) {
             let _ = std::fs::remove_file(&path);
             return; // fail closed locally rather than expose an injectable socket
         }
+
+        spawn_file_bridge(app.clone(), queue.clone());
 
         for conn in listener.incoming() {
             match conn {
@@ -635,6 +679,56 @@ fn set_socket_private(path: &std::path::Path) -> std::io::Result<()> {
     std::fs::set_permissions(path, perms)
 }
 
+#[cfg(unix)]
+fn set_directory_private(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut perms = std::fs::metadata(path)?.permissions();
+    perms.set_mode(0o700);
+    std::fs::set_permissions(path, perms)
+}
+
+#[cfg(unix)]
+fn spawn_file_bridge(app: AppHandle, queue: PendingQueue) {
+    thread::spawn(move || {
+        let Some((requests, responses)) = file_bridge_dirs() else {
+            return;
+        };
+        for dir in [&requests, &responses] {
+            if std::fs::create_dir_all(dir).is_err() || set_directory_private(dir).is_err() {
+                return;
+            }
+        }
+
+        loop {
+            let Ok(entries) = std::fs::read_dir(&requests) else {
+                thread::sleep(Duration::from_millis(FILE_BRIDGE_POLL_MS));
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                    continue;
+                }
+                let Ok(bytes) = std::fs::read(&path) else {
+                    continue;
+                };
+                let _ = std::fs::remove_file(&path);
+                let Ok(request) = serde_json::from_slice::<HookRequest>(&bytes) else {
+                    continue;
+                };
+                if !safe_request_id(&request.request_id) {
+                    continue;
+                }
+                let response_path = responses.join(format!("{}.json", request.request_id));
+                let queue = queue.clone();
+                let app = app.clone();
+                thread::spawn(move || handle_file_request(request, response_path, queue, app));
+            }
+            thread::sleep(Duration::from_millis(FILE_BRIDGE_POLL_MS));
+        }
+    });
+}
+
 /// One connection = one hook invocation = one permission request. Reads the
 /// request line, queues it, waits for a decision (`permission_approve`/
 /// `permission_deny`) OR the peer connection dying (`watch_peer`), and
@@ -662,12 +756,26 @@ fn handle_connection(stream: UnixStream, queue: PendingQueue, app: AppHandle) {
     let Ok(request) = serde_json::from_str::<HookRequest>(&line) else {
         return;
     };
-    app.state::<PermissionActivityState>()
-        .lock()
-        .unwrap()
-        .insert(request.provider, crate::providers::now_epoch_ms());
-    let verified = match request.provider {
-        crate::providers::ProviderId::Claude => true,
+    record_permission_activity(&app, &request);
+
+    // Always-allow fast path: a request matching a prior Always-Allow in
+    // this session never gets queued or shown — the whole point is that the
+    // human isn't asked again. Belt-and-suspenders for Bash (whose primary
+    // persistence is the on-disk settings.local.json rule, checked by
+    // Claude Code itself before it would even invoke the hook again) as
+    // well as the sole mechanism for Read/Edit/Write (session-only, never on
+    // disk — see `always_allow` module docs).
+    if is_always_allowed(&app, &request) {
+        respond(stream, DecisionMsg::plain(Decision::Allow));
+        return;
+    }
+
+    queue_request(stream, queue, app, request);
+}
+
+fn record_permission_activity(app: &AppHandle, request: &HookRequest) {
+    let verified_hash = match request.provider {
+        crate::providers::ProviderId::Claude => Some(None),
         crate::providers::ProviderId::Codex => app
             .try_state::<crate::providers::codex::app_server::AccountSensorState>()
             .and_then(|state| {
@@ -677,10 +785,24 @@ fn handle_connection(stream: UnixStream, queue: PendingQueue, app: AppHandle) {
                     .permission_hook
                     .clone()
             })
-            .is_some_and(|probe| probe.enabled && probe.trust_status == "trusted"),
+            .filter(|probe| probe.enabled && probe.trust_status == "trusted")
+            .and_then(|probe| probe.current_hash.map(Some)),
     };
+    let verified = verified_hash.is_some();
+    if let Some(hook_hash) = verified_hash {
+        app.state::<PermissionActivityState>()
+            .lock()
+            .unwrap()
+            .insert(
+                request.provider,
+                PermissionActivity {
+                    observed_at_ms: crate::providers::now_epoch_ms(),
+                    hook_hash,
+                },
+            );
+    }
     crate::providers::emit_health(
-        &app,
+        app,
         request.provider,
         crate::providers::ProviderComponent::Permissions,
         if verified {
@@ -694,32 +816,100 @@ fn handle_connection(stream: UnixStream, queue: PendingQueue, app: AppHandle) {
             "permission hook exchange observed; trust inventory unavailable".into()
         }),
     );
+}
 
-    // Always-allow fast path: a request matching a prior Always-Allow in
-    // this session never gets queued or shown — the whole point is that the
-    // human isn't asked again. Belt-and-suspenders for Bash (whose primary
-    // persistence is the on-disk settings.local.json rule, checked by
-    // Claude Code itself before it would even invoke the hook again) as
-    // well as the sole mechanism for Read/Edit/Write (session-only, never on
-    // disk — see `always_allow` module docs).
-    if request.permission_suggestions.is_empty() {
-        let Some(matched) = local_always_allow_match(&request) else {
-            return queue_request(stream, queue, app, request);
-        };
-        let always_allow = app.state::<AlwaysAllowSet>();
-        if always_allow::is_remembered(
-            &always_allow,
-            request.provider,
-            &request.session_id,
-            &request.tool_name,
-            &matched,
+fn is_always_allowed(app: &AppHandle, request: &HookRequest) -> bool {
+    if !request.permission_suggestions.is_empty() {
+        return false;
+    }
+    let Some(matched) = local_always_allow_match(request) else {
+        return false;
+    };
+    always_allow::is_remembered(
+        &app.state::<AlwaysAllowSet>(),
+        request.provider,
+        &request.session_id,
+        &request.tool_name,
+        &matched,
+    )
+}
+
+#[cfg(unix)]
+fn handle_file_request(
+    request: HookRequest,
+    response_path: PathBuf,
+    queue: PendingQueue,
+    app: AppHandle,
+) {
+    record_permission_activity(&app, &request);
+    if is_always_allowed(&app, &request) {
+        let _ = write_file_response(&response_path, &DecisionMsg::plain(Decision::Allow));
+        return;
+    }
+
+    let id = request.request_id.clone();
+    let provider = request.provider;
+    let project = cwd_project(&request.cwd);
+    let branch = git_branch(&request.cwd);
+    let (tx, rx) = mpsc::channel::<DecisionMsg>();
+    let expires_at = std::time::SystemTime::now() + Duration::from_secs(QUEUE_TIMEOUT_SECS);
+    {
+        let mut pending = queue.lock().unwrap();
+        if !enqueue_pending(
+            &mut pending,
+            PendingSlot {
+                request,
+                reply_tx: tx,
+                project,
+                branch,
+                expires_at,
+            },
         ) {
-            respond(stream, DecisionMsg::plain(Decision::Allow));
             return;
         }
     }
+    emit_state(&app, &queue);
 
-    queue_request(stream, queue, app, request);
+    match rx.recv_timeout(Duration::from_secs(QUEUE_TIMEOUT_SECS)) {
+        Ok(decision) => {
+            let _ = write_file_response(&response_path, &decision);
+        }
+        Err(_) => {
+            let still_queued = {
+                let mut pending = queue.lock().unwrap();
+                let existed = pending
+                    .iter()
+                    .any(|slot| slot.request.provider == provider && slot.request.request_id == id);
+                pending.retain(|slot| {
+                    slot.request.provider != provider || slot.request.request_id != id
+                });
+                existed
+            };
+            if !still_queued {
+                if let Ok(decision) = rx.try_recv() {
+                    let _ = write_file_response(&response_path, &decision);
+                    return;
+                }
+            }
+            emit_state(&app, &queue);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn write_file_response(path: &std::path::Path, decision: &DecisionMsg) -> std::io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let bytes = serde_json::to_vec(decision).map_err(std::io::Error::other)?;
+    let temp = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temp)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    std::fs::rename(&temp, path)
 }
 
 #[cfg(unix)]
@@ -1127,6 +1317,29 @@ mod tests {
     fn cwd_project_edge_cases() {
         assert_eq!(cwd_project(""), "?");
         assert_eq!(cwd_project("/"), "/");
+    }
+
+    #[test]
+    fn permission_socket_prefers_private_temp_directory() {
+        let path = socket_path_from(
+            Some(std::ffi::OsString::from("/private/user-tmp")),
+            Some(std::ffi::OsString::from("/Users/test")),
+        );
+        assert_eq!(
+            path,
+            Some(PathBuf::from(
+                "/private/user-tmp/.cc-autobahn/permission.sock"
+            ))
+        );
+    }
+
+    #[test]
+    fn permission_socket_falls_back_to_home_without_tmpdir() {
+        let path = socket_path_from(None, Some(std::ffi::OsString::from("/Users/test")));
+        assert_eq!(
+            path,
+            Some(PathBuf::from("/Users/test/.cc-autobahn/permission.sock"))
+        );
     }
 
     #[cfg(unix)]

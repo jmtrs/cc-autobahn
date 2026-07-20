@@ -1,6 +1,6 @@
 // cc-autobahn — frontend shell.
 // Paints the W203 cluster and listens to the backend sensors (engine.rs + burn.rs).
-// Clock + segment bar are static; speedometer = tok/s per response with a
+// Segment bar is static; speedometer = tok/s per response with a
 // physical spring (D8): jumps when a turn completes and decays to idle. It is
 // NOT instantaneous — the JSONL only reports usage when the turn closes (see D8/D11).
 
@@ -17,6 +17,7 @@ import { wirePermissionConsent } from "./modules/permission-consent.js";
 import { wirePermissionGate } from "./modules/permission-gate.js";
 import { wirePinButton } from "./modules/pin-button.js";
 import { mountProviderLayout } from "./modules/provider-layout.js";
+import { wireProviderDiagnostics } from "./modules/provider-diagnostics.js";
 import { claudeView, codexView } from "./modules/provider-view.js";
 import { wireRedlineTray } from "./modules/redline.js";
 import { wireSensorUi } from "./modules/sensor-consent.js";
@@ -62,6 +63,7 @@ async function init() {
     wireLimitsPage(view);
   });
   wireSettingsPage({ onDisplayModeChange: changeDisplayMode });
+  wireProviderDiagnostics();
   wireMfdNav();
   providerViews.forEach((view) => renderFooterMetric(view));
   providerViews.forEach((view) => startBurnAnimation(view)); // independent provider springs

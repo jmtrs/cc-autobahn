@@ -87,7 +87,9 @@ pub fn build(
                 } else {
                     position_under_tray(&window, &rect, &auto_reposition_guard);
                 }
-                let _ = show_panel(&window);
+                if let Err(error) = show_panel(&window) {
+                    eprintln!("cc-autobahn: could not show tray panel: {error}");
+                }
             }
         })
         .build(app)

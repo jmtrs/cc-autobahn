@@ -42,6 +42,41 @@ pub struct AccountSensorSnapshot {
     pub account_usage: Option<AccountUsageSnapshot>,
     pub permission_hook: Option<CodexHookProbe>,
     pub permission_hook_observed_at_ms: Option<i64>,
+    pub runtime: CodexRuntimeDiagnostics,
+    #[serde(skip)]
+    pub(crate) hook_inventory_generation: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexRuntimeDiagnostics {
+    pub executable_path: Option<String>,
+    pub version: Option<String>,
+    pub connection_status: String,
+    pub rate_limits_available: Option<bool>,
+    pub rate_limits_reason: Option<String>,
+    pub account_usage_available: Option<bool>,
+    pub account_usage_reason: Option<String>,
+    pub hooks_inventory_available: Option<bool>,
+    pub hooks_inventory_reason: Option<String>,
+    pub observed_at_ms: i64,
+}
+
+impl Default for CodexRuntimeDiagnostics {
+    fn default() -> Self {
+        Self {
+            executable_path: None,
+            version: None,
+            connection_status: "unavailable".into(),
+            rate_limits_available: None,
+            rate_limits_reason: None,
+            account_usage_available: None,
+            account_usage_reason: None,
+            hooks_inventory_available: None,
+            hooks_inventory_reason: None,
+            observed_at_ms: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -80,6 +115,17 @@ pub fn start(app: AppHandle) {
                 .try_state::<crate::path_state::PathState>()
                 .and_then(|state| crate::path_state::get(&state));
             let Some(executable) = resolve_executable("codex", path.as_deref()) else {
+                update_runtime(&state, |runtime| {
+                    runtime.executable_path = None;
+                    runtime.version = None;
+                    runtime.connection_status = "unavailable".into();
+                    runtime.rate_limits_available = None;
+                    runtime.rate_limits_reason = Some("Codex executable not found".into());
+                    runtime.account_usage_available = None;
+                    runtime.account_usage_reason = Some("Codex executable not found".into());
+                    runtime.hooks_inventory_available = None;
+                    runtime.hooks_inventory_reason = Some("Codex executable not found".into());
+                });
                 clear_hook_probe(&state);
                 emit_health(
                     &app,
@@ -102,6 +148,17 @@ pub fn start(app: AppHandle) {
             };
             let version = runtime_version(&executable, path.as_deref())
                 .unwrap_or_else(|| "unknown Codex version".into());
+            update_runtime(&state, |runtime| {
+                runtime.executable_path = Some(executable.to_string_lossy().into_owned());
+                runtime.version = Some(version.clone());
+                runtime.connection_status = "connecting".into();
+                runtime.rate_limits_available = None;
+                runtime.rate_limits_reason = None;
+                runtime.account_usage_available = None;
+                runtime.account_usage_reason = None;
+                runtime.hooks_inventory_available = None;
+                runtime.hooks_inventory_reason = None;
+            });
             let connection_started = Instant::now();
             let result = run_connection(&app, &state, &executable, path.as_deref(), &version);
             if SHUTTING_DOWN.load(Ordering::Acquire) {
@@ -113,6 +170,19 @@ pub fn start(app: AppHandle) {
             mark_stale_if_expired(&app, &state);
             mark_unavailable_if_expired(&app, &state);
             clear_hook_probe(&state);
+            let disconnect_reason = match &result {
+                Ok(()) => format!("{version} disconnected"),
+                Err(error) => format!("{version}: {error}"),
+            };
+            update_runtime(&state, |runtime| {
+                runtime.connection_status = "disconnected".into();
+                runtime.rate_limits_available = Some(false);
+                runtime.rate_limits_reason = Some(disconnect_reason.clone());
+                runtime.account_usage_available = Some(false);
+                runtime.account_usage_reason = Some(disconnect_reason.clone());
+                runtime.hooks_inventory_available = Some(false);
+                runtime.hooks_inventory_reason = Some(disconnect_reason.clone());
+            });
             emit_health(
                 &app,
                 ID,
@@ -125,10 +195,7 @@ pub fn start(app: AppHandle) {
                 ID,
                 ProviderComponent::AppServer,
                 HealthStatus::Degraded,
-                Some(match result {
-                    Ok(()) => format!("{version} disconnected"),
-                    Err(error) => format!("{version}: {error}"),
-                }),
+                Some(disconnect_reason),
             );
             thread::sleep(Duration::from_secs(backoff_secs));
             backoff_secs = (backoff_secs * 2).min(MAX_BACKOFF_SECS);
@@ -160,6 +227,7 @@ enum RequestKind {
 struct PendingRequest {
     kind: RequestKind,
     sent_at: Instant,
+    hook_inventory_generation: Option<u64>,
 }
 
 enum ReaderEvent {
@@ -244,6 +312,7 @@ fn run_connection(
         PendingRequest {
             kind: RequestKind::Initialize,
             sent_at: Instant::now(),
+            hook_inventory_generation: None,
         },
     );
     next_id += 1;
@@ -273,6 +342,9 @@ fn run_connection(
                     return Err(format!("initialize rejected: {}", compact_error(error)));
                 }
                 send_notification(&mut stdin, "initialized")?;
+                update_runtime(state, |runtime| {
+                    runtime.connection_status = "connected".into();
+                });
                 break;
             }
             Ok(ReaderEvent::Closed(error)) => return Err(error),
@@ -319,6 +391,10 @@ fn run_connection(
             last_poll = Instant::now();
         }
         if last_hooks_poll.elapsed() >= HOOKS_POLL_INTERVAL {
+            let hook_inventory_generation = state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .hook_inventory_generation;
             queue_probe_with_params(
                 &mut stdin,
                 &mut pending,
@@ -326,6 +402,7 @@ fn run_connection(
                 RequestKind::Hooks,
                 "hooks/list",
                 json!({ "cwds": [hooks_cwd] }),
+                Some(hook_inventory_generation),
             )?;
             last_hooks_poll = Instant::now();
         }
@@ -338,31 +415,53 @@ fn run_connection(
                     };
                     let kind = pending_request.kind;
                     if let Some(error) = message.get("error") {
+                        let reason = compact_error(error);
                         match kind {
-                            RequestKind::RateLimits => rate_capability = Some(false),
-                            RequestKind::AccountUsage => usage_capability = Some(false),
+                            RequestKind::RateLimits => {
+                                rate_capability = Some(false);
+                                update_capability_diagnostic(
+                                    state,
+                                    kind,
+                                    false,
+                                    Some(reason.clone()),
+                                );
+                            }
+                            RequestKind::AccountUsage => {
+                                usage_capability = Some(false);
+                                update_capability_diagnostic(
+                                    state,
+                                    kind,
+                                    false,
+                                    Some(reason.clone()),
+                                );
+                            }
                             RequestKind::Hooks => {
-                                clear_hook_probe(state);
+                                if !fail_hook_probe_if_current(
+                                    state,
+                                    pending_request.hook_inventory_generation,
+                                    Some(reason.clone()),
+                                ) {
+                                    continue;
+                                }
                                 emit_health(
                                     app,
                                     ID,
                                     ProviderComponent::Permissions,
                                     HealthStatus::Degraded,
-                                    Some(format!(
-                                        "hooks/list unavailable: {}",
-                                        compact_error(error)
-                                    )),
+                                    Some(format!("hooks/list unavailable: {}", reason)),
                                 );
+                                continue;
                             }
-                            RequestKind::Initialize => {}
+                            RequestKind::Initialize => continue,
                         }
                         emit_capability_health(
                             app,
                             version,
                             rate_capability,
                             usage_capability,
-                            Some(&compact_error(error)),
+                            Some(&reason),
                         );
+                        update_account_capabilities(state, rate_capability, usage_capability);
                         continue;
                     }
                     let Some(result) = message.get("result") else {
@@ -376,6 +475,12 @@ fn run_connection(
                             {
                                 store_and_emit_limits(app, state, snapshot);
                                 rate_capability = Some(true);
+                                update_capability_diagnostic(state, kind, true, None);
+                                update_account_capabilities(
+                                    state,
+                                    rate_capability,
+                                    usage_capability,
+                                );
                                 emit_capability_health(
                                     app,
                                     version,
@@ -387,6 +492,17 @@ fn run_connection(
                                 limits_stale_emitted = false;
                             } else {
                                 rate_capability = Some(false);
+                                update_capability_diagnostic(
+                                    state,
+                                    kind,
+                                    false,
+                                    Some("incompatible rate-limit response".into()),
+                                );
+                                update_account_capabilities(
+                                    state,
+                                    rate_capability,
+                                    usage_capability,
+                                );
                                 emit_capability_health(
                                     app,
                                     version,
@@ -401,6 +517,12 @@ fn run_connection(
                             {
                                 store_and_emit_usage(app, state, snapshot);
                                 usage_capability = Some(true);
+                                update_capability_diagnostic(state, kind, true, None);
+                                update_account_capabilities(
+                                    state,
+                                    rate_capability,
+                                    usage_capability,
+                                );
                                 emit_capability_health(
                                     app,
                                     version,
@@ -412,6 +534,17 @@ fn run_connection(
                                 usage_stale_emitted = false;
                             } else {
                                 usage_capability = Some(false);
+                                update_capability_diagnostic(
+                                    state,
+                                    kind,
+                                    false,
+                                    Some("incompatible account-usage response".into()),
+                                );
+                                update_account_capabilities(
+                                    state,
+                                    rate_capability,
+                                    usage_capability,
+                                );
                                 emit_capability_health(
                                     app,
                                     version,
@@ -421,7 +554,14 @@ fn run_connection(
                                 );
                             }
                         }
-                        RequestKind::Hooks => store_hook_probe(app, state, result),
+                        RequestKind::Hooks => {
+                            store_hook_probe(
+                                app,
+                                state,
+                                result,
+                                pending_request.hook_inventory_generation,
+                            );
+                        }
                         RequestKind::Initialize => {}
                     }
                 } else if message.get("method").and_then(Value::as_str)
@@ -435,6 +575,13 @@ fn run_connection(
                         {
                             store_and_emit_limits(app, state, snapshot);
                             rate_capability = Some(true);
+                            update_capability_diagnostic(
+                                state,
+                                RequestKind::RateLimits,
+                                true,
+                                None,
+                            );
+                            update_account_capabilities(state, rate_capability, usage_capability);
                             emit_capability_health(
                                 app,
                                 version,
@@ -481,23 +628,58 @@ fn run_connection(
         }
         mark_unavailable_if_expired(app, state);
         let timed_out = take_timed_out(&mut pending, REQUEST_TIMEOUT);
-        let mut account_request_timed_out = false;
-        for kind in timed_out {
-            if kind == RequestKind::Hooks {
-                clear_hook_probe(state);
-                emit_health(
-                    app,
-                    ID,
-                    ProviderComponent::Permissions,
-                    HealthStatus::Degraded,
-                    Some("hooks/list timed out".into()),
-                );
-            } else {
-                account_request_timed_out = true;
+        let mut account_timeout = false;
+        for request in timed_out {
+            let kind = request.kind;
+            match kind {
+                RequestKind::Hooks => {
+                    if !fail_hook_probe_if_current(
+                        state,
+                        request.hook_inventory_generation,
+                        Some("hooks/list timed out".into()),
+                    ) {
+                        continue;
+                    }
+                    emit_health(
+                        app,
+                        ID,
+                        ProviderComponent::Permissions,
+                        HealthStatus::Degraded,
+                        Some("hooks/list timed out".into()),
+                    );
+                }
+                RequestKind::RateLimits => {
+                    rate_capability = Some(false);
+                    update_capability_diagnostic(
+                        state,
+                        kind,
+                        false,
+                        Some("account/rateLimits/read timed out".into()),
+                    );
+                    account_timeout = true;
+                }
+                RequestKind::AccountUsage => {
+                    usage_capability = Some(false);
+                    update_capability_diagnostic(
+                        state,
+                        kind,
+                        false,
+                        Some("account/usage/read timed out".into()),
+                    );
+                    account_timeout = true;
+                }
+                RequestKind::Initialize => {}
             }
         }
-        if account_request_timed_out {
-            break Err("account capability request timed out".into());
+        if account_timeout {
+            update_account_capabilities(state, rate_capability, usage_capability);
+            emit_capability_health(
+                app,
+                version,
+                rate_capability,
+                usage_capability,
+                Some("one or more capability probes timed out"),
+            );
         }
         if SHUTTING_DOWN.load(Ordering::Acquire) {
             break Err("application shutting down".into());
@@ -518,16 +700,16 @@ fn run_connection(
 fn take_timed_out(
     pending: &mut HashMap<u64, PendingRequest>,
     timeout: Duration,
-) -> Vec<RequestKind> {
+) -> Vec<PendingRequest> {
     let expired: Vec<_> = pending
         .iter()
         .filter(|(_, request)| request.sent_at.elapsed() >= timeout)
-        .map(|(id, request)| (*id, request.kind))
+        .map(|(id, request)| (*id, *request))
         .collect();
     for (id, _) in &expired {
         pending.remove(id);
     }
-    expired.into_iter().map(|(_, kind)| kind).collect()
+    expired.into_iter().map(|(_, request)| request).collect()
 }
 
 fn queue_probe(
@@ -537,7 +719,7 @@ fn queue_probe(
     kind: RequestKind,
     method: &str,
 ) -> Result<(), String> {
-    queue_probe_with_params(stdin, pending, next_id, kind, method, Value::Null)
+    queue_probe_with_params(stdin, pending, next_id, kind, method, Value::Null, None)
 }
 
 fn queue_probe_with_params(
@@ -547,6 +729,7 @@ fn queue_probe_with_params(
     kind: RequestKind,
     method: &str,
     params: Value,
+    hook_inventory_generation: Option<u64>,
 ) -> Result<(), String> {
     if pending
         .values()
@@ -560,6 +743,7 @@ fn queue_probe_with_params(
         PendingRequest {
             kind,
             sent_at: Instant::now(),
+            hook_inventory_generation,
         },
     );
     *next_id = next_id.wrapping_add(1).max(1);
@@ -696,6 +880,67 @@ fn emit_capability_health(
         |error| format!("{version}: {capabilities} ({error})"),
     );
     emit_health(app, ID, ProviderComponent::AppServer, status, Some(detail));
+}
+
+fn update_runtime(state: &AccountSensorState, update: impl FnOnce(&mut CodexRuntimeDiagnostics)) {
+    let mut snapshot = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    update(&mut snapshot.runtime);
+    snapshot.runtime.observed_at_ms = now_epoch_ms();
+}
+
+fn update_account_capabilities(
+    state: &AccountSensorState,
+    rate_limits: Option<bool>,
+    account_usage: Option<bool>,
+) {
+    update_runtime(state, |runtime| {
+        runtime.rate_limits_available = rate_limits;
+        runtime.account_usage_available = account_usage;
+    });
+}
+
+fn update_capability_diagnostic(
+    state: &AccountSensorState,
+    kind: RequestKind,
+    available: bool,
+    reason: Option<String>,
+) {
+    update_runtime(state, |runtime| match kind {
+        RequestKind::RateLimits => {
+            runtime.rate_limits_available = Some(available);
+            runtime.rate_limits_reason = reason;
+        }
+        RequestKind::AccountUsage => {
+            runtime.account_usage_available = Some(available);
+            runtime.account_usage_reason = reason;
+        }
+        RequestKind::Hooks => {
+            runtime.hooks_inventory_available = Some(available);
+            runtime.hooks_inventory_reason = reason;
+        }
+        RequestKind::Initialize => {}
+    });
+}
+
+fn fail_hook_probe_if_current(
+    state: &AccountSensorState,
+    expected_generation: Option<u64>,
+    reason: Option<String>,
+) -> bool {
+    let mut snapshot = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if expected_generation != Some(snapshot.hook_inventory_generation) {
+        return false;
+    }
+    snapshot.permission_hook = None;
+    snapshot.permission_hook_observed_at_ms = None;
+    snapshot.runtime.hooks_inventory_available = Some(false);
+    snapshot.runtime.hooks_inventory_reason = reason;
+    snapshot.runtime.observed_at_ms = now_epoch_ms();
+    true
 }
 
 fn merge_rate_limit_update(current: &mut Option<Value>, incoming: &Value) {
@@ -868,7 +1113,12 @@ fn store_and_emit_usage(
     let _ = app.emit("account-usage-update", snapshot);
 }
 
-fn store_hook_probe(app: &AppHandle, state: &AccountSensorState, value: &Value) {
+fn store_hook_probe(
+    app: &AppHandle,
+    state: &AccountSensorState,
+    value: &Value,
+    expected_generation: Option<u64>,
+) {
     let expected_path = crate::permission::codex_install::hooks_path();
     let expected_path = expected_path.as_deref();
     let probe = value
@@ -885,22 +1135,21 @@ fn store_hook_probe(app: &AppHandle, state: &AccountSensorState, value: &Value) 
         })
         .find_map(|hook| normalize_hook_probe(hook, expected_path));
     let observed_at_ms = now_epoch_ms();
-    {
-        let mut state = state
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        state.permission_hook = probe.clone();
-        state.permission_hook_observed_at_ms = Some(observed_at_ms);
+    if !replace_hook_probe_if_current(state, probe.clone(), observed_at_ms, expected_generation) {
+        return;
     }
 
-    let active = app
+    let activity = app
         .try_state::<crate::permission::PermissionActivityState>()
-        .is_some_and(|activity| {
+        .and_then(|activity| {
             activity
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .contains_key(&ID)
+                .get(&ID)
+                .cloned()
         });
+    let active =
+        crate::permission::codex_install::activity_matches_probe(probe.as_ref(), activity.as_ref());
     let (status, detail) = hook_health(probe.as_ref(), active);
     emit_health(
         app,
@@ -909,6 +1158,26 @@ fn store_hook_probe(app: &AppHandle, state: &AccountSensorState, value: &Value) 
         status,
         Some(detail),
     );
+}
+
+fn replace_hook_probe_if_current(
+    state: &AccountSensorState,
+    probe: Option<CodexHookProbe>,
+    observed_at_ms: i64,
+    expected_generation: Option<u64>,
+) -> bool {
+    let mut state = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if expected_generation != Some(state.hook_inventory_generation) {
+        return false;
+    }
+    state.permission_hook = probe;
+    state.permission_hook_observed_at_ms = Some(observed_at_ms);
+    state.runtime.hooks_inventory_available = Some(true);
+    state.runtime.hooks_inventory_reason = None;
+    state.runtime.observed_at_ms = observed_at_ms;
+    true
 }
 
 fn hook_health(probe: Option<&CodexHookProbe>, active: bool) -> (HealthStatus, String) {
@@ -942,6 +1211,18 @@ pub(crate) fn clear_hook_probe(state: &AccountSensorState) {
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     state.permission_hook = None;
     state.permission_hook_observed_at_ms = None;
+}
+
+pub(crate) fn invalidate_hook_probe(state: &AccountSensorState) {
+    let mut state = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.permission_hook = None;
+    state.permission_hook_observed_at_ms = None;
+    state.hook_inventory_generation = state.hook_inventory_generation.wrapping_add(1);
+    state.runtime.hooks_inventory_available = None;
+    state.runtime.hooks_inventory_reason = Some("hook configuration changed; probing again".into());
+    state.runtime.observed_at_ms = now_epoch_ms();
 }
 
 fn normalize_hook_probe(hook: &Value, expected_path: Option<&Path>) -> Option<CodexHookProbe> {
@@ -1142,6 +1423,7 @@ mod tests {
                 PendingRequest {
                     kind: RequestKind::Hooks,
                     sent_at: old,
+                    hook_inventory_generation: Some(0),
                 },
             ),
             (
@@ -1149,17 +1431,39 @@ mod tests {
                 PendingRequest {
                     kind: RequestKind::RateLimits,
                     sent_at: fresh,
+                    hook_inventory_generation: None,
                 },
             ),
         ]);
         assert_eq!(
-            take_timed_out(&mut pending, Duration::from_secs(15)),
+            take_timed_out(&mut pending, Duration::from_secs(15))
+                .into_iter()
+                .map(|request| request.kind)
+                .collect::<Vec<_>>(),
             vec![RequestKind::Hooks]
         );
         assert_eq!(
             pending.get(&2).map(|request| request.kind),
             Some(RequestKind::RateLimits)
         );
+
+        let state = new_state();
+        update_runtime(&state, |runtime| {
+            runtime.connection_status = "connected".into();
+            runtime.rate_limits_available = Some(true);
+            runtime.account_usage_available = Some(true);
+        });
+        update_capability_diagnostic(
+            &state,
+            RequestKind::Hooks,
+            false,
+            Some("hooks/list timed out".into()),
+        );
+        let snapshot = state.lock().unwrap().clone();
+        assert_eq!(snapshot.runtime.connection_status, "connected");
+        assert_eq!(snapshot.runtime.rate_limits_available, Some(true));
+        assert_eq!(snapshot.runtime.account_usage_available, Some(true));
+        assert_eq!(snapshot.runtime.hooks_inventory_available, Some(false));
     }
 
     #[test]
@@ -1175,6 +1479,43 @@ mod tests {
         probe.enabled = true;
         probe.trust_status = "modified".into();
         assert_eq!(hook_health(Some(&probe), true).0, HealthStatus::Degraded);
+    }
+
+    #[test]
+    fn local_hook_mutation_invalidates_inventory_until_next_probe() {
+        let state = new_state();
+        let old_generation = state.lock().unwrap().hook_inventory_generation;
+        update_runtime(&state, |runtime| {
+            runtime.hooks_inventory_available = Some(true);
+            runtime.hooks_inventory_reason = None;
+        });
+        invalidate_hook_probe(&state);
+        let snapshot = state.lock().unwrap().clone();
+        assert_eq!(snapshot.runtime.hooks_inventory_available, None);
+        assert_eq!(
+            snapshot.runtime.hooks_inventory_reason.as_deref(),
+            Some("hook configuration changed; probing again")
+        );
+        assert!(snapshot.permission_hook.is_none());
+        assert!(snapshot.permission_hook_observed_at_ms.is_none());
+        drop(snapshot);
+
+        let stale_probe = CodexHookProbe {
+            enabled: true,
+            trust_status: "trusted".into(),
+            source_path: "/tmp/old-hooks.json".into(),
+            current_hash: Some("old-hash".into()),
+            observed_at_ms: 1,
+        };
+        assert!(!replace_hook_probe_if_current(
+            &state,
+            Some(stale_probe),
+            2,
+            Some(old_generation),
+        ));
+        let snapshot = state.lock().unwrap().clone();
+        assert!(snapshot.permission_hook.is_none());
+        assert_eq!(snapshot.runtime.hooks_inventory_available, None);
     }
 
     #[test]

@@ -151,7 +151,7 @@ Implementation order, one layer at a time, verifying before moving forward.
       Always Allow, configurable built-in/custom/off alert sound.
 - [x] Themes, reorderable optional MFD screens, synthetic VFD cursor, and
       current Settings controls wired without changing the 550 × 150 panel.
-- [x] Current quality gate: 114 Rust tests, 46 frontend tests, 36 visual baselines,
+- [x] Current quality gate: 136 Rust tests, 59 frontend tests, 45 visual baselines,
       Rustfmt, strict Clippy, and Vite
       production build pass.
 
@@ -178,11 +178,12 @@ Current automated baseline:
 
 ```bash
 npm run build
-npm run test:frontend # 46 tests
-npm run test:visual   # 3 modes × 3 themes × 4 screens; exact 550 × 150/290 + pixel snapshots
+npm run test:frontend # 59 tests
+npm run test:visual              # 36 page/theme/mode screens + 9 state snapshots
+npm run capture:visual-states    # verify the 36 screens; update only the 9 state snapshots
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml # 114 tests
+cargo test --manifest-path src-tauri/Cargo.toml # 136 tests
 ```
 
 For interaction changes, also run `npm run tauri dev` and verify native tray,

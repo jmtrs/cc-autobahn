@@ -71,12 +71,46 @@ impl ProgressCandidates {
         self.0.remove(&provider).is_some()
     }
 
-    fn summary(&self) -> f64 {
+    fn summary(&self) -> Option<(ProviderId, f64)> {
         self.0
-            .values()
-            .map(|candidate| candidate.pct_remaining)
-            .reduce(f64::min)
-            .unwrap_or(100.0)
+            .iter()
+            .map(|(provider, candidate)| (*provider, candidate.pct_remaining))
+            .min_by(|left, right| {
+                left.1
+                    .partial_cmp(&right.1)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| left.0.cmp(&right.0))
+            })
+    }
+
+    fn summary_pct(&self) -> f64 {
+        self.summary().map(|(_, pct)| pct).unwrap_or(100.0)
+    }
+
+    fn tooltip(&self) -> String {
+        let Some((winner, _)) = self.summary() else {
+            return "cc-autobahn · quota unavailable".into();
+        };
+        let mut parts: Vec<_> = self
+            .0
+            .iter()
+            .map(|(provider, candidate)| {
+                format!(
+                    "{} {:.0}%",
+                    provider_name(*provider),
+                    candidate.pct_remaining
+                )
+            })
+            .collect();
+        parts.push(format!("showing {}", provider_name(winner)));
+        format!("cc-autobahn · {}", parts.join(" · "))
+    }
+}
+
+fn provider_name(provider: ProviderId) -> &'static str {
+    match provider {
+        ProviderId::Claude => "Claude",
+        ProviderId::Codex => "Codex",
     }
 }
 
@@ -116,7 +150,9 @@ pub fn set_progress(
         return;
     }
     if !s.alert && !s.pending_permission {
-        paint(app, render(s.candidates.summary()));
+        paint_summary(app, &s.candidates);
+    } else {
+        update_tooltip(app, &s.candidates);
     }
 }
 
@@ -125,8 +161,12 @@ pub fn set_progress(
 /// unavailable after its longer expiry window.
 pub fn clear_progress(app: &AppHandle, provider: ProviderId) {
     let mut s = state().lock().unwrap();
-    if s.candidates.remove(provider) && !s.alert && !s.pending_permission {
-        paint(app, render(s.candidates.summary()));
+    if s.candidates.remove(provider) {
+        if !s.alert && !s.pending_permission {
+            paint_summary(app, &s.candidates);
+        } else {
+            update_tooltip(app, &s.candidates);
+        }
     }
 }
 
@@ -145,7 +185,7 @@ pub fn sync_rate_limit_snapshot(app: &AppHandle, snapshot: &RateLimitSnapshot) {
                 clear_progress(app, snapshot.provider);
             }
         }
-        SourceQuality::Stale => {}
+        SourceQuality::Local | SourceQuality::Stale => {}
         SourceQuality::Unavailable => clear_progress(app, snapshot.provider),
     }
 }
@@ -169,7 +209,7 @@ pub fn set_alert(app: &AppHandle, active: bool) {
         let changed = s.alert != active;
         s.alert = active;
         if changed && !active && !s.pending_permission {
-            paint(app, render(s.candidates.summary()));
+            paint_summary(app, &s.candidates);
         }
         changed
     };
@@ -195,7 +235,7 @@ pub fn set_permission_pending(app: &AppHandle, active: bool) {
         let changed = s.pending_permission != active;
         s.pending_permission = active;
         if changed && !active && !s.alert {
-            paint(app, render(s.candidates.summary()));
+            paint_summary(app, &s.candidates);
         }
         changed
     };
@@ -255,6 +295,20 @@ fn paint(app: &AppHandle, buf: Vec<u8>) {
     let _ = tray.set_icon_with_as_template(Some(image), true);
 }
 
+fn paint_summary(app: &AppHandle, candidates: &ProgressCandidates) {
+    let pct = candidates.summary_pct();
+    paint(app, render(pct));
+    update_tooltip(app, candidates);
+}
+
+fn update_tooltip(app: &AppHandle, candidates: &ProgressCandidates) {
+    let Some(tray) = app.try_state::<TrayIcon<Wry>>() else {
+        return;
+    };
+    let tooltip = candidates.tooltip();
+    let _ = tray.set_tooltip(Some(tooltip));
+}
+
 /// Raw RGBA of the ring at `pct` swept: opaque black on the arc, faint black
 /// on the rest of the track. Thin wrapper over `render_ring` — see there for
 /// the shared geometry.
@@ -309,7 +363,7 @@ mod tests {
         let mut candidates = ProgressCandidates::default();
         assert!(candidates.update(ProviderId::Claude, 72.0, ProgressSource::Official));
         assert!(candidates.update(ProviderId::Codex, 38.0, ProgressSource::Official));
-        assert_eq!(candidates.summary(), 38.0);
+        assert_eq!(candidates.summary(), Some((ProviderId::Codex, 38.0)));
     }
 
     #[test]
@@ -318,7 +372,7 @@ mod tests {
         assert!(candidates.update(ProviderId::Claude, 70.0, ProgressSource::Official));
         assert!(!candidates.update(ProviderId::Claude, 20.0, ProgressSource::Estimated));
         assert!(candidates.update(ProviderId::Codex, 45.0, ProgressSource::Estimated));
-        assert_eq!(candidates.summary(), 45.0);
+        assert_eq!(candidates.summary(), Some((ProviderId::Codex, 45.0)));
     }
 
     #[test]
@@ -327,17 +381,29 @@ mod tests {
         candidates.update(ProviderId::Claude, 65.0, ProgressSource::Official);
         candidates.update(ProviderId::Codex, 10.0, ProgressSource::Official);
         assert!(candidates.remove(ProviderId::Codex));
-        assert_eq!(candidates.summary(), 65.0);
+        assert_eq!(candidates.summary(), Some((ProviderId::Claude, 65.0)));
         assert!(candidates.remove(ProviderId::Claude));
-        assert_eq!(candidates.summary(), 100.0);
+        assert_eq!(candidates.summary(), None);
     }
 
     #[test]
     fn invalid_values_do_not_poison_the_summary() {
         let mut candidates = ProgressCandidates::default();
         assert!(!candidates.update(ProviderId::Codex, f64::NAN, ProgressSource::Official));
-        assert_eq!(candidates.summary(), 100.0);
+        assert_eq!(candidates.summary(), None);
         assert!(candidates.update(ProviderId::Codex, 140.0, ProgressSource::Official));
-        assert_eq!(candidates.summary(), 100.0);
+        assert_eq!(candidates.summary(), Some((ProviderId::Codex, 100.0)));
+    }
+
+    #[test]
+    fn tooltip_reports_all_candidates_and_deterministic_winner() {
+        let mut candidates = ProgressCandidates::default();
+        assert_eq!(candidates.tooltip(), "cc-autobahn · quota unavailable");
+        candidates.update(ProviderId::Codex, 40.0, ProgressSource::Official);
+        candidates.update(ProviderId::Claude, 40.0, ProgressSource::Official);
+        assert_eq!(
+            candidates.tooltip(),
+            "cc-autobahn · Claude 40% · Codex 40% · showing Claude"
+        );
     }
 }

@@ -17,7 +17,6 @@
             <span class="provider-tag" id="active-provider-tag" data-chassis-role="active-provider-tag">CLAUDE</span>
             <span class="header-hint" id="header-hint"></span>
             <span class="header-right">
-              <span class="clock" id="clock" data-chassis-role="clock">--:--</span>
               <span class="label" id="page-label">SINCE START</span>
               <button class="mfd-btn" id="mfd-btn">&#9656;</button>
               <button class="pin-btn" id="pin-btn">PIN</button>
@@ -29,24 +28,24 @@
                and keeps both roots mounted across display-mode changes. -->
           <template id="provider-module-template">
             <section class="provider-module">
-              <span class="provider-label"></span>
               <div class="provider-display">
+                <span class="provider-label"></span>
                 <div class="pages provider-pages">
             <!-- Page 0: live trip computer (default) -->
             <div class="page active" data-page="0" id="page-0">
               <div class="grid">
                 <div class="cell">
                   <span class="big" id="odo">1.24M</span>
-                  <span class="unit">tok</span>
+                  <span class="unit" id="odo-unit">tok</span>
                 </div>
                 <div class="cell">
                   <span class="big" id="session-time">0:40</span>
-                  <span class="unit">h</span>
+                  <span class="unit" id="session-unit">h</span>
                 </div>
 
                 <div class="cell">
                   <span class="big" id="burn">4.1k</span>
-                  <span class="unit">tok/s</span>
+                  <span class="unit" id="burn-unit">tok/s</span>
                 </div>
                 <!-- PACE/AUTO promoted to a primary grid cell (D-review: was a
                      small footer ghost line, lost against the other 3 big
@@ -60,19 +59,19 @@
               <!-- Bottom line: avg cost. Clock moved to the shared header. -->
               <div class="row footer">
                 <span class="ghost" id="avg-metric">
-                  <span class="ghost-label">AVG</span>
-                  <span id="avg">$0.42</span><span class="unit">/Mtok</span>
+                  <span class="ghost-label" id="avg-label">AVG</span>
+                  <span id="avg">$0.42</span><span class="unit" id="avg-unit">/Mtok</span>
                 </span>
               </div>
 
-              <!-- Autonomie segment bar (5h window), like the coolant gauge -->
+              <!-- Primary quota segment bar, like the coolant gauge -->
               <div class="row gauge">
                 <svg class="fuel" viewBox="0 0 12 16" aria-hidden="true">
                   <rect class="fuel-body" x="1.5" y="4" width="6" height="10" rx="1" />
                   <rect class="fuel-window" x="3" y="6.2" width="3" height="2.6" />
                   <path class="fuel-hose" d="M7 5.5 C8.5 4.3 10.5 5 10.5 7 C10.5 9 8.7 8.8 8.2 10.3 C7.9 11.2 8.6 11.6 9.3 11.2" />
                 </svg>
-                <div class="segments" id="segments" aria-label="5h quota remaining">
+                <div class="segments" id="segments" aria-label="primary quota remaining">
                   <!-- segments injected by JS -->
                 </div>
                 <span class="autonomie" id="autonomie">3h12</span>
@@ -126,8 +125,8 @@
               <!-- Full-width footer: label above the value in each group;
                    INSTANT hugs the left edge, AVG the right one -->
               <div class="row footer burn-rates">
-                <span class="burn-group"><span class="ghost-label">INSTANT</span> <span id="burn-instant">—</span></span>
-                <span class="burn-group burn-right"><span class="ghost-label">AVG</span> <span id="burn-avg">—</span></span>
+                <span class="burn-group"><span class="ghost-label" id="burn-left-label">INSTANT</span> <span id="burn-instant">—</span></span>
+                <span class="burn-group burn-right"><span class="ghost-label" id="burn-right-label">AVG</span> <span id="burn-avg">—</span></span>
               </div>
             </div>
 
@@ -210,6 +209,7 @@
                       <li data-value="both">BOTH</li>
                     </ul>
                   </div>
+                  <button type="button" class="sensor-btn ghost" id="diagnostics-settings-btn">Diagnostics</button>
                 </div>
 
                 <div class="settings-col">
@@ -295,6 +295,16 @@
             </div>
           </div>
 
+          <div class="sensor-overlay" id="diagnostics-overlay" hidden>
+            <div class="sensor-card diagnostics-card">
+              <div class="sensor-title">PROVIDER DIAGNOSTICS</div>
+              <div class="sensor-body diagnostics-body" id="diagnostics-body"></div>
+              <div class="sensor-actions">
+                <button class="sensor-btn" id="diagnostics-close">Close</button>
+              </div>
+            </div>
+          </div>
+
           <!-- Permission gate (D42) — live approve/deny prompt, shown
                whenever a queued PermissionRequest from any Claude Code
                session is waiting on a decision. Highest z-index: a session
@@ -303,7 +313,7 @@
           <div class="sensor-overlay permission-gate" id="permission-gate" hidden>
             <div class="sensor-card">
               <div class="sensor-title">
-                <span id="permission-provider">CLAUDE</span> · PERMISSION REQUEST
+                <span id="permission-provider">CLAUDE</span> · <span id="permission-kind">PERMISSION REQUEST</span>
                 <span class="permission-tool" id="permission-tool">—</span>
                 <span class="permission-badge" id="permission-badge" hidden></span>
                 <span class="permission-context" id="permission-context"></span>
@@ -320,6 +330,7 @@
                      was actually already resolved elsewhere doesn't look
                      permanently stuck (D-review). -->
                 <span class="permission-timeout" id="permission-timeout"></span>
+                <span class="permission-desktop-status" id="permission-desktop-status" hidden>Resolve in ChatGPT Desktop</span>
                 <button class="sensor-btn ghost" id="permission-deny">Deny</button>
                 <!-- Split button: Approve is the main action; the chevron
                      (hidden unless the tool has a rule-able field, D42

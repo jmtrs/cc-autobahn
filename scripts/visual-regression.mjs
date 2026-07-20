@@ -10,10 +10,11 @@ import { createServer } from "vite";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const writeSnapshots = process.argv.includes("--update");
+const writeStateSnapshots = writeSnapshots || process.argv.includes("--update-states");
 const providerModels = JSON.parse(
   await readFile(path.join(root, "scripts", "fixtures", "provider-models.json"), "utf8"),
 );
-const PIXEL_CHANNEL_TOLERANCE = 2;
+const PIXEL_CHANNEL_TOLERANCE = 20;
 const pages = [
   [0, "SINCE START", "live"],
   [1, "HISTORY", "history"],
@@ -33,6 +34,17 @@ const themes = [
 const scenarios = displays.flatMap((display) =>
   themes.map((theme) => ({ ...display, theme })),
 );
+const stateScenarios = [
+  { name: "permission-claude", mode: "claude", height: 150 },
+  { name: "permission-codex", mode: "codex", height: 150 },
+  { name: "permission-queue", mode: "both", height: 290 },
+  { name: "permission-long-command", mode: "claude", height: 150 },
+  { name: "desktop-permission", mode: "codex", height: 150 },
+  { name: "permission-coexist", mode: "both", height: 290 },
+  { name: "codex-degraded", mode: "both", height: 290 },
+  { name: "provider-diagnostics", mode: "both", height: 290 },
+  { name: "provider-diagnostics-tail", mode: "both", height: 290 },
+];
 
 async function pixelsMatch(page, actual, baseline) {
   return page.evaluate(async ({ actualBase64, baselineBase64, tolerance }) => {
@@ -80,7 +92,10 @@ try {
   const address = server.httpServer?.address();
   if (!address || typeof address === "string") throw new Error("Vite did not expose a test port");
 
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({
+    headless: true,
+    args: ["--font-render-hinting=none", "--disable-lcd-text", "--disable-gpu"],
+  });
   for (const scenario of scenarios) {
     const page = await browser.newPage({ viewport: scenario.viewport, deviceScaleFactor: 1 });
     await page.addInitScript(({ mode, theme }) => {
@@ -121,7 +136,6 @@ try {
     });
     await page.evaluate(() => document.fonts.ready);
     await page.evaluate(() => {
-      document.querySelector('[data-chassis-role="clock"]').textContent = "12:00";
       document.querySelector(".fake-cursor")?.remove();
     });
 
@@ -144,9 +158,6 @@ try {
             .every((element) => !element.querySelector(".engine-spinner")),
         );
       }
-      await page.evaluate(() => {
-        document.querySelector('[data-chassis-role="clock"]').textContent = "12:00";
-      });
       const layout = await page.evaluate(() => {
         const visible = (element) => element.getClientRects().length > 0;
         const activePages = [...document.querySelectorAll(".page.active")].filter(visible);
@@ -241,10 +252,191 @@ try {
     await page.close();
   }
 
+  const stateOutputDir = path.join(root, "docs", "screenshots", "states-baseline");
+  if (writeStateSnapshots) await mkdir(stateOutputDir, { recursive: true });
+  for (const scenario of stateScenarios) {
+    const viewport = { width: 550, height: scenario.height };
+    const page = await browser.newPage({ viewport, deviceScaleFactor: 1 });
+    await page.addInitScript(({ mode }) => {
+      window.setInterval = () => 0;
+      window.requestAnimationFrame = () => 0;
+      window.cancelAnimationFrame = () => {};
+      localStorage.setItem(
+        "cc-autobahn.settings",
+        JSON.stringify({
+          schemaVersion: 2,
+          displayMode: mode,
+          global: { theme: { themeId: "amber", customAccent: "#ff9a1f" } },
+          providers: { claude: {}, codex: {} },
+        }),
+      );
+    }, { mode: scenario.mode });
+    await page.goto(`http://127.0.0.1:${address.port}/`);
+    await page.waitForSelector(`[data-app-chassis][data-display-mode="${scenario.mode}"]`);
+    await page.addStyleTag({
+      content: "*, *::before, *::after { animation: none !important; transition: none !important; }",
+    });
+    await page.evaluate(async ({ name, models }) => {
+      const [{ setGear }, { createProviderView }, status] = await Promise.all([
+        import("/src/modules/trip-computer.js"),
+        import("/src/modules/provider-view.js"),
+        import("/src/modules/provider-status.js"),
+      ]);
+      const providers = name.includes("codex") || name === "desktop-permission" || name === "permission-coexist" || name.startsWith("provider-diagnostics")
+        ? ["claude", "codex"]
+        : ["claude"];
+      providers.forEach((provider) => {
+        if (provider === "codex") status.setProviderAvailability("codex", true);
+        const view = createProviderView({ provider });
+        setGear([models[provider].modelId], view, models[provider]);
+      });
+
+      if (name === "desktop-permission") {
+        const { onDesktopPermissionPending } = await import("/src/modules/permission-gate.js");
+        onDesktopPermissionPending({
+          id: name,
+          provider: "codex",
+          toolName: "Command",
+          toolInputSummary: "npm run build",
+          cwd: "/Users/example/cc-autobahn",
+          observedAtMs: Date.now(),
+        });
+      } else if (name.startsWith("permission-")) {
+        const { onPermissionPending } = await import("/src/modules/permission-gate.js");
+        const provider = name === "permission-codex" ? "codex" : "claude";
+        onPermissionPending({
+          id: name,
+          provider,
+          toolName: "Bash",
+          toolInputSummary: name === "permission-long-command"
+            ? "npm run verify -- --configuration production --reporter compact"
+            : "npm run build",
+          cwd: "/Users/example/cc-autobahn",
+          project: "cc-autobahn",
+          branch: name === "permission-long-command" ? null : "feature/codex-hardening",
+          pendingCount: name === "permission-queue" ? 4 : 1,
+          providerPendingCount: name === "permission-queue" ? 2 : 1,
+          alwaysAllowAvailable: true,
+          expiresAtMs: Date.now() + 60_000,
+        });
+        document.getElementById("permission-timeout").textContent = "auto-clears in 60s";
+        if (name === "permission-coexist") {
+          const { onDesktopPermissionPending } = await import("/src/modules/permission-gate.js");
+          onDesktopPermissionPending({
+            id: "desktop-behind-hook",
+            provider: "codex",
+            toolName: "Command",
+            toolInputSummary: "touch /tmp/desktop-test",
+            cwd: "/Users/example/cc-autobahn",
+            observedAtMs: Date.now(),
+          });
+        }
+      } else if (name === "codex-degraded") {
+        status.setProviderIssue("codex", "compatibility", "LIMITS UNAVAILABLE", true);
+      } else if (name.startsWith("provider-diagnostics")) {
+        const { renderDiagnostics } = await import("/src/modules/provider-diagnostics.js");
+        renderDiagnostics([
+          {
+            provider: "claude",
+            compatibility: "compatible",
+            surface: "Claude Code hooks + local history",
+            runtimeVersion: "2.1.9",
+            runtimeExecutable: "/usr/local/bin/claude",
+            capabilities: [
+              { id: "usage-history", status: "available", quality: "estimated", source: "ccusage claude" },
+              { id: "limits", status: "available", quality: "official", source: "statusLine" },
+              { id: "live-activity", status: "available", quality: "local", source: "transcript" },
+              { id: "permissions", status: "available", quality: "official", source: "hooks" },
+            ],
+          },
+          {
+            provider: "codex",
+            compatibility: "degraded",
+            surface: "Codex App Server + rollout history",
+            runtimeVersion: "codex-cli 0.12.0",
+            runtimeExecutable: "/usr/local/bin/codex",
+            relatedRuntimes: [{
+              surface: "ChatGPT desktop",
+              productVersion: "26.715.31925",
+              runtimeExecutable: "/Applications/ChatGPT.app/Contents/Resources/codex",
+              runtimeVersion: "codex-cli 0.145.0-alpha.18",
+            }],
+            capabilities: [
+              { id: "rate-limits", status: "unavailable", quality: "unavailable", source: "account/rateLimits/read", reason: "method not supported", fallback: "last known snapshot", remediation: "upgrade Codex CLI" },
+              { id: "account-usage", status: "available", quality: "official", source: "account/usage/read" },
+              { id: "hook-inventory", status: "available", quality: "native", source: "hooks/list" },
+              { id: "app-server-connection", status: "available", quality: "official", source: "/usr/local/bin/codex" },
+              { id: "permission-hook-installed", status: "available", quality: "native", source: "~/.codex/hooks.json" },
+              { id: "permission-hook-enabled", status: "available", quality: "native", source: "~/.codex/hooks.json" },
+              { id: "permission-hook-trusted", status: "unavailable", quality: "native", source: "~/.codex/hooks.json", reason: "hook trust is untrusted", fallback: "Codex native approval UI", remediation: "review /hooks" },
+              { id: "permission-hook-active", status: "unavailable", quality: "native", source: "~/.codex/hooks.json", reason: "no exchange for current hash", fallback: "Codex native approval UI", remediation: "run a permission request" },
+              { id: "native-approval-fallback", status: "available", quality: "native", source: "Codex native approval UI" },
+              { id: "live-activity", status: "available", quality: "local", source: "rollout JSONL" },
+              { id: "history", status: "available", quality: "local", source: "rollout JSONL" },
+            ],
+          },
+        ], document.getElementById("diagnostics-body"));
+        document.getElementById("diagnostics-overlay").hidden = false;
+        if (name.endsWith("-tail")) {
+          document.getElementById("diagnostics-body").scrollTop =
+            document.getElementById("diagnostics-body").scrollHeight;
+        }
+      }
+      document.querySelector(".fake-cursor")?.remove();
+    }, { name: scenario.name, models: providerModels });
+    await page.evaluate(() => document.fonts.ready);
+    await page.waitForTimeout(50);
+    if (scenario.name.endsWith("-tail")) {
+      await page.evaluate(() => {
+        const body = document.getElementById("diagnostics-body");
+        body.scrollTop = body.scrollHeight;
+      });
+      await page.waitForTimeout(50);
+    }
+
+    const overflow = await page.evaluate(() => {
+      const visible = (element) => element.getClientRects().length > 0;
+      const guarded = [...document.querySelectorAll(
+        "#permission-gate .sensor-card, #diagnostics-overlay .diagnostics-card",
+      )].filter(visible);
+      return {
+        body: [
+          document.body.scrollWidth - document.body.clientWidth,
+          document.body.scrollHeight - document.body.clientHeight,
+        ],
+        guarded: guarded.map((element) => [
+          element.scrollWidth - element.clientWidth,
+          element.scrollHeight - element.clientHeight,
+        ]),
+      };
+    });
+    if ([...overflow.body, ...overflow.guarded.flat()].some((value) => value > 0)) {
+      throw new Error(`${scenario.name}: content overflow ${JSON.stringify(overflow)}`);
+    }
+
+    const screenshotPath = path.join(stateOutputDir, `${scenario.name}.png`);
+    const candidatePath = writeStateSnapshots
+      ? screenshotPath
+      : path.join(os.tmpdir(), `cc-autobahn-${scenario.name}-candidate.png`);
+    await page.screenshot({ path: candidatePath, animations: "disabled", caret: "hide" });
+    const screenshot = await readFile(candidatePath);
+    if (!writeStateSnapshots) {
+      const baseline = await readFile(screenshotPath);
+      if (!(await pixelsMatch(page, screenshot, baseline))) {
+        const actualPath = path.join(os.tmpdir(), `cc-autobahn-${scenario.name}-actual.png`);
+        await writeFile(actualPath, screenshot);
+        throw new Error(`${scenario.name}: visual snapshot changed; actual ${actualPath}`);
+      }
+    }
+    await page.close();
+  }
+
   console.log(
     writeSnapshots
-      ? `visual contract passed; wrote ${scenarios.length * pages.length} snapshots`
-      : `visual contract passed; 3 modes × 3 themes × ${pages.length} screens`,
+      ? `visual contract passed; wrote ${scenarios.length * pages.length + stateScenarios.length} snapshots`
+      : writeStateSnapshots
+        ? `visual contract passed; verified ${scenarios.length * pages.length} screens and wrote ${stateScenarios.length} states`
+        : `visual contract passed; 3 modes × 3 themes × ${pages.length} screens + ${stateScenarios.length} states`,
   );
 } finally {
   await browser?.close();

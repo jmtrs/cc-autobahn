@@ -11,7 +11,7 @@
 //! hang or silently gate a real coding session.
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
@@ -94,6 +94,11 @@ pub fn run_permission_hook(provider: ProviderId) {
 /// silence is the fail-open behavior.
 #[cfg(unix)]
 fn ask_gui(request: &HookRequest) -> Option<DecisionMsg> {
+    ask_gui_socket(request).or_else(|| ask_gui_files(request))
+}
+
+#[cfg(unix)]
+fn ask_gui_socket(request: &HookRequest) -> Option<DecisionMsg> {
     use std::os::unix::net::UnixStream;
 
     let path = socket_path()?;
@@ -123,6 +128,58 @@ fn ask_gui(request: &HookRequest) -> Option<DecisionMsg> {
     }
     let msg: super::DecisionMsg = serde_json::from_str(&response).ok()?;
     Some(msg)
+}
+
+/// Sandboxed Codex/OWL tools cannot connect to Unix-domain sockets, even in
+/// their writable temporary directory. Fall back to an atomic request file
+/// and wait for the GUI to publish the matching response file.
+#[cfg(unix)]
+fn ask_gui_files(request: &HookRequest) -> Option<DecisionMsg> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    if !super::safe_request_id(&request.request_id) {
+        return None;
+    }
+    let (requests, responses) = super::file_bridge_dirs()?;
+    for dir in [&requests, &responses] {
+        std::fs::create_dir_all(dir).ok()?;
+        super::set_directory_private(dir).ok()?;
+    }
+
+    let request_path = requests.join(format!("{}.json", request.request_id));
+    let response_path = responses.join(format!("{}.json", request.request_id));
+    let temp_path = request_path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4()));
+    let bytes = serde_json::to_vec(request).ok()?;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temp_path)
+        .ok()?;
+    file.write_all(&bytes).ok()?;
+    file.sync_all().ok()?;
+    if std::fs::rename(&temp_path, &request_path).is_err() {
+        let _ = std::fs::remove_file(&temp_path);
+        return None;
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(super::QUEUE_TIMEOUT_SECS + 5);
+    while Instant::now() < deadline {
+        match std::fs::read(&response_path) {
+            Ok(bytes) => {
+                let decision = serde_json::from_slice::<DecisionMsg>(&bytes).ok();
+                let _ = std::fs::remove_file(&response_path);
+                let _ = std::fs::remove_file(&request_path);
+                return decision;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                std::thread::sleep(Duration::from_millis(super::FILE_BRIDGE_POLL_MS));
+            }
+            Err(_) => break,
+        }
+    }
+    let _ = std::fs::remove_file(&request_path);
+    None
 }
 
 #[cfg(not(unix))]

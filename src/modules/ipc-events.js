@@ -8,7 +8,12 @@ import {
   onInstallSucceeded,
   showEngineOverlay,
 } from "./engine-overlay.js";
-import { onPermissionPending, onPermissionResolved } from "./permission-gate.js";
+import {
+  onDesktopPermissionPending,
+  onDesktopPermissionResolved,
+  onPermissionPending,
+  onPermissionResolved,
+} from "./permission-gate.js";
 import { onBurnTick } from "./speedometer.js";
 import {
   onAccountUsageUpdate,
@@ -139,6 +144,20 @@ export async function wireEngine() {
     console.info("[permission] resolved");
     onPermissionResolved();
   });
+  await listen("desktop-permission-pending", (e) => {
+    console.info("[permission] ChatGPT Desktop pending:", e.payload);
+    onDesktopPermissionPending(e.payload);
+  });
+  await listen("desktop-permission-resolved", (e) => {
+    console.info("[permission] ChatGPT Desktop resolved:", e.payload);
+    onDesktopPermissionResolved(e.payload);
+  });
+  try {
+    const pendingDesktop = await invoke("codex_desktop_permission_snapshot");
+    pendingDesktop?.forEach(onDesktopPermissionPending);
+  } catch (e) {
+    console.error("[permission] ChatGPT Desktop snapshot:", e);
+  }
 
   try {
     const snapshot = await invoke("provider_health_snapshot");

@@ -9,11 +9,23 @@ mod rollout;
 use std::thread;
 use std::time::Duration;
 
-use tauri::AppHandle;
+use tauri::{AppHandle, State};
 
 use super::{emit_health, HealthStatus, ProviderComponent, ProviderId};
 
 pub const ID: ProviderId = ProviderId::Codex;
+pub(crate) type DesktopPermissionState = rollout::DesktopPermissionState;
+
+pub(crate) fn new_desktop_permission_state() -> DesktopPermissionState {
+    rollout::new_desktop_permission_state()
+}
+
+#[tauri::command]
+pub(crate) fn codex_desktop_permission_snapshot(
+    state: State<'_, DesktopPermissionState>,
+) -> Vec<rollout::DesktopPermissionNotice> {
+    rollout::desktop_permission_snapshot(&state)
+}
 pub const COMPONENTS: [ProviderComponent; 3] = [
     ProviderComponent::Transcript,
     ProviderComponent::AppServer,

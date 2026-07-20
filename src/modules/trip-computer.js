@@ -17,6 +17,7 @@ import {
 
 export const SEGMENT_COUNT = 12;
 const WINDOW_MIN = 300; // 5h billing window, in minutes
+const WEEKLY_WINDOW_MIN = 7 * 24 * 60;
 
 const runtimeByProvider = new Map();
 
@@ -268,6 +269,14 @@ export function refreshAutonomie(view = claudeView) {
     remainMin > 0 ? formatHMin(remainMin) : "—";
 }
 
+/** Keeps Codex's locally observed thread duration moving between turn events. */
+export function refreshSessionTime(view = claudeView) {
+  if (view.provider !== "codex" || !(view.state.sessionStartedAtMs > 0)) return;
+  view.element("session-time").textContent = formatDurationMs(
+    Date.now() - view.state.sessionStartedAtMs,
+  );
+}
+
 /** Click-toggle for the quota gauge (D40-toggle): flips between quota
  *  remaining and time-until-reset, both bar and text together (never a mix,
  *  D40). No-op in estimated mode — there's no quota to toggle to, so the
@@ -368,14 +377,6 @@ export function onRateLimitUpdate(p, view = claudeView) {
   const state = view.state;
   state.rateLimitSourceQuality = p?.sourceQuality ?? "unavailable";
   state.rateLimitBuckets = Array.isArray(p?.buckets) ? p.buckets : [];
-  if (Number.isFinite(p?.primary?.windowDurationMinutes)) {
-    state.primaryWindowDurationMinutes = p.primary.windowDurationMinutes;
-  }
-  state.secondaryWindowDurationMinutes = Number.isFinite(
-    p?.secondary?.windowDurationMinutes,
-  )
-    ? p.secondary.windowDurationMinutes
-    : null;
   if (p?.sourceQuality !== "official") {
     state.sensorConnected = false;
     if (state.everQuotaConnected) paintQuotaGauge(view);
@@ -383,24 +384,94 @@ export function onRateLimitUpdate(p, view = claudeView) {
     view.emit("telemetry-tick");
     return;
   }
+
+  const primary = p?.primary ?? null;
+  const secondary = p?.secondary ?? null;
+  const windows = [primary, secondary].filter(Boolean);
+  const duration = (window) =>
+    Number.isFinite(window?.windowDurationMinutes)
+      ? window.windowDurationMinutes
+      : null;
+  const shortWindow = windows
+    .filter((window) => duration(window) != null && duration(window) < 24 * 60)
+    .sort((left, right) => duration(left) - duration(right))[0];
+  // `primary` is the account's main meter, but it is not necessarily a 5h
+  // window. Plus currently returns a single 10080-minute primary window.
+  const liveWindow = shortWindow ?? primary;
+  const weeklyWindow =
+    windows.find((window) => duration(window) === WEEKLY_WINDOW_MIN) ??
+    windows
+      .filter((window) => duration(window) != null && duration(window) >= 24 * 60)
+      .sort(
+        (left, right) =>
+          Math.abs(duration(left) - WEEKLY_WINDOW_MIN) -
+          Math.abs(duration(right) - WEEKLY_WINDOW_MIN),
+      )[0] ??
+    (secondary && duration(secondary) == null ? secondary : null);
+
+  if (duration(liveWindow) != null) {
+    state.primaryWindowDurationMinutes = duration(liveWindow);
+  }
+  state.secondaryWindowDurationMinutes = duration(weeklyWindow) != null
+    ? duration(weeklyWindow)
+    : null;
+  state.hasSecondaryLimit = false;
+  state.sevenDayPct = 0;
+  state.sevenDayResetsAtMs = 0;
   onSensorUpdate(
     {
       observedAtMs: p?.observedAtMs,
-      fiveHourPct: p?.primary?.usedPercent,
-      fiveHourResetsAt: Number.isFinite(p?.primary?.resetsAtMs)
-        ? p.primary.resetsAtMs / 1000
+      fiveHourPct: liveWindow?.usedPercent,
+      fiveHourResetsAt: Number.isFinite(liveWindow?.resetsAtMs)
+        ? liveWindow.resetsAtMs / 1000
         : null,
-      sevenDayPct: p?.secondary?.usedPercent,
-      sevenDayResetsAt: Number.isFinite(p?.secondary?.resetsAtMs)
-        ? p.secondary.resetsAtMs / 1000
+      sevenDayPct: weeklyWindow?.usedPercent,
+      sevenDayResetsAt: Number.isFinite(weeklyWindow?.resetsAtMs)
+        ? weeklyWindow.resetsAtMs / 1000
         : null,
     },
     view,
   );
 }
 
+function averageDailyTokens(dailyUsage, days = 7, nowMs = Date.now()) {
+  const buckets = (Array.isArray(dailyUsage) ? dailyUsage : [])
+    .map((bucket) => ({
+      day: Date.parse(`${bucket?.startDate}T00:00:00Z`),
+      tokens: Number(bucket?.tokens),
+    }))
+    .filter((bucket) => Number.isFinite(bucket.day) && bucket.tokens >= 0);
+  if (buckets.length === 0) return null;
+  const now = new Date(nowMs);
+  const currentDay = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const firstDay = currentDay - (days - 1) * 86_400_000;
+  const total = buckets
+    .filter((bucket) => bucket.day >= firstDay && bucket.day <= currentDay)
+    .reduce((sum, bucket) => sum + bucket.tokens, 0);
+  return total / days;
+}
+
+export function renderCodexLiveUsage(view) {
+  if (view.provider !== "codex") return;
+  const usage = view.state.accountUsage;
+  const available = usage && usage.sourceQuality !== "unavailable";
+  const stale = usage?.sourceQuality === "stale";
+  view.element("odo").textContent =
+    available && Number.isFinite(usage.lifetimeTokens)
+      ? formatTokens(usage.lifetimeTokens)
+      : "—";
+  view.element("odo-unit").textContent = stale ? "STALE tok" : "tok";
+  view.element("avg-label").textContent = stale ? "STALE AVG 7D" : "AVG 7D";
+  view.element("avg-unit").textContent = "tok/d";
+  const dailyAverage = available ? averageDailyTokens(usage.dailyUsage) : null;
+  view.element("avg").textContent = Number.isFinite(dailyAverage)
+    ? formatTokens(dailyAverage)
+    : "—";
+}
+
 export function onAccountUsageUpdate(p, view = claudeView) {
   view.state.accountUsage = p ?? null;
+  renderCodexLiveUsage(view);
   view.emit("telemetry-tick");
 }
 
@@ -432,7 +503,6 @@ export function onSensorState(p, view = claudeView) {
  *  most-documented points of confusion (tok/s isn't live, cost is estimated). */
 export function wireTripComputerHints(view = claudeView) {
   const local = runtime(view);
-  const providerLabel = view.provider === "codex" ? "Codex" : "Claude";
   const labels = Object.fromEntries(modelSlots(view.provider).map((slot) => [slot.key, slot.label]));
   // Per-letter hints (not one static hintOnHover on the whole .gear): each
   // slot names its own model even when it isn't the active one, and the
@@ -445,20 +515,30 @@ export function wireTripComputerHints(view = claudeView) {
         model === "custom" ? local.lastCustomLabel || labels.custom : labels[model];
       setHeaderHint(
         local.currentGearHit === model
-          ? `${providerLabel} · active model: ${label}`
-          : `${providerLabel} · ${label}`,
+          ? `active model: ${label}`
+          : label,
       );
     });
     el.addEventListener("mouseleave", () => setHeaderHint(""));
   });
   const gaugeRow = view.query(".row.gauge");
-  hintOnHover(gaugeRow, `${providerLabel} · primary limit remaining — click for reset time`);
+  hintOnHover(gaugeRow, "primary limit remaining — click for reset time");
   gaugeRow.onclick = () => toggleAutonomieView(view);
+  hintOnHover(view.element("burn"), "per-response rate");
   hintOnHover(
-    view.element("burn"),
-    `${providerLabel} · per-response rate`
+    view.element("avg"),
+    view.provider === "codex"
+      ? "account average tokens per calendar day, current 7-day period"
+      : "estimated cost, not official",
   );
-  hintOnHover(view.element("avg"), `${providerLabel} · estimated cost, not official`);
-  hintOnHover(view.element("odo"), `${providerLabel} · total tokens in the active interval`);
-  hintOnHover(view.element("session-time"), `${providerLabel} · active interval elapsed`);
+  hintOnHover(
+    view.element("odo"),
+    view.provider === "codex"
+      ? "account lifetime tokens; STALE marks last known data"
+      : "total tokens in the active interval",
+  );
+  hintOnHover(
+    view.element("session-time"),
+    view.provider === "codex" ? "current local thread elapsed" : "active interval elapsed",
+  );
 }

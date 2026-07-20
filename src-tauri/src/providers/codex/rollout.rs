@@ -4,17 +4,25 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
+use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::burn::zulu::parse_zulu_millis;
-use crate::providers::{emit_model_activity, ModelActivity, ProviderId, TurnRate};
+use crate::providers::{emit_model_activity, ModelActivity, ProviderId, SourceQuality, TurnRate};
 
 const ACTIVE_WINDOW: Duration = Duration::from_secs(60 * 60);
 const MAX_DEPTH: usize = 8;
 const MAX_ACTIVE_FILES: usize = 512;
+const MAX_DORMANT_CHECKPOINTS: usize = 512;
+const MAX_DORMANT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_IDENTIFIER_BYTES: usize = 1024;
+const MAX_PENDING_DESKTOP_PERMISSIONS: usize = 64;
+const DESKTOP_PERMISSION_TTL_MS: i64 = 120_000;
+const MAX_PERMISSION_SUMMARY_BYTES: usize = 1024;
 const MAX_READ_BYTES: u64 = 1024 * 1024;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
 const BOOTSTRAP_TAIL_BYTES: u64 = 1024 * 1024;
@@ -24,13 +32,35 @@ const BOOTSTRAP_HEAD_BYTES: u64 = 256 * 1024;
 enum DecodedEvent {
     Rate(TurnRate),
     Model(ModelActivity),
+    DesktopPermissionPending(DesktopPermissionNotice),
+    DesktopPermissionResolved(DesktopPermissionResolution),
 }
 
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DesktopPermissionNotice {
+    id: String,
+    provider: ProviderId,
+    tool_name: String,
+    tool_input_summary: String,
+    cwd: String,
+    observed_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+struct DesktopPermissionResolution {
+    id: String,
+}
+
+#[derive(Clone, Default)]
 struct Decoder {
     thread_id: Option<String>,
+    session_started_at_ms: Option<i64>,
     turn_id: Option<String>,
     current_model: Option<String>,
+    cwd: Option<String>,
+    originator: Option<String>,
+    pending_desktop_permissions: HashMap<String, DesktopPermissionNotice>,
     model_observed_at_ms: Option<i64>,
     turn_started_at_ms: Option<i64>,
     last_response_at_ms: Option<i64>,
@@ -39,6 +69,31 @@ struct Decoder {
 }
 
 impl Decoder {
+    fn allocated_bytes(&self) -> usize {
+        let fields: usize = [
+            &self.thread_id,
+            &self.turn_id,
+            &self.current_model,
+            &self.cwd,
+            &self.originator,
+        ]
+        .into_iter()
+        .flatten()
+        .map(String::capacity)
+        .sum();
+        fields
+            + self
+                .pending_desktop_permissions
+                .iter()
+                .map(|(id, notice)| {
+                    id.capacity()
+                        + notice.tool_name.capacity()
+                        + notice.tool_input_summary.capacity()
+                        + notice.cwd.capacity()
+                })
+                .sum::<usize>()
+    }
+
     fn process_line(&mut self, line: &[u8]) -> Option<DecodedEvent> {
         if line.is_empty() || line.len() > MAX_LINE_BYTES {
             return None;
@@ -54,9 +109,14 @@ impl Decoder {
         match kind {
             "session_meta" => {
                 self.thread_id = nonempty_string(payload.get("id"));
+                self.session_started_at_ms = observed_at_ms;
+                self.originator = nonempty_string(payload.get("originator"));
                 None
             }
             "turn_context" => {
+                if let Some(cwd) = nonempty_string(payload.get("cwd")) {
+                    self.cwd = Some(cwd);
+                }
                 let model_id = nonempty_string(payload.get("model"))?;
                 if let Some(turn_id) = nonempty_string(payload.get("turn_id")) {
                     self.turn_id = Some(turn_id);
@@ -91,8 +151,106 @@ impl Decoder {
                 Some("token_count") => self.decode_token_count(payload, observed_at_ms?),
                 _ => None,
             },
+            "response_item" => self.decode_response_item(payload, observed_at_ms),
             _ => None,
         }
+    }
+
+    fn decode_response_item(
+        &mut self,
+        payload: &Value,
+        observed_at_ms: Option<i64>,
+    ) -> Option<DecodedEvent> {
+        if self.originator.as_deref() != Some("Codex Desktop") {
+            return None;
+        }
+        match payload.get("type").and_then(Value::as_str) {
+            Some("custom_tool_call")
+                if payload.get("name").and_then(Value::as_str) == Some("exec") =>
+            {
+                let input = payload.get("input")?.as_str()?;
+                if extract_string_property(input, "sandbox_permissions").as_deref()
+                    != Some("require_escalated")
+                {
+                    return None;
+                }
+                let id = nonempty_string(payload.get("call_id"))?;
+                let observed_at_ms = observed_at_ms?;
+                self.purge_expired_desktop_permissions(observed_at_ms);
+                if self.pending_desktop_permissions.contains_key(&id)
+                    || self.pending_desktop_permissions.len() >= MAX_PENDING_DESKTOP_PERMISSIONS
+                {
+                    return None;
+                }
+                let summary = extract_string_property(input, "cmd")
+                    .or_else(|| extract_string_property(input, "justification"))
+                    .map(|value| truncate_utf8(value, MAX_PERMISSION_SUMMARY_BYTES))
+                    .unwrap_or_else(|| "Elevated command requested".to_string());
+                let notice = DesktopPermissionNotice {
+                    id: id.clone(),
+                    provider: ProviderId::Codex,
+                    tool_name: "Command".to_string(),
+                    tool_input_summary: summary,
+                    cwd: self.cwd.clone().unwrap_or_default(),
+                    observed_at_ms,
+                };
+                self.pending_desktop_permissions.insert(id, notice.clone());
+                Some(DecodedEvent::DesktopPermissionPending(notice))
+            }
+            Some("custom_tool_call_output") => {
+                let id = nonempty_string(payload.get("call_id"))?;
+                self.pending_desktop_permissions.remove(&id).map(|_| {
+                    DecodedEvent::DesktopPermissionResolved(DesktopPermissionResolution { id })
+                })
+            }
+            Some("function_call")
+                if payload.get("name").and_then(Value::as_str) == Some("exec_command") =>
+            {
+                let arguments: Value =
+                    serde_json::from_str(payload.get("arguments")?.as_str()?).ok()?;
+                if arguments.get("sandbox_permissions").and_then(Value::as_str)
+                    != Some("require_escalated")
+                {
+                    return None;
+                }
+                let id = nonempty_string(payload.get("call_id"))?;
+                let observed_at_ms = observed_at_ms?;
+                self.purge_expired_desktop_permissions(observed_at_ms);
+                if self.pending_desktop_permissions.contains_key(&id)
+                    || self.pending_desktop_permissions.len() >= MAX_PENDING_DESKTOP_PERMISSIONS
+                {
+                    return None;
+                }
+                let summary = arguments
+                    .get("cmd")
+                    .and_then(Value::as_str)
+                    .map(|value| truncate_utf8(value.to_string(), MAX_PERMISSION_SUMMARY_BYTES))
+                    .unwrap_or_else(|| "Elevated command requested".to_string());
+                let notice = DesktopPermissionNotice {
+                    id: id.clone(),
+                    provider: ProviderId::Codex,
+                    tool_name: "Command".to_string(),
+                    tool_input_summary: summary,
+                    cwd: self.cwd.clone().unwrap_or_default(),
+                    observed_at_ms,
+                };
+                self.pending_desktop_permissions.insert(id, notice.clone());
+                Some(DecodedEvent::DesktopPermissionPending(notice))
+            }
+            Some("function_call_output") => {
+                let id = nonempty_string(payload.get("call_id"))?;
+                self.pending_desktop_permissions.remove(&id).map(|_| {
+                    DecodedEvent::DesktopPermissionResolved(DesktopPermissionResolution { id })
+                })
+            }
+            _ => None,
+        }
+    }
+
+    fn purge_expired_desktop_permissions(&mut self, now_ms: i64) {
+        self.pending_desktop_permissions.retain(|_, notice| {
+            now_ms.saturating_sub(notice.observed_at_ms) <= DESKTOP_PERMISSION_TTL_MS
+        });
     }
 
     fn decode_token_count(&mut self, payload: &Value, observed_at_ms: i64) -> Option<DecodedEvent> {
@@ -124,7 +282,9 @@ impl Decoder {
 
         Some(DecodedEvent::Rate(TurnRate {
             provider: ProviderId::Codex,
+            source_quality: SourceQuality::Local,
             session_or_thread_id: self.thread_id.clone()?,
+            session_started_at_ms: self.session_started_at_ms,
             observed_at_ms,
             output_tokens,
             elapsed_ms,
@@ -136,12 +296,160 @@ impl Decoder {
 
 fn nonempty_string(value: Option<&Value>) -> Option<String> {
     let value = value?.as_str()?.trim();
-    (!value.is_empty()).then(|| value.to_string())
+    (!value.is_empty() && value.len() <= MAX_IDENTIFIER_BYTES).then(|| value.to_string())
 }
 
 fn epoch_seconds_ms(value: Option<&Value>) -> Option<i64> {
     let seconds = value?.as_i64()?;
     seconds.checked_mul(1000)
+}
+
+fn extract_string_property(input: &str, property: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let property = property.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => {
+                let key_start = index;
+                index += 1;
+                let mut escaped = false;
+                while index < bytes.len() {
+                    if escaped {
+                        escaped = false;
+                    } else if bytes[index] == b'\\' {
+                        escaped = true;
+                    } else if bytes[index] == b'"' {
+                        let key_end = index + 1;
+                        if serde_json::from_slice::<String>(&bytes[key_start..key_end])
+                            .ok()
+                            .as_deref()
+                            == std::str::from_utf8(property).ok()
+                        {
+                            if let Some(value) = string_value_after_colon(bytes, key_end) {
+                                return Some(value);
+                            }
+                        }
+                        index = key_end;
+                        break;
+                    }
+                    index += 1;
+                }
+            }
+            b'\'' | b'`' => {
+                let quote = bytes[index];
+                index += 1;
+                while index < bytes.len() {
+                    if bytes[index] == b'\\' {
+                        index = (index + 2).min(bytes.len());
+                    } else if bytes[index] == quote {
+                        index += 1;
+                        break;
+                    } else {
+                        index += 1;
+                    }
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'/') => {
+                index += 2;
+                while index < bytes.len() && bytes[index] != b'\n' {
+                    index += 1;
+                }
+            }
+            b'/' if bytes.get(index + 1) == Some(&b'*') => {
+                index += 2;
+                while index + 1 < bytes.len() && !(bytes[index] == b'*' && bytes[index + 1] == b'/')
+                {
+                    index += 1;
+                }
+                index = (index + 2).min(bytes.len());
+            }
+            _ if bytes[index..].starts_with(property)
+                && (index == 0 || !is_identifier_byte(bytes[index - 1]))
+                && bytes
+                    .get(index + property.len())
+                    .is_none_or(|byte| !is_identifier_byte(*byte)) =>
+            {
+                let mut value_start = index + property.len();
+                while bytes.get(value_start).is_some_and(u8::is_ascii_whitespace) {
+                    value_start += 1;
+                }
+                if bytes.get(value_start) != Some(&b':') {
+                    index += property.len();
+                    continue;
+                }
+                value_start += 1;
+                while bytes.get(value_start).is_some_and(u8::is_ascii_whitespace) {
+                    value_start += 1;
+                }
+                if bytes.get(value_start) != Some(&b'"') {
+                    return None;
+                }
+                let mut end = value_start + 1;
+                let mut escaped = false;
+                while end < bytes.len() {
+                    if escaped {
+                        escaped = false;
+                    } else if bytes[end] == b'\\' {
+                        escaped = true;
+                    } else if bytes[end] == b'"' {
+                        return serde_json::from_slice(&bytes[value_start..=end]).ok();
+                    }
+                    end += 1;
+                }
+                return None;
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
+fn string_value_after_colon(bytes: &[u8], mut index: usize) -> Option<String> {
+    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+        index += 1;
+    }
+    if bytes.get(index) != Some(&b':') {
+        return None;
+    }
+    index += 1;
+    while bytes.get(index).is_some_and(u8::is_ascii_whitespace) {
+        index += 1;
+    }
+    if bytes.get(index) != Some(&b'"') {
+        return None;
+    }
+    let start = index;
+    index += 1;
+    let mut escaped = false;
+    while index < bytes.len() {
+        if escaped {
+            escaped = false;
+        } else if bytes[index] == b'\\' {
+            escaped = true;
+        } else if bytes[index] == b'"' {
+            return serde_json::from_slice(&bytes[start..=index]).ok();
+        }
+        index += 1;
+    }
+    None
+}
+
+fn is_identifier_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$')
+}
+
+fn truncate_utf8(mut value: String, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value;
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value.truncate(end);
+    value.push('…');
+    value
 }
 
 pub(super) fn discover_rollout_roots() -> Vec<PathBuf> {
@@ -189,7 +497,39 @@ struct Tail {
     decoder: Decoder,
 }
 
+#[derive(Clone)]
+struct TailCheckpoint {
+    pos: u64,
+    line: Vec<u8>,
+    discarding_oversize_line: bool,
+    decoder: Decoder,
+}
+
+impl TailCheckpoint {
+    fn allocated_bytes(&self) -> usize {
+        self.line.capacity() + self.decoder.allocated_bytes()
+    }
+}
+
 impl Tail {
+    fn from_checkpoint(checkpoint: TailCheckpoint) -> Self {
+        Self {
+            pos: checkpoint.pos,
+            line: checkpoint.line,
+            discarding_oversize_line: checkpoint.discarding_oversize_line,
+            decoder: checkpoint.decoder,
+        }
+    }
+
+    fn checkpoint(&self) -> TailCheckpoint {
+        TailCheckpoint {
+            pos: self.pos,
+            line: self.line.clone(),
+            discarding_oversize_line: self.discarding_oversize_line,
+            decoder: self.decoder.clone(),
+        }
+    }
+
     fn bootstrap(path: &Path) -> Self {
         let mut tail = Self {
             pos: 0,
@@ -293,25 +633,87 @@ impl Tail {
 
 pub(super) struct TailSet {
     tails: HashMap<PathBuf, Tail>,
+    dormant: HashMap<PathBuf, (TailCheckpoint, SystemTime)>,
+}
+
+pub(crate) type DesktopPermissionState = Arc<Mutex<HashMap<String, DesktopPermissionNotice>>>;
+
+pub(crate) fn new_desktop_permission_state() -> DesktopPermissionState {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+pub(crate) fn desktop_permission_snapshot(
+    state: &DesktopPermissionState,
+) -> Vec<DesktopPermissionNotice> {
+    let now_ms = crate::providers::now_epoch_ms();
+    let mut state = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    state.retain(|_, notice| {
+        now_ms.saturating_sub(notice.observed_at_ms) <= DESKTOP_PERMISSION_TTL_MS
+    });
+    state.values().cloned().collect()
+}
+
+fn publish_desktop_permission(app: &AppHandle, notice: DesktopPermissionNotice) {
+    let Some(state) = app.try_state::<DesktopPermissionState>() else {
+        return;
+    };
+    let is_new = state
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(notice.id.clone(), notice.clone())
+        .is_none();
+    if is_new {
+        crate::window::show_for_permission(app);
+        let _ = app.emit("desktop-permission-pending", notice);
+    }
+}
+
+fn resolve_desktop_permission(app: &AppHandle, resolution: DesktopPermissionResolution) {
+    if let Some(state) = app.try_state::<DesktopPermissionState>() {
+        state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&resolution.id);
+    }
+    let _ = app.emit("desktop-permission-resolved", resolution);
 }
 
 impl TailSet {
     pub(super) fn new() -> Self {
         Self {
             tails: HashMap::new(),
+            dormant: HashMap::new(),
         }
     }
 
     pub(super) fn rescan(&mut self, roots: &[PathBuf], app: &AppHandle) -> usize {
         let active = active_jsonls(roots, SystemTime::now());
         let active_paths: HashSet<_> = active.iter().map(|(path, _, _)| path.clone()).collect();
-        self.tails
-            .retain(|path, _| active_paths.contains(path) || path.is_file());
+        let inactive: Vec<_> = self
+            .tails
+            .keys()
+            .filter(|path| !active_paths.contains(*path))
+            .cloned()
+            .collect();
+        for path in inactive {
+            if let Some(tail) = self.tails.remove(&path) {
+                self.dormant
+                    .insert(path, (tail.checkpoint(), SystemTime::now()));
+            }
+        }
+        self.trim_dormant();
+
         for (path, _, _) in &active {
             if self.tails.contains_key(path) {
                 continue;
             }
-            let tail = Tail::bootstrap(path);
+            let tail = self
+                .dormant
+                .remove(path)
+                .map(|(checkpoint, _)| Tail::from_checkpoint(checkpoint))
+                .unwrap_or_else(|| Tail::bootstrap(path));
             if let (Some(thread_id), Some(model_id), Some(observed_at_ms)) = (
                 tail.decoder.thread_id.clone(),
                 tail.decoder.current_model.clone(),
@@ -326,20 +728,79 @@ impl TailSet {
                 };
                 emit_model_activity(app, activity);
             }
+            for notice in tail.decoder.pending_desktop_permissions.values() {
+                if crate::providers::now_epoch_ms().saturating_sub(notice.observed_at_ms)
+                    <= DESKTOP_PERMISSION_TTL_MS
+                {
+                    publish_desktop_permission(app, notice.clone());
+                }
+            }
             self.tails.insert(path.clone(), tail);
         }
         active.len()
     }
 
+    fn trim_dormant(&mut self) {
+        let mut dormant_bytes: usize = self
+            .dormant
+            .values()
+            .map(|(checkpoint, _)| checkpoint.allocated_bytes())
+            .sum();
+        if self.dormant.len() <= MAX_DORMANT_CHECKPOINTS && dormant_bytes <= MAX_DORMANT_BYTES {
+            return;
+        }
+        let mut oldest: Vec<_> = self
+            .dormant
+            .iter()
+            .map(|(path, (_, seen_at))| (path.clone(), *seen_at))
+            .collect();
+        oldest.sort_by(|left, right| left.1.cmp(&right.1).then_with(|| left.0.cmp(&right.0)));
+        for (path, _) in oldest {
+            if self.dormant.len() <= MAX_DORMANT_CHECKPOINTS && dormant_bytes <= MAX_DORMANT_BYTES {
+                break;
+            }
+            if let Some((checkpoint, _)) = self.dormant.remove(&path) {
+                dormant_bytes = dormant_bytes.saturating_sub(checkpoint.allocated_bytes());
+            }
+        }
+    }
+
     pub(super) fn pump(&mut self, app: &AppHandle) {
+        if let Some(state) = app.try_state::<DesktopPermissionState>() {
+            let now_ms = crate::providers::now_epoch_ms();
+            state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .retain(|_, notice| {
+                    now_ms.saturating_sub(notice.observed_at_ms) <= DESKTOP_PERMISSION_TTL_MS
+                });
+        }
         for (path, tail) in &mut self.tails {
-            for event in tail.drain(path) {
+            let events = tail.drain(path);
+            let resolved_in_batch: HashSet<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    DecodedEvent::DesktopPermissionResolved(resolution) => {
+                        Some(resolution.id.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            for event in events {
                 match event {
                     DecodedEvent::Rate(rate) => {
                         let _ = app.emit("burn-tick", rate);
                     }
                     DecodedEvent::Model(activity) => {
                         emit_model_activity(app, activity);
+                    }
+                    DecodedEvent::DesktopPermissionPending(notice) => {
+                        if !resolved_in_batch.contains(&notice.id) {
+                            publish_desktop_permission(app, notice);
+                        }
+                    }
+                    DecodedEvent::DesktopPermissionResolved(resolution) => {
+                        resolve_desktop_permission(app, resolution);
                     }
                 }
             }
@@ -457,7 +918,9 @@ mod tests {
             .expect("rate");
         match rate {
             DecodedEvent::Rate(rate) => {
+                assert_eq!(rate.source_quality, SourceQuality::Local);
                 assert_eq!(rate.session_or_thread_id, "thread-1");
+                assert_eq!(rate.session_started_at_ms, Some(1_784_455_200_000));
                 assert_eq!(rate.output_tokens, 50);
                 assert_eq!(rate.elapsed_ms, 2_000);
                 assert!((rate.tokens_per_second - 25.0).abs() < f64::EPSILON);
@@ -564,6 +1027,219 @@ mod tests {
     }
 
     #[test]
+    fn decoder_emits_desktop_permission_lifecycle_for_escalated_exec() {
+        let mut decoder = Decoder::default();
+        assert!(decoder
+            .process_line(
+                line(
+                    "2026-07-20T07:22:38.000Z",
+                    "session_meta",
+                    r#"{"id":"thread-1","originator":"Codex Desktop"}"#,
+                )
+                .as_bytes(),
+            )
+            .is_none());
+        let _ = decoder.process_line(
+            line(
+                "2026-07-20T07:22:39.000Z",
+                "turn_context",
+                r#"{"model":"gpt-5.6-sol","cwd":"/tmp/project"}"#,
+            )
+            .as_bytes(),
+        );
+        let input = r#"const result = await tools.exec_command({cmd:"touch /tmp/permission-test", sandbox_permissions: "require_escalated", justification: "Allow this permission test?"}); text(result.output)"#;
+        let pending_payload = serde_json::json!({
+            "type": "custom_tool_call",
+            "name": "exec",
+            "call_id": "call-permission-1",
+            "input": input,
+        });
+        let pending = decoder
+            .process_line(
+                line(
+                    "2026-07-20T07:22:40.246Z",
+                    "response_item",
+                    &pending_payload.to_string(),
+                )
+                .as_bytes(),
+            )
+            .expect("pending desktop permission");
+        assert_eq!(
+            pending,
+            DecodedEvent::DesktopPermissionPending(DesktopPermissionNotice {
+                id: "call-permission-1".into(),
+                provider: ProviderId::Codex,
+                tool_name: "Command".into(),
+                tool_input_summary: "touch /tmp/permission-test".into(),
+                cwd: "/tmp/project".into(),
+                observed_at_ms: 1_784_532_160_246,
+            })
+        );
+        assert!(decoder
+            .process_line(
+                line(
+                    "2026-07-20T07:22:41.000Z",
+                    "response_item",
+                    &pending_payload.to_string(),
+                )
+                .as_bytes(),
+            )
+            .is_none());
+
+        let resolved = decoder
+            .process_line(
+                line(
+                    "2026-07-20T07:23:32.807Z",
+                    "response_item",
+                    r#"{"type":"custom_tool_call_output","call_id":"call-permission-1","output":"ok"}"#,
+                )
+                .as_bytes(),
+            )
+            .expect("resolved desktop permission");
+        assert_eq!(
+            resolved,
+            DecodedEvent::DesktopPermissionResolved(DesktopPermissionResolution {
+                id: "call-permission-1".into()
+            })
+        );
+    }
+
+    #[test]
+    fn decoder_ignores_non_escalated_and_unmatched_desktop_calls() {
+        let mut decoder = Decoder::default();
+        assert!(decoder
+            .process_line(
+                line(
+                    "2026-07-20T07:22:38.000Z",
+                    "session_meta",
+                    r#"{"id":"thread-1","originator":"Codex Desktop"}"#,
+                )
+                .as_bytes(),
+            )
+            .is_none());
+        for input in [
+            r#"text(await tools.exec_command({cmd:"pwd"}))"#,
+            r#"text(await tools.exec_command({cmd:"pwd", sandbox_permissions: "use_default"}))"#,
+        ] {
+            let payload = serde_json::json!({
+                "type": "custom_tool_call",
+                "name": "exec",
+                "call_id": format!("call-{input}"),
+                "input": input,
+            });
+            assert!(decoder
+                .process_line(
+                    line(
+                        "2026-07-20T07:22:40.246Z",
+                        "response_item",
+                        &payload.to_string(),
+                    )
+                    .as_bytes(),
+                )
+                .is_none());
+        }
+        assert!(decoder
+            .process_line(
+                line(
+                    "2026-07-20T07:23:32.807Z",
+                    "response_item",
+                    r#"{"type":"custom_tool_call_output","call_id":"unknown"}"#,
+                )
+                .as_bytes(),
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn desktop_permission_scanner_ignores_property_text_inside_js_strings_and_comments() {
+        for input in [
+            r#"text(await tools.exec_command({cmd:"rg 'sandbox_permissions: \\"require_escalated\\"' ."}))"#,
+            "// sandbox_permissions: \"require_escalated\"\ntext(true)",
+            "/* sandbox_permissions: \"require_escalated\" */ text(true)",
+            "text(`sandbox_permissions: \"require_escalated\"`)",
+        ] {
+            assert_eq!(extract_string_property(input, "sandbox_permissions"), None);
+        }
+        assert_eq!(
+            extract_string_property(
+                r#"tools.exec_command({ sandbox_permissions : "require_escalated" })"#,
+                "sandbox_permissions",
+            )
+            .as_deref(),
+            Some("require_escalated")
+        );
+        assert_eq!(
+            extract_string_property(
+                r#"tools.exec_command({ "sandbox_permissions": "require_escalated" })"#,
+                "sandbox_permissions",
+            )
+            .as_deref(),
+            Some("require_escalated")
+        );
+    }
+
+    #[test]
+    fn decoder_supports_legacy_desktop_function_call_format_only_for_desktop() {
+        let escalation = serde_json::json!({
+            "type": "function_call",
+            "name": "exec_command",
+            "call_id": "legacy-call",
+            "arguments": r#"{"cmd":"whoami","sandbox_permissions":"require_escalated"}"#,
+        });
+        let mut desktop = Decoder::default();
+        let _ = desktop.process_line(
+            line(
+                "2026-07-20T07:22:38.000Z",
+                "session_meta",
+                r#"{"id":"thread-1","originator":"Codex Desktop"}"#,
+            )
+            .as_bytes(),
+        );
+        assert!(matches!(
+            desktop.process_line(
+                line(
+                    "2026-07-20T07:22:40.000Z",
+                    "response_item",
+                    &escalation.to_string(),
+                )
+                .as_bytes(),
+            ),
+            Some(DecodedEvent::DesktopPermissionPending(_))
+        ));
+        assert!(matches!(
+            desktop.process_line(
+                line(
+                    "2026-07-20T07:22:41.000Z",
+                    "response_item",
+                    r#"{"type":"function_call_output","call_id":"legacy-call"}"#,
+                )
+                .as_bytes(),
+            ),
+            Some(DecodedEvent::DesktopPermissionResolved(_))
+        ));
+
+        let mut cli = Decoder::default();
+        let _ = cli.process_line(
+            line(
+                "2026-07-20T07:22:38.000Z",
+                "session_meta",
+                r#"{"id":"thread-2","originator":"codex_cli_rs"}"#,
+            )
+            .as_bytes(),
+        );
+        assert!(cli
+            .process_line(
+                line(
+                    "2026-07-20T07:22:40.000Z",
+                    "response_item",
+                    &escalation.to_string(),
+                )
+                .as_bytes(),
+            )
+            .is_none());
+    }
+
+    #[test]
     fn discovery_is_recursive_and_does_not_follow_symlinks() {
         let root = std::env::temp_dir().join(format!(
             "cc-autobahn-codex-discovery-{}-{}",
@@ -629,6 +1305,138 @@ mod tests {
             _ => panic!("expected rate"),
         }
         std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn dormant_checkpoint_preserves_first_append_after_reactivation() {
+        let path = std::env::temp_dir().join(format!(
+            "cc-autobahn-codex-reactivation-{}-{}.jsonl",
+            std::process::id(),
+            crate::providers::now_epoch_ms()
+        ));
+        {
+            let mut file = File::create(&path).unwrap();
+            writeln!(
+                file,
+                "{}",
+                line(
+                    "2026-07-19T10:00:00.000Z",
+                    "session_meta",
+                    r#"{"id":"thread-1"}"#
+                )
+            )
+            .unwrap();
+            writeln!(
+                file,
+                "{}",
+                line(
+                    "2026-07-19T10:00:01.000Z",
+                    "event_msg",
+                    r#"{"type":"task_started","turn_id":"turn-1"}"#
+                )
+            )
+            .unwrap();
+        }
+        let tail = Tail::bootstrap(&path);
+        let checkpoint = tail.checkpoint();
+        {
+            let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+            writeln!(file, "{}", line("2026-07-19T10:00:03.000Z", "event_msg", r#"{"type":"token_count","info":{"last_token_usage":{"output_tokens":40},"total_token_usage":{"output_tokens":40}}}"#)).unwrap();
+        }
+        let mut resumed = Tail::from_checkpoint(checkpoint);
+        let events = resumed.drain(&path);
+        assert_eq!(events.len(), 1);
+        let DecodedEvent::Rate(rate) = &events[0] else {
+            panic!("expected resumed rate");
+        };
+        assert_eq!(rate.output_tokens, 40);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn checkpoint_preserves_partial_line_bytes_and_decoder_state() {
+        let decoder = Decoder {
+            thread_id: Some("thread-partial".into()),
+            ..Decoder::default()
+        };
+        let tail = Tail {
+            pos: 12,
+            line: br#"{"timestamp""#.to_vec(),
+            discarding_oversize_line: false,
+            decoder,
+        };
+        let resumed = Tail::from_checkpoint(tail.checkpoint());
+        assert_eq!(resumed.line, br#"{"timestamp""#);
+        assert_eq!(resumed.decoder.thread_id.as_deref(), Some("thread-partial"));
+    }
+
+    #[test]
+    fn decoder_rejects_oversized_identity_fields() {
+        let oversized = Value::String("x".repeat(MAX_IDENTIFIER_BYTES + 1));
+        assert!(nonempty_string(Some(&oversized)).is_none());
+        let bounded = Value::String("x".repeat(MAX_IDENTIFIER_BYTES));
+        assert_eq!(
+            nonempty_string(Some(&bounded)).map(|value| value.len()),
+            Some(MAX_IDENTIFIER_BYTES)
+        );
+    }
+
+    #[test]
+    fn dormant_checkpoints_obey_the_aggregate_byte_budget() {
+        let mut tails = TailSet::new();
+        for index in 0..9 {
+            tails.dormant.insert(
+                PathBuf::from(format!("rollout-{index}.jsonl")),
+                (
+                    TailCheckpoint {
+                        pos: 0,
+                        line: vec![b'x'; 1024 * 1024],
+                        discarding_oversize_line: false,
+                        decoder: Decoder::default(),
+                    },
+                    SystemTime::UNIX_EPOCH + Duration::from_secs(index),
+                ),
+            );
+        }
+        tails.trim_dormant();
+        let bytes: usize = tails
+            .dormant
+            .values()
+            .map(|(checkpoint, _)| checkpoint.allocated_bytes())
+            .sum();
+        assert!(bytes <= MAX_DORMANT_BYTES);
+        assert_eq!(tails.dormant.len(), 8);
+        assert!(!tails.dormant.contains_key(Path::new("rollout-0.jsonl")));
+    }
+
+    #[test]
+    fn dormant_budget_includes_decoder_allocations() {
+        let mut tails = TailSet::new();
+        for index in 0..9 {
+            tails.dormant.insert(
+                PathBuf::from(format!("decoder-{index}.jsonl")),
+                (
+                    TailCheckpoint {
+                        pos: 0,
+                        line: Vec::new(),
+                        discarding_oversize_line: false,
+                        decoder: Decoder {
+                            current_model: Some("x".repeat(1024 * 1024)),
+                            ..Decoder::default()
+                        },
+                    },
+                    SystemTime::UNIX_EPOCH + Duration::from_secs(index),
+                ),
+            );
+        }
+        tails.trim_dormant();
+        let bytes: usize = tails
+            .dormant
+            .values()
+            .map(|(checkpoint, _)| checkpoint.allocated_bytes())
+            .sum();
+        assert!(bytes <= MAX_DORMANT_BYTES);
+        assert_eq!(tails.dormant.len(), 8);
     }
 
     #[test]
