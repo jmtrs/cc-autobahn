@@ -24,9 +24,7 @@ export function paintDisplayMode(mode, documentRoot = document) {
   setDisplayModeState(mode);
 
   const provider = nameplateProvider(mode);
-  const tag = chassis.querySelector('[data-chassis-role="active-provider-tag"]');
   const nameplate = chassis.querySelector('[data-chassis-role="nameplate"]');
-  if (tag) tag.textContent = provider.toUpperCase();
   if (nameplate && nameplate.contentEditable !== "true") {
     nameplate.textContent = state.providers[provider].nameplateLabel ?? "—";
   }

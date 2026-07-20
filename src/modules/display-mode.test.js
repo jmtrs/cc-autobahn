@@ -6,11 +6,9 @@ import { state } from "./telemetry-state.js";
 
 function fixture() {
   const nameplate = { textContent: "", contentEditable: "false" };
-  const tag = { textContent: "" };
   const chassis = {
     dataset: {},
     querySelector(selector) {
-      if (selector.includes("active-provider-tag")) return tag;
       if (selector.includes("nameplate")) return nameplate;
       return null;
     },
@@ -24,7 +22,6 @@ function fixture() {
     chassis,
     roots,
     nameplate,
-    tag,
     documentRoot: {
       querySelector: () => chassis,
       querySelectorAll: () => roots,
@@ -41,7 +38,6 @@ test("three display modes preserve mounted roots and only change visibility", ()
 
   paintDisplayMode("codex", ui.documentRoot);
   assert.deepEqual(ui.roots.map((root) => root.hidden), [true, false]);
-  assert.equal(ui.tag.textContent, "CODEX");
   assert.equal(ui.nameplate.textContent, "—");
 
   paintDisplayMode("both", ui.documentRoot);

@@ -168,7 +168,6 @@ try {
         return {
           activePages: activePages.map((element) => Number(element.dataset.page)),
           label: document.getElementById("page-label").textContent,
-          activeProvider: document.querySelector('[data-chassis-role="active-provider-tag"]')?.textContent,
           nameplate: document.querySelector('[data-chassis-role="nameplate"]')?.textContent,
           currentPage: Number(cluster.dataset.currentPage),
           visibleProviders: visibleModules.map((element) => element.dataset.providerModule),
@@ -193,12 +192,10 @@ try {
 
       const expectedSize = [scenario.viewport.width, scenario.viewport.height];
       const expectedActive = Array(index === 3 ? 1 : scenario.providers.length).fill(index);
-      const expectedProvider = scenario.providers.at(-1).toUpperCase();
       const expectedNameplate = scenario.providers.at(-1) === "codex" ? "GPT 5.6 SOL" : "CC 500";
       if (
         layout.currentPage !== index ||
         layout.label !== expectedLabel ||
-        layout.activeProvider !== expectedProvider ||
         layout.nameplate !== expectedNameplate ||
         JSON.stringify(layout.activePages) !== JSON.stringify(expectedActive)
       ) {

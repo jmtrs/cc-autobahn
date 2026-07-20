@@ -87,8 +87,6 @@ export function setGear(models, view = claudeView, activity = {}) {
   local.currentModelKey = modelKey;
   local.currentModelEditable = editable;
   const nameplateEl = view.chassisElement("nameplate");
-  const providerTag = view.chassisElement("active-provider-tag");
-  if (accepted.globalAccepted && providerTag) providerTag.textContent = view.provider.toUpperCase();
   // Don't overwrite mid-edit — the user is typing (D-review: a live model
   // tick landing while editing would clobber the in-progress text).
   if (accepted.globalAccepted && nameplateEl && nameplateEl.contentEditable !== "true") {
