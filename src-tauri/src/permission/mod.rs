@@ -346,9 +346,12 @@ pub(crate) fn matched_field(tool_name: &str, input: &serde_json::Value) -> Optio
 /// `.sensor-body`'s CSS already scrolls/wraps a bounded panel, and
 /// `MAX_REQUEST_BYTES` already bounds worst-case size at the wire layer, so
 /// cutting the text here only threw away information a human needs to
-/// actually decide whether to approve.
+/// actually decide whether to approve. Tools with no mapped field (below or
+/// in `matched_field`) fall back to the raw JSON — acceptable for a flat
+/// object, but `AskUserQuestion`'s nested `questions[]` shape is unreadable
+/// that way, hence its own case.
 fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
-    let field = match tool_name {
+    let string_field = match tool_name {
         "Bash" => input.get("command"),
         "apply_patch" | "Edit" | "Write" => input
             .get("patch")
@@ -359,11 +362,29 @@ fn summarize_tool_input(tool_name: &str, input: &serde_json::Value) -> String {
             .or_else(|| input.get("query"))
             .or_else(|| input.get("path"))
             .or_else(|| input.get("url")),
-    };
-    field
-        .and_then(|value| value.as_str())
-        .map(str::to_string)
+    }
+    .and_then(|value| value.as_str())
+    .map(str::to_string);
+
+    string_field
+        .or_else(|| {
+            (tool_name == "AskUserQuestion")
+                .then(|| summarize_questions(input))
+                .flatten()
+        })
         .unwrap_or_else(|| input.to_string())
+}
+
+/// First question's text, with a `(+N more)` suffix when the tool asked
+/// several at once — matches how the gate already shows one thing to decide
+/// on plus a pending count, not the full nested `questions[]` array.
+fn summarize_questions(input: &serde_json::Value) -> Option<String> {
+    let questions = input.get("questions")?.as_array()?;
+    let first = questions.first()?.get("question")?.as_str()?;
+    Some(match questions.len() {
+        1 => first.to_string(),
+        n => format!("{first} (+{} more)", n - 1),
+    })
 }
 
 fn local_always_allow_match(request: &HookRequest) -> Option<String> {
@@ -1386,5 +1407,47 @@ mod tests {
         assert!(bind_listener(&path).is_err());
         assert_eq!(std::fs::read(&path).unwrap(), b"keep me");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn summarize_tool_input_shows_first_question_only() {
+        let input = serde_json::json!({
+            "questions": [
+                { "question": "Which library?", "header": "Lib", "options": [] }
+            ]
+        });
+        assert_eq!(
+            summarize_tool_input("AskUserQuestion", &input),
+            "Which library?"
+        );
+    }
+
+    #[test]
+    fn summarize_tool_input_counts_extra_questions() {
+        let input = serde_json::json!({
+            "questions": [
+                { "question": "Which library?", "header": "Lib", "options": [] },
+                { "question": "Which approach?", "header": "Approach", "options": [] }
+            ]
+        });
+        assert_eq!(
+            summarize_tool_input("AskUserQuestion", &input),
+            "Which library? (+1 more)"
+        );
+    }
+
+    #[test]
+    fn summarize_tool_input_falls_back_to_raw_json_for_truly_unmapped_shapes() {
+        let input = serde_json::json!({ "arbitrary": "field" });
+        assert_eq!(
+            summarize_tool_input("mcp__weird__tool", &input),
+            input.to_string()
+        );
+    }
+
+    #[test]
+    fn summarize_tool_input_still_matches_known_flat_fields() {
+        let input = serde_json::json!({ "command": "npm run build" });
+        assert_eq!(summarize_tool_input("Bash", &input), "npm run build");
     }
 }
