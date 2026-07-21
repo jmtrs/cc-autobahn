@@ -603,7 +603,7 @@ mod tests {
         perms.set_mode(0o755);
         std::fs::set_permissions(&codex, perms).unwrap();
 
-        let found = probe_codex_in(&[dir.clone()]);
+        let found = probe_codex_in(std::slice::from_ref(&dir));
         assert_eq!(found.len(), 1, "exactly one codex diagnostic expected");
         assert_eq!(found[0].surface, "Codex CLI");
         assert_eq!(
@@ -615,7 +615,7 @@ mod tests {
         perms.set_mode(0o644);
         std::fs::set_permissions(&codex, perms).unwrap();
         assert!(
-            probe_codex_in(&[dir.clone()]).is_empty(),
+            probe_codex_in(std::slice::from_ref(&dir)).is_empty(),
             "a non-executable file named codex must not be reported as a runtime"
         );
 
