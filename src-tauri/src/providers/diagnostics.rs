@@ -314,7 +314,7 @@ fn permission_diagnostics(
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn related_codex_runtimes() -> Vec<RuntimeDiagnostic> {
+pub(super) fn related_codex_runtimes(_path: Option<&str>) -> Vec<RuntimeDiagnostic> {
     [
         ("ChatGPT desktop", "/Applications/ChatGPT.app"),
         ("Codex desktop (compatibility)", "/Applications/Codex.app"),
@@ -340,20 +340,22 @@ pub(super) fn related_codex_runtimes() -> Vec<RuntimeDiagnostic> {
     .collect()
 }
 
-/// Linux: probe `$PATH` plus the common install locations for a `codex`
+/// Linux: probe the app's hardened PATH plus common install locations for `codex`
 /// executable and report each unique one with its `--version`. No `.app`
 /// bundles or `plutil` on Linux — the CLI is the only surface (D54).
 #[cfg(not(target_os = "macos"))]
-pub(super) fn related_codex_runtimes() -> Vec<RuntimeDiagnostic> {
-    probe_codex_in(&codex_search_dirs())
+pub(super) fn related_codex_runtimes(path: Option<&str>) -> Vec<RuntimeDiagnostic> {
+    probe_codex_in(&codex_search_dirs(path))
 }
 
-/// Builds the search directory list from `$PATH` plus common Linux install
+/// Builds the search directory list from the supplied PATH plus common Linux install
 /// locations. Separate from the probe so the probe stays pure and testable.
 #[cfg(not(target_os = "macos"))]
-fn codex_search_dirs() -> Vec<PathBuf> {
+fn codex_search_dirs(path: Option<&str>) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Some(path) = crate::env_lock::var_os("PATH") {
+    if let Some(path) = path {
+        dirs.extend(std::env::split_paths(path));
+    } else if let Some(path) = crate::env_lock::var_os("PATH") {
         dirs.extend(std::env::split_paths(&path));
     }
     if let Some(home) = crate::env_lock::var_os("HOME") {
@@ -382,7 +384,7 @@ fn probe_codex_in(search_dirs: &[PathBuf]) -> Vec<RuntimeDiagnostic> {
     let mut out: Vec<RuntimeDiagnostic> = Vec::new();
     for dir in search_dirs {
         let candidate = dir.join("codex");
-        if !candidate.is_file() {
+        if !is_executable_file(&candidate) {
             continue;
         }
         let canonical = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
@@ -397,6 +399,18 @@ fn probe_codex_in(search_dirs: &[PathBuf]) -> Vec<RuntimeDiagnostic> {
         });
     }
     out
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(all(not(unix), not(target_os = "macos")))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[cfg(target_os = "macos")]
@@ -595,6 +609,14 @@ mod tests {
         assert_eq!(
             found[0].runtime_version.as_deref(),
             Some("codex 0.0.0-test"),
+        );
+
+        let mut perms = std::fs::metadata(&codex).unwrap().permissions();
+        perms.set_mode(0o644);
+        std::fs::set_permissions(&codex, perms).unwrap();
+        assert!(
+            probe_codex_in(&[dir.clone()]).is_empty(),
+            "a non-executable file named codex must not be reported as a runtime"
         );
 
         std::fs::remove_dir_all(&dir).ok();

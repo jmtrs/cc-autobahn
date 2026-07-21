@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
   AppStream metadata for cc-autobahn. Installed to /usr/share/metainfo/ by
-  the Debian bundle (bundle.linux.deb.files) so software centers (GNOME
-  Software, KDE Discover) can present the app. The desktop-id must match the
-  generated .desktop filename basename (D59).
+  the Debian, RPM, and AppImage bundles so software centers and AppImage
+  integration tools can present the app. The launchable
+  desktop-id must match the .desktop basename Tauri generates from
+  productName ("cc-autobahn"), NOT the rDNS component id below (D59).
 -->
 <component type="desktop-application">
   <id>com.jmtrs.cc-autobahn</id>
@@ -19,7 +20,7 @@
       model selection.
     </p>
   </description>
-  <launchable type="desktop-id">com.jmtrs.cc-autobahn.desktop</launchable>
+  <launchable type="desktop-id">cc-autobahn.desktop</launchable>
   <provides>
     <binary>cc-autobahn</binary>
   </provides>

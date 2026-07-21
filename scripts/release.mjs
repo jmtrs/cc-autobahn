@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 // One-command release (D35): bumps the version in every file that carries it
-// (package.json, src-tauri/tauri.conf.json, src-tauri/Cargo.toml, Cargo.lock),
+// (npm manifests, Tauri config/Cargo files, and AppStream metadata),
 // runs the backend tests, commits, tags `vX.Y.Z` and pushes. The tag triggers
 // .github/workflows/release.yml, which re-runs the tests, builds the unsigned
-// universal dmg, publishes the GitHub Release and updates the Homebrew cask
-// (jmtrs/homebrew-tap).
+// universal dmg into a draft; Linux CI validates and attaches its bundles,
+// publishes the complete release, then updates the Homebrew cask.
 //
 // Usage: node scripts/release.mjs <patch|minor|major|X.Y.Z>
 
@@ -48,12 +48,23 @@ if (out('git', ['ls-remote', '--tags', 'origin', `v${next}`])) fail(`tag v${next
 console.log(`release: ${current} → ${next} — running backend tests first…`);
 run('cargo', ['test', '--manifest-path', 'src-tauri/Cargo.toml', '--quiet']);
 
-// --- bump the four files --------------------------------------------------------
+// --- bump every published version source ---------------------------------------
+const releaseDate = new Date().toISOString().slice(0, 10);
 const edits = [
   ['package.json', /"version": "[^"]+"/, `"version": "${next}"`],
+  [
+    'package-lock.json',
+    /("name": "cc-autobahn",\n\s+"version": ")[^"]+"/g,
+    `$1${next}"`,
+  ],
   ['src-tauri/tauri.conf.json', /"version": "[^"]+"/, `"version": "${next}"`],
   ['src-tauri/Cargo.toml', /^version = "[^"]+"/m, `version = "${next}"`],
   ['src-tauri/Cargo.lock', /(name = "cc-autobahn"\nversion = ")[^"]+"/, `$1${next}"`],
+  [
+    'src-tauri/templates/com.jmtrs.cc-autobahn.metainfo.xml',
+    /  <releases>\n/,
+    `  <releases>\n    <release version="${next}" date="${releaseDate}">\n      <description>\n        <p>See the ${next} release notes for changes.</p>\n      </description>\n    </release>\n`,
+  ],
 ];
 for (const [file, re, replacement] of edits) {
   const before = readFileSync(file, 'utf8');

@@ -1,7 +1,8 @@
 # CC Autobahn
 
 > A **Mercedes W203 instrument cluster** for Claude Code and Codex usage.
-> It lives as a menu-bar/tray icon on **macOS and Linux**: left click shows/hides a frameless,
+> It lives as a menu-bar/tray icon on **macOS and Linux**: a click toggles it on macOS;
+> Linux exposes an explicit show/hide action in the right-click tray menu. The panel is frameless,
 > transparent, *always-on-top* panel anchored under the icon by default, with the amber
 > dot-matrix VFD display: `tok/s` per response, remaining 5h window autonomy,
 > cost, and active model.
@@ -58,15 +59,19 @@ Download the package for your distro from the
 ```sh
 # Debian/Ubuntu (.deb)
 sudo apt install ./cc-autobahn_<version>_amd64.deb
-# Fedora/SUSE (.rpm)
+# Fedora (.rpm)
 sudo dnf install cc-autobahn-<version>.x86_64.rpm
-# Any distro (.AppImage, portable, no install)
+# openSUSE: use the AppImage until a native SUSE RPM is built and tested
+# Portable fallback (.AppImage, x86_64, no install)
 chmod +x cc-autobahn_<version>_amd64.AppImage && ./cc-autobahn_<version>_amd64.AppImage
 ```
 
-Runtime dependencies (`libwebkit2gtk-4.1`, `libayatana-appindicator3`,
-`libgtk-3`) are declared on the `.deb`/`.rpm` and installed automatically;
-AppImage bundles its own.
+Runtime dependencies and the `bash`/`curl`/`unzip` tools used by automatic Bun
+installation are declared on the `.deb`/`.rpm` and installed automatically.
+The AppImage bundles application libraries; automatic Bun installation still
+requires `bash`, `curl` and `unzip` on the host.
+Launching the desktop entry again reopens the existing tray process; it does
+not start duplicate sensors or create a second icon.
 
 **Linux requirements (declared preconditions, not bugs — D57):**
 
@@ -76,6 +81,9 @@ AppImage bundles its own.
 - A **compositing window manager** for the transparent panel (Mutter/KWin/wlroots,
   or `picom`/`compton` on bare WMs like i3/openbox). Without a compositor the
   panel renders with a black background — still functional, no longer floating.
+- Under native **Wayland**, the compositor owns window placement: manual drag
+  coordinates and tray anchoring are intentionally not persisted. X11/XWayland
+  sessions retain anchoring, reset and drag-position persistence.
 
 Unlike macOS, the Linux panel does **not** follow you across virtual desktops or
 float over fullscreen apps (X11/Wayland have no equivalent of the macOS

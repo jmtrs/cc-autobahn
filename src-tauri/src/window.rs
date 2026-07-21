@@ -85,43 +85,51 @@ pub fn set_display_mode(
     let window = app
         .get_webview_window("cluster")
         .ok_or_else(|| "cluster window is unavailable".to_string())?;
-    let current = window
-        .outer_position()
-        .map_err(|error| format!("read window position: {error}"))?;
     let previous_size = window
         .outer_size()
         .map_err(|error| format!("read window size: {error}"))?;
-    let previous_scale = window
-        .scale_factor()
-        .map_err(|error| format!("read window scale: {error}"))?;
+    let previous_placement = if platform_positioning_supported() {
+        Some((
+            window
+                .outer_position()
+                .map_err(|error| format!("read window position: {error}"))?,
+            window
+                .scale_factor()
+                .map_err(|error| format!("read window scale: {error}"))?,
+        ))
+    } else {
+        None
+    };
     let (width, height) = display_mode_size(mode);
     window
         .set_size(LogicalSize::new(width, height))
         .map_err(|error| format!("resize window: {error}"))?;
-    if let Err(error) = position_at(
-        &window,
-        f64::from(current.x),
-        f64::from(current.y),
-        &auto_guard,
-    ) {
-        let size_rollback = window.set_size(previous_size);
-        let position_rollback = set_top_left(
+    if let Some((current, previous_scale)) = previous_placement {
+        if let Err(error) = position_at(
             &window,
             f64::from(current.x),
             f64::from(current.y),
-            previous_scale,
-        );
-        return match (size_rollback, position_rollback) {
-            (Ok(()), Ok(())) => Err(error),
-            (size_result, position_result) => Err(format!(
-                "{error}; rollback failed (size: {}; position: {})",
-                size_result
-                    .err()
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "ok".into()),
-                position_result.err().unwrap_or_else(|| "ok".into())
-            )),
-        };
+            &auto_guard,
+        ) {
+            let size_rollback = window.set_size(previous_size);
+            let position_rollback = set_top_left(
+                &window,
+                f64::from(current.x),
+                f64::from(current.y),
+                previous_scale,
+            );
+            return match (size_rollback, position_rollback) {
+                (Ok(()), Ok(())) => Err(error),
+                (size_result, position_result) => Err(format!(
+                    "{error}; rollback failed (size: {}; position: {})",
+                    size_result
+                        .err()
+                        .map(|value| value.to_string())
+                        .unwrap_or_else(|| "ok".into()),
+                    position_result.err().unwrap_or_else(|| "ok".into())
+                )),
+            };
+        }
     }
     Ok(())
 }
@@ -460,12 +468,17 @@ pub fn wire(
             *lock(&blur_flag) = Some(Instant::now());
             // Flush the drag override so the final position survives even if
             // the last few Moved events were skipped by the write throttle.
-            if let Some((x, y)) = *lock(&position_for_move) {
-                save_position(&app_handle, x, y);
+            if platform_positioning_supported() {
+                if let Some((x, y)) = *lock(&position_for_move) {
+                    save_position(&app_handle, x, y);
+                }
             }
             let _ = hide_window.hide();
         }
         WindowEvent::Moved(pos) => {
+            if !platform_positioning_supported() {
+                return;
+            }
             // A reposition triggered by `position_under_tray`/`position_at`
             // also fires `Moved` — within the guard window it's an echo of
             // that, not a real drag, so it must not overwrite the override.
@@ -660,6 +673,9 @@ pub fn position_at(
     y: f64,
     auto_guard: &AutoRepositionGuard,
 ) -> Result<bool, String> {
+    if !platform_positioning_supported() {
+        return Err("window positioning is unavailable in a native Wayland session".into());
+    }
     let win_size = window
         .outer_size()
         .map_err(|error| format!("read window size: {error}"))?;
@@ -735,6 +751,12 @@ pub fn position_saved_or_under_tray(
     position_state: &PositionState,
     auto_guard: &AutoRepositionGuard,
 ) {
+    // Native Wayland deliberately lets the compositor choose the position.
+    // set_position is unsupported there, and persisting compositor-reported
+    // coordinates would create a preference that can never be restored.
+    if !platform_positioning_supported() {
+        return;
+    }
     if let Some((x, y)) = saved {
         match position_at(window, x, y, auto_guard) {
             Ok(true) => return,
@@ -818,6 +840,27 @@ fn set_top_left(window: &WebviewWindow, x: f64, y: f64, _scale: f64) -> Result<(
     window
         .set_position(PhysicalPosition::new(x as i32, y as i32))
         .map_err(|error| format!("set window position: {error}"))
+}
+
+#[cfg(target_os = "linux")]
+fn platform_positioning_supported() -> bool {
+    if let Some(backend) = crate::env_lock::var_os("GDK_BACKEND") {
+        let backend = backend.to_string_lossy().to_ascii_lowercase();
+        if backend.split(',').next() == Some("x11") {
+            return true;
+        }
+        if backend.split(',').next() == Some("wayland") {
+            return false;
+        }
+    }
+    !crate::env_lock::var_os("XDG_SESSION_TYPE")
+        .is_some_and(|value| value.to_string_lossy().eq_ignore_ascii_case("wayland"))
+        && crate::env_lock::var_os("WAYLAND_DISPLAY").is_none()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn platform_positioning_supported() -> bool {
+    true
 }
 
 #[cfg(test)]

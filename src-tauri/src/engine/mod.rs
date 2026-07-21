@@ -117,12 +117,24 @@ fn on_path(bin: &str, path: Option<&str>) -> bool {
     for dir in std::env::split_paths(path) {
         for ext in exts {
             let candidate = dir.join(format!("{bin}{ext}"));
-            if candidate.is_file() {
+            if is_executable_file(&candidate) {
                 return true;
             }
         }
     }
     false
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &std::path::Path) -> bool {
+    path.is_file()
 }
 
 /// `#[tauri::command]` Is an engine available RIGHT NOW? Used to render the

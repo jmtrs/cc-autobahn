@@ -98,7 +98,7 @@ Implementation order, one layer at a time, verifying before moving forward.
       `TrayIconEvent::rect`, clamped against screen edges).
 - [x] Hide-on-blur (`WindowEvent::Focused(false)`) + 300 ms anti-race guard
       (closing by clicking the icon doesn't reopen it).
-- [x] Context menu (right click) with "Quit cc-autobahn".
+- [x] Tray menu with "Show / hide", "Reset position", and "Quit CC Autobahn".
 - [x] `data-tauri-drag-region` removed and capabilities initially trimmed to
       `core:default`/`core:event:default`. D41 later restored controlled
       dragging and `core:window:allow-start-dragging` in Phase 7.

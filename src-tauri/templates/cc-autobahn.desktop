@@ -5,7 +5,6 @@ Icon={{icon}}
 Name={{name}}
 Categories={{categories}}
 Terminal=false
-NoDisplay=true
 Keywords=Claude;Codex;tokens;usage;dashboard;telemetry;
 {{#if comment}}
 Comment={{comment}}

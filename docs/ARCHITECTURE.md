@@ -105,12 +105,12 @@ Responsible for **all I/O**. Never blocks the UI.
   (`ActivationPolicy::Accessory`). The icon itself **is not a static PNG**: it's
   a progress ring (% of the remaining 5h window) redrawn at runtime pixel by
   pixel by `tray_icon.rs`, updated from `engine::start` and `sensor::start` on
-  each new data point (D30). Left click shows/hides the panel, anchored right
-  below the icon (position computed from `TrayIconEvent::rect` via
-  `window::position_under_tray`); clicking outside hides it (hide-on-blur via
+  each new data point (D30). On macOS, left click shows/hides the panel anchored
+  below the icon; on Linux the right-click menu supplies the toggle because
+  Tauri emits no tray events there. Clicking outside hides it (hide-on-blur via
   `WindowEvent::Focused(false)` in `window::wire`, with a 300 ms anti-race guard
-  in `tray.rs`, except when the PIN button is active, D26); right click
-  opens a menu with "Reset position" and "Quit cc-autobahn". The window itself remains frameless, transparent
+  in `tray.rs`, except when the PIN button is active, D26). The menu contains
+  "Show / hide", "Reset position", and "Quit CC Autobahn". The window itself remains frameless, transparent
   (requires `macOSPrivateApi`, D14), `alwaysOnTop`, with native rounded
   corners via `CALayer` (D25). D41 restored dragging from the header and
   model-selector zones; `window-position.json` stores a manual override,

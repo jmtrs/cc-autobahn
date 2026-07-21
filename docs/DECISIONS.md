@@ -713,12 +713,12 @@ and its binary checked out as a real universal fat file (`x86_64 arm64`).
 
 **Decision**: releasing is `npm run release -- <patch|minor|major|X.Y.Z>`
 (`scripts/release.mjs`). It refuses a dirty tree / non-main branch / existing
-tag, runs `cargo test` as a local gate, bumps the version in the four files
-that carry it (`package.json`, `tauri.conf.json`, `Cargo.toml`, `Cargo.lock`)
-so they can't drift, then commits, tags and pushes. From the tag,
-`release.yml` re-gates on tests, builds the unsigned universal dmg,
-**publishes** the GitHub Release (no longer a draft — the cask's download URL
-must be live when the tap update lands, unlike D34's original draft flow) and
+tag, runs `cargo test` as a local gate, bumps both npm manifests plus the
+Tauri/Cargo versions, and prepends a dated AppStream release entry so they
+cannot drift, then commits, tags and pushes. From the tag,
+`release.yml` re-gates on tests, builds and validates Linux first as the cheaper
+failure gate, then builds the unsigned universal dmg into a draft, attaches the
+stored Linux bundles, publishes the complete release, and
 updates the cask in the **existing** `jmtrs/homebrew-tap` repo
 (`Casks/cc-autobahn.rb`, same tap as `no-coauthor`) via the
 `HOMEBREW_TAP_TOKEN` secret — the same PAT pattern no-coAuthor's workflow
@@ -734,7 +734,7 @@ stanza (Homebrew ≥ 5 quarantines all casks; `--no-quarantine` is gone).
 
 **Verified**: `brew fetch --cask jmtrs/tap/cc-autobahn` green on v0.1.0
 (downloads the dmg and validates the sha256); `scripts/release.mjs` syntax
-checked and its four version-bump regexes matched against the real files. The
+checked and its version/AppStream regexes matched against the real files. The
 cask-update step itself first runs on the next tag.
 
 ## D36 — Finder-launch PATH hardening, non-blocking Bun install, self-healing statusline copy
@@ -1684,8 +1684,10 @@ macOS-only AppKit concept.
 
 **Decision**: leave the call `#[cfg(target_os = "macos")]`-gated (no Linux
 branch). On Linux the "no taskbar entry" outcome comes from the already-set
-`skipTaskbar: true` in `tauri.conf.json` plus `NoDisplay=true` in the generated
-`.desktop` file (D59). No Rust change.
+`skipTaskbar: true` in `tauri.conf.json`. The generated `.desktop` remains
+visible as a recovery launch path when the desktop has no usable tray (D59).
+The official single-instance plugin is registered first; a relaunch asks the
+existing process to show its panel instead of duplicating tray/provider state.
 
 ## D57 — Panel positioning and feature-parity gaps on Linux
 
@@ -1696,15 +1698,12 @@ X11/Wayland. AppIndicator also does not expose tray-icon screen geometry back to
 the app, so `tray.rect()` returns `None` on Linux and the panel cannot anchor
 exactly under the tray icon.
 
-**Decision**: no Rust change — the existing fallback chain already handles Linux
-correctly. `show_panel`'s `not(macos)` branch uses `window.show()` + `set_focus()`
-(best achievable non-focus-stealing on X11/Wayland); `set_top_left`'s `not(macos)`
-branch uses tao's `set_position` (no Y-axis flip bug there); CSS `border-radius`
-clips the corners under WebKitGTK (no CALayer needed); and when `valid_tray_rect`
-returns `None`, positioning falls back to the last observed click
-(`TrayAnchorState`) then to the top-right of the primary work area
-(`position_at_menu_bar_fallback`). `configure_fullscreen_panel` compiles out
-entirely.
+**Decision**: `show_panel`'s `not(macos)` branch uses `window.show()` +
+`set_focus()`. X11 uses tao's `set_position`; when `valid_tray_rect` returns
+`None`, it falls back to the last observed click then the primary work area's
+top-right. Native Wayland forbids application-controlled placement, so runtime
+detection skips anchoring and drag-coordinate persistence instead of pretending
+the operation succeeded. `configure_fullscreen_panel` compiles out entirely.
 
 **Consequence — declared parity gaps, not bugs**: on Linux the panel does **not**
 follow the user across virtual desktops and does **not** float over fullscreen
@@ -1743,22 +1742,24 @@ existing tag-triggered release pipeline.
 **Decision**: `bundle.linux` in `tauri.conf.json` declares runtime deps so the
 package managers enforce them — `deb.depends` (`libwebkit2gtk-4.1-0`,
 `libayatana-appindicator3-1`, `libgtk-3-0`), `rpm.depends` (`webkit2gtk4.1`,
-`libappindicator-gtk3`, `gtk3`). Three formats cover the distro space: `.deb`
-(Debian/Ubuntu), `.rpm` (Fedora/SUSE), `.AppImage` (single-file universal, any
-distro). A Handlebars `desktopTemplate` sets `NoDisplay=true` (the app lives in
-the tray, not the launcher), `Terminal=false`, and Claude/Codex/tokens keywords.
+`libappindicator-gtk3`, `gtk3`), plus `bash`/`curl`/`unzip` for Bun installation. Three
+formats cover the supported paths: `.deb` (Debian/Ubuntu), `.rpm` (Fedora), and
+`.AppImage` (portable fallback, including openSUSE until a native RPM is tested).
+A Handlebars `desktopTemplate` keeps `Terminal=false` and adds Claude/Codex/tokens
+keywords. The entry remains visible so users can recover if the tray is absent.
 AppStream metadata (`com.jmtrs.cc-autobahn.metainfo.xml`) is installed to
-`/usr/share/metainfo/` via `deb.files` so software centers present the app.
+`/usr/share/metainfo/` in all three bundles so software centers and AppImage
+integration tools can present the app.
 
-**Release pipeline**: a parallel `release-linux` job (Ubuntu 22.04) builds all
-three formats with `tauri-apps/tauri-action@v0` and publishes them to the same
-GitHub Release as the macOS job. To defend against `tauri-apps/tauri-action#973`
-(where the Ubuntu runner sometimes uploads only `.deb`), an explicit
-`actions/upload-artifact@v4` step also uploads `bundle/{deb,rpm,appimage}/` as
-recoverable workflow artifacts.
+**Release pipeline**: `release-linux` (Ubuntu 22.04) runs first, builds all three
+formats, validates dependencies, contents, desktop entry and AppStream metadata,
+then stores them with `actions/upload-artifact`. Only after that cheaper gate
+passes does `release-macos` build the dmg, create a draft, attach the validated
+Linux files with `gh release upload`, verify all four assets and publish. This
+avoids partial releases and the upload path in `tauri-apps/tauri-action#973`.
 
-**Follow-up**: the AppStream `desktop-id` may need to match the actual generated
-`.desktop` filename after the first real Linux build — verify at release time.
+**Verification**: Linux CI now builds all three bundles, inspects package
+contents/dependencies, and validates both the desktop entry and AppStream XML.
 
 ## D60 — Verification matrix: sign off per distro, not "should work"
 
@@ -1768,12 +1769,12 @@ desktop. "Compiles and tests pass" is not "works."
 **Decision**: automated per-PR checks (fmt/clippy/test/build) run on both macOS
 and Ubuntu. UX verification is a documented, per-release smoke matrix performed
 manually (or via an Xvfb container for liveness only): Ubuntu 24.04 GNOME 46 with
-and without the AppIndicator extension, Fedora 41 KDE/KWin (SNI tray, a different
+and without the AppIndicator extension, Fedora 43 KDE/KWin (SNI tray, a different
 code path than AppIndicator), Arch i3 with and without `picom`, Debian 12 GNOME,
 openSUSE Tumbleweed KDE. Each row verifies the tray icon renders amber, the ring
 redraws, the alert/permission blinks, panel show/hide, drag persistence,
 hide-on-blur, PIN, the permission gate over the Unix socket, and the native
-package install with `NoDisplay`. The AppImage is run on top of every row. Linux
+package install and visible launcher recovery. The AppImage is run on top of every row. Linux
 support is not announced until each row is signed off.
 
 ## D61 — Deferred (open follow-ups, recorded so they are not forgotten)
@@ -1781,9 +1782,9 @@ support is not announced until each row is signed off.
 **Decision**: the following are explicitly out of scope for the first Linux
 release and tracked here:
 
-- **aarch64 Linux**: only `x86_64-unknown-linux-gnu` builds in CI. AppImage runs
-  on aarch64 via binfmt emulation on most distros; a native aarch64 cross-build
-  is a separate effort.
+- **aarch64 Linux**: only `x86_64-unknown-linux-gnu` builds in CI. That AppImage
+  does not run natively on ARM; a native build needs an ARM runner because
+  linuxdeploy does not support cross-compiling AppImages.
 - **libnotify desktop notifications**: permission requests are visual-only (the
   tray blink + the gate panel) on both platforms. A `libnotify` path on Linux is
   possible later.

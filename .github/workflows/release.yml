@@ -3,7 +3,7 @@ name: Release
 # Cut a release locally with `npm run release -- <patch|minor|major|X.Y.Z>`
 # (scripts/release.mjs). It bumps the version everywhere, tags and pushes;
 # the pushed `v*` tag triggers this workflow: backend tests → unsigned
-# universal macOS build → published GitHub Release → Homebrew cask bump
+# validated Linux bundles → universal macOS build → published Release → cask bump
 # (jmtrs/homebrew-tap). The cask step needs the HOMEBREW_TAP_TOKEN secret
 # (same PAT pattern as jmtrs/no-coAuthor) and skips gracefully without it.
 on:
@@ -14,11 +14,15 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  # Never let two attempts mutate the same tag's release concurrently.
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release-macos:
+    needs: release-linux
     runs-on: macos-latest
-    env:
-      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +43,20 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci
 
-      - uses: tauri-apps/tauri-action@v0
+      - name: Select release state for safe re-runs
+        id: release-state
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if DRAFT=$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq '.isDraft' 2>/dev/null); then
+            echo "draft=$DRAFT" >> "$GITHUB_OUTPUT"
+          else
+            echo 'draft=true' >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -60,56 +77,49 @@ jobs:
             ## Linux (x86_64)
 
             - `.deb` (Debian/Ubuntu): `sudo apt install ./cc-autobahn_<v>_amd64.deb`
-            - `.rpm` (Fedora/SUSE): `sudo dnf install cc-autobahn-<v>.x86_64.rpm`
-            - `.AppImage` (any distro): `chmod +x` and run — portable, no install
+            - `.rpm` (Fedora): `sudo dnf install cc-autobahn-<v>.x86_64.rpm`
+            - openSUSE: use the `.AppImage` until a native SUSE RPM is built and tested
+            - `.AppImage` (portable x86_64 fallback): `chmod +x` and run — no install
 
-            Runtime deps (`libwebkit2gtk-4.1`, `libayatana-appindicator3`, `libgtk-3`)
-            are declared on the `.deb`/`.rpm`; AppImage bundles its own. Tray
+            Runtime deps, plus `bash`, `curl` and `unzip` for automatic Bun installation,
+            are declared on the `.deb`/`.rpm`; AppImage users need those three
+            host tools only for automatic Bun installation. Tray
             requires a tray-supporting desktop (AppIndicator extension on GNOME);
             the transparent panel requires a compositing WM (Mutter/KWin/wlroots/picom).
-          releaseDraft: false
+          # Must match an existing release. New/partial releases stay drafts;
+          # a full workflow re-run after publication remains idempotent.
+          releaseDraft: ${{ steps.release-state.outputs.draft }}
           prerelease: false
           args: --target universal-apple-darwin
 
-      - name: Update Homebrew cask
-        if: env.HOMEBREW_TAP_TOKEN != ''
-        continue-on-error: true # best-effort: a failed cask bump must not block release-linux (needs: this job)
+      - name: Download validated Linux bundles
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-bundles
+          path: linux-bundles
+
+      - name: Attach Linux bundles and publish the complete release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          set -eu
-          VERSION="${GITHUB_REF_NAME#v}"
-          DMG="cc-autobahn_${VERSION}_universal.dmg"
-          URL="https://github.com/jmtrs/cc-autobahn/releases/download/${GITHUB_REF_NAME}/${DMG}"
-
-          # The release was just published; the asset CDN can lag a few
-          # seconds, so retry briefly (same pattern as jmtrs/no-coAuthor).
-          for i in 1 2 3 4 5 6 7 8 9 10; do
-            if curl -fsSL -o /tmp/ccab.dmg "$URL"; then break; fi
-            sleep 5
-          done
-          SHA256=$(shasum -a 256 /tmp/ccab.dmg | cut -d' ' -f1)
-
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/jmtrs/homebrew-tap.git" /tmp/homebrew-tap
-          cd /tmp/homebrew-tap
-          sed -i '' -E "s#^  version \".*\"#  version \"$VERSION\"#" Casks/cc-autobahn.rb
-          sed -i '' -E "s#^  sha256 \".*\"#  sha256 \"$SHA256\"#" Casks/cc-autobahn.rb
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/cc-autobahn.rb
-          if ! git diff --cached --quiet; then
-            git commit -m "cc-autobahn v$VERSION"
-            git push
-          fi
+          set -euo pipefail
+          BUNDLES=(linux-bundles/deb/*.deb linux-bundles/rpm/*.rpm linux-bundles/appimage/*.AppImage)
+          test "${#BUNDLES[@]}" -eq 3
+          for BUNDLE in "${BUNDLES[@]}"; do test -f "$BUNDLE"; done
+          gh release upload "$GITHUB_REF_NAME" "${BUNDLES[@]}" --clobber
+          ASSETS=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name')
+          grep -qE '\.dmg$' <<<"$ASSETS"
+          grep -qE '\.deb$' <<<"$ASSETS"
+          grep -qE '\.rpm$' <<<"$ASSETS"
+          grep -qE '\.AppImage$' <<<"$ASSETS"
+          gh release edit "$GITHUB_REF_NAME" --draft=false
 
   release-linux:
-    # Builds .deb (Debian/Ubuntu), .rpm (Fedora/SUSE), and .AppImage (any
-    # distro) and uploads them to the macOS job's GitHub Release. Serialized
-    # after release-macos (needs:) so the macOS job owns release creation +
-    # body (both platforms' install notes) and this job only attaches assets —
-    # no concurrent-release race and no body overwrite. `releaseName`/`releaseBody`
-    # are intentionally omitted: with the release already existing, tauri-action
-    # just uploads assets and leaves the body untouched.
+    # Builds .deb (Debian/Ubuntu), .rpm (Fedora), and the portable .AppImage,
+    # validates them, and stores them as a workflow artifact. macOS only starts
+    # after this cheaper gate succeeds, then creates and publishes the release.
     # Native x86_64 only for v1; aarch64 cross-build is deferred (D61).
-    needs: release-macos
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -130,25 +140,20 @@ jobs:
             build-essential pkg-config \
             libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
             libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
-            libssl-dev file curl wget
+            libssl-dev file curl wget unzip rpm appstream desktop-file-utils
 
       - name: Backend tests (release gate)
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - run: npm ci
 
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseDraft: false
-          prerelease: false
+      - name: Build Linux bundles
+        run: npm run tauri build -- --bundles deb,rpm,appimage
 
-      # Guard for tauri-action#973 (sometimes only .deb is uploaded): also
-      # upload all three bundle dirs as workflow artifacts so nothing is lost
-      # if the release-upload step is incomplete. No-op if all three landed.
-      - name: Upload Linux bundles (belt-and-suspenders, #973)
+      - name: Validate Linux bundles and metadata
+        run: bash scripts/validate-linux-bundles.sh
+
+      - name: Store validated Linux bundles
         uses: actions/upload-artifact@v4
         with:
           name: linux-bundles
@@ -156,4 +161,42 @@ jobs:
             src-tauri/target/release/bundle/deb/
             src-tauri/target/release/bundle/rpm/
             src-tauri/target/release/bundle/appimage/
-          if-no-files-found: warn
+          if-no-files-found: error
+          compression-level: 0
+          # Leave enough time for queued macOS runners and manual re-runs.
+          retention-days: 3
+
+  update-homebrew:
+    needs: release-macos
+    # Updating a text cask and hashing the DMG does not require an expensive
+    # macOS runner. ubuntu-latest includes curl, git, sed, and sha256sum.
+    runs-on: ubuntu-latest
+    env:
+      HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+    steps:
+      - name: Update Homebrew cask
+        if: env.HOMEBREW_TAP_TOKEN != ''
+        continue-on-error: true
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME#v}"
+          DMG="cc-autobahn_${VERSION}_universal.dmg"
+          URL="https://github.com/jmtrs/cc-autobahn/releases/download/${GITHUB_REF_NAME}/${DMG}"
+
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -fsSL -o /tmp/ccab.dmg "$URL"; then break; fi
+            sleep 5
+          done
+          SHA256=$(sha256sum /tmp/ccab.dmg | cut -d' ' -f1)
+
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/jmtrs/homebrew-tap.git" /tmp/homebrew-tap
+          cd /tmp/homebrew-tap
+          sed -i -E "s#^  version \".*\"#  version \"$VERSION\"#" Casks/cc-autobahn.rb
+          sed -i -E "s#^  sha256 \".*\"#  sha256 \"$SHA256\"#" Casks/cc-autobahn.rb
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/cc-autobahn.rb
+          if ! git diff --cached --quiet; then
+            git commit -m "cc-autobahn v$VERSION"
+            git push
+          fi
