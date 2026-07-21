@@ -138,21 +138,48 @@ fn main() {
                 position_state.clone(),
             )?;
 
+            app.manage(tray_handle);
+
             // A direct app launch must produce visible feedback. The window is
             // declared hidden to avoid flashing before NSPanel conversion and
             // tray-relative positioning, then shown here once both are ready.
-            let saved_position = *window::lock(&position_state);
-            if let Some((x, y)) = saved_position {
-                let _ = window::position_at(&win, x, y, &auto_reposition_guard);
-            } else if let Ok(Some(rect)) = tray_handle.rect() {
-                window::position_under_tray(&win, &rect, &auto_reposition_guard);
-            }
-            window::show_panel(&win)?;
+            //
+            // This must NOT run inline in `setup()`: `setup()` executes before
+            // `Builder::run()` starts pumping the AppKit run loop, and the
+            // just-created NSStatusItem only gets its real on-screen frame
+            // during that loop's layout pass. Querying `TrayIcon::rect()`
+            // before the loop is alive returns a permanently stuck, degenerate
+            // frame (observed: origin (0,0), zero height) — and blocking this
+            // thread to retry-wait for it doesn't help, because this thread
+            // *is* the one that would otherwise pump the loop and let AppKit
+            // finish that layout pass in the first place (D-review, real bug:
+            // every cold launch anchored the panel in the bottom-left corner
+            // instead of under the icon). Deferring via `run_on_main_thread`
+            // queues this for once the loop is actually running.
+            let deferred_app = app.handle().clone();
+            let deferred_win = win.clone();
+            let deferred_position_state = position_state.clone();
+            let deferred_auto_guard = auto_reposition_guard.clone();
+            app.handle().run_on_main_thread(move || {
+                let tray = deferred_app.state::<tauri::tray::TrayIcon>();
+                let saved_position = *window::lock(&deferred_position_state);
+                let tray_rect = window::valid_tray_rect(&tray);
+                window::position_saved_or_under_tray(
+                    &deferred_app,
+                    &deferred_win,
+                    saved_position,
+                    tray_rect.as_ref(),
+                    &deferred_position_state,
+                    &deferred_auto_guard,
+                );
+                if let Err(error) = window::show_panel(&deferred_win) {
+                    eprintln!("cc-autobahn: could not show panel on launch: {error}");
+                }
+            })?;
 
             // Initial state: full ring (100%) until the first real data from
             // engine::poll or sensor::tail (D-review: tray icon as a
             // progress ring instead of a static disc with no information).
-            app.manage(tray_handle);
             tray_icon::set_progress(
                 &app.handle().clone(),
                 providers::ProviderId::Claude,

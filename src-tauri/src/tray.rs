@@ -8,7 +8,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, Tray
 use tauri::Manager;
 
 use crate::window::{
-    position_at, position_under_tray, show_panel, AutoRepositionGuard, PositionState,
+    position_saved_or_under_tray, show_panel, valid_tray_rect, AutoRepositionGuard, PositionState,
 };
 
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon-template.png");
@@ -58,9 +58,8 @@ pub fn build(
         })
         .on_tray_icon_event(move |tray, event| {
             let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                rect,
+                button,
+                button_state,
                 ..
             } = event
             else {
@@ -70,6 +69,20 @@ pub fn build(
             let Some(window) = app.get_webview_window("cluster") else {
                 return;
             };
+
+            if button == MouseButton::Right && button_state == MouseButtonState::Down {
+                // This callback runs before tray-icon's own click handling
+                // decides whether to pop the native "Reset position"/"Quit"
+                // menu, so hiding here beats it there. The panel otherwise
+                // sits above that menu (D43's NSScreenSaverWindowLevel is
+                // higher than a native context menu's level) and the menu
+                // looks like it never opened.
+                let _ = window.hide();
+                return;
+            }
+            if button != MouseButton::Left || button_state != MouseButtonState::Up {
+                return;
+            }
 
             let just_hid = crate::window::lock(&last_blur_hide)
                 .map(|t| t.elapsed() < REOPEN_GUARD)
@@ -82,11 +95,20 @@ pub fn build(
                 let _ = window.hide();
             } else {
                 let saved = *crate::window::lock(&position_state);
-                if let Some((x, y)) = saved {
-                    let _ = position_at(&window, x, y, &auto_reposition_guard);
-                } else {
-                    position_under_tray(&window, &rect, &auto_reposition_guard);
-                }
+                // Never trust the click event's own `rect`: on cold launch it
+                // can carry the NSStatusItem's degenerate initial frame. Query
+                // the live frame once and reject it if AppKit still reports an
+                // empty size. Retrying here only blocks AppKit's event loop and
+                // cannot make layout advance.
+                let fresh_rect = valid_tray_rect(tray);
+                position_saved_or_under_tray(
+                    app,
+                    &window,
+                    saved,
+                    fresh_rect.as_ref(),
+                    &position_state,
+                    &auto_reposition_guard,
+                );
                 if let Err(error) = show_panel(&window) {
                     eprintln!("cc-autobahn: could not show tray panel: {error}");
                 }

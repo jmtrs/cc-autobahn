@@ -222,13 +222,17 @@ pub fn show_for_permission(app: &AppHandle) {
     };
 
     let saved = *lock(&position_state);
-    if let Some((x, y)) = saved {
-        let _ = position_at(&window, x, y, &auto_guard);
-    } else if let Some(tray) = app.try_state::<TrayIcon>() {
-        if let Ok(Some(rect)) = tray.rect() {
-            position_under_tray(&window, &rect, &auto_guard);
-        }
-    }
+    let tray_rect = app
+        .try_state::<TrayIcon>()
+        .and_then(|tray| tray.rect().ok().flatten());
+    position_saved_or_under_tray(
+        app,
+        &window,
+        saved,
+        tray_rect.as_ref(),
+        &position_state,
+        &auto_guard,
+    );
     let _ = show_panel(&window);
 }
 
@@ -497,12 +501,20 @@ pub fn position_under_tray(
 /// Places the panel at a saved drag override (D41), clamped to whichever
 /// monitor currently contains that point — the saved spot may no longer be
 /// on screen if a monitor was disconnected since it was dragged there.
+///
+/// Returns `Ok(true)` if the point still falls inside a currently connected
+/// monitor, `Ok(false)` if it was orphaned (no monitor contains it, so it
+/// was clamped into a corner of a fallback monitor instead) — callers use
+/// that to decide whether the saved override is still trustworthy, instead
+/// of silently re-showing a stale, oddly clamped position on every launch
+/// (D-review: this is what previously made "Reset position" necessary again
+/// after every full quit/reopen once the override went stale).
 pub fn position_at(
     window: &WebviewWindow,
     x: f64,
     y: f64,
     auto_guard: &AutoRepositionGuard,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let win_size = window
         .outer_size()
         .map_err(|error| format!("read window size: {error}"))?;
@@ -513,19 +525,18 @@ pub fn position_at(
         return Err("no monitor is available for window placement".into());
     }
 
-    let host = monitors
-        .iter()
-        .find(|m| {
-            let mp = m.position();
-            let ms = m.size();
-            (mp.x as f64) <= x
-                && x <= mp.x as f64 + ms.width as f64
-                && (mp.y as f64) <= y
-                && y <= mp.y as f64 + ms.height as f64
-        })
-        // Monitor removal: clamp an orphaned saved point to the primary
-        // monitor instead of preserving an invisible coordinate forever.
-        .or_else(|| monitors.first());
+    let exact_host = monitors.iter().find(|m| {
+        let mp = m.position();
+        let ms = m.size();
+        (mp.x as f64) <= x
+            && x <= mp.x as f64 + ms.width as f64
+            && (mp.y as f64) <= y
+            && y <= mp.y as f64 + ms.height as f64
+    });
+    let orphaned = exact_host.is_none();
+    // Monitor removal: clamp an orphaned saved point to the primary monitor
+    // instead of preserving an invisible coordinate forever.
+    let host = exact_host.or_else(|| monitors.first());
     // Same reasoning as `position_under_tray`: the host monitor's own scale,
     // not the window's current one — they can differ in multi-monitor setups
     // with mixed DPI, and the window may currently be on a different screen
@@ -547,7 +558,50 @@ pub fn position_at(
     }
 
     *lock(auto_guard) = Instant::now();
-    set_top_left(window, clamped_x, clamped_y, scale)
+    set_top_left(window, clamped_x, clamped_y, scale)?;
+    Ok(!orphaned)
+}
+
+/// Reads the live tray frame once and rejects AppKit's unlaid-out initial
+/// frame. Polling from a tray/main-thread callback cannot help: sleeping there
+/// prevents the event loop from performing the layout that would change it.
+pub fn valid_tray_rect(tray: &TrayIcon) -> Option<Rect> {
+    let rect = tray.rect().ok().flatten()?;
+    let size = rect.size.to_logical::<f64>(1.0);
+    if size.width > 0.0 && size.height > 0.0 {
+        Some(rect)
+    } else {
+        eprintln!("cc-autobahn: ignoring invalid tray rect: {rect:?}");
+        None
+    }
+}
+
+/// Restores the saved drag override if it's still valid for a currently
+/// connected monitor; otherwise treats it as stale (e.g. the monitor it was
+/// dragged on got disconnected), clears it from memory and disk, and falls
+/// back to anchoring under the tray icon — self-healing instead of leaving
+/// the panel clamped into a corner on every future launch until the user
+/// notices and hits "Reset position" themselves.
+pub fn position_saved_or_under_tray(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    saved: Option<(f64, f64)>,
+    tray_rect: Option<&Rect>,
+    position_state: &PositionState,
+    auto_guard: &AutoRepositionGuard,
+) {
+    if let Some((x, y)) = saved {
+        match position_at(window, x, y, auto_guard) {
+            Ok(true) => return,
+            Ok(false) => clear_position(app, position_state),
+            Err(error) => {
+                eprintln!("cc-autobahn: could not restore saved position: {error}");
+            }
+        }
+    }
+    if let Some(rect) = tray_rect {
+        position_under_tray(window, rect, auto_guard);
+    }
 }
 
 /// Places the window's top-left corner at physical (x, y).
