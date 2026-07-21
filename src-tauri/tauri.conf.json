@@ -33,12 +33,59 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "jmtrs",
+    "homepage": "https://github.com/jmtrs/cc-autobahn",
+    "license": "MIT",
+    "licenseFile": "../LICENSE",
+    "copyright": "Copyright © 2026 jmtrs",
+    "category": "Utility",
+    "shortDescription": "Mercedes W203 instrument cluster for Claude Code and Codex usage",
+    "longDescription": "cc-autobahn is a menu-bar instrument cluster styled after the amber VFD display of the Mercedes W203, showing Claude Code and Codex token consumption (tok/s per response, cost, the 5-hour billing window, and model selection). Runs as a tray icon on macOS and Linux.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libayatana-appindicator3-1",
+          "libgtk-3-0",
+          "bash",
+          "curl",
+          "unzip"
+        ],
+        "recommends": [
+          "dbus-x11"
+        ],
+        "desktopTemplate": "./templates/cc-autobahn.desktop",
+        "files": {
+          "/usr/share/metainfo/com.jmtrs.cc-autobahn.metainfo.xml": "./templates/com.jmtrs.cc-autobahn.metainfo.xml"
+        }
+      },
+      "appimage": {
+        "bundleMediaFramework": false,
+        "files": {
+          "/usr/share/metainfo/com.jmtrs.cc-autobahn.metainfo.xml": "./templates/com.jmtrs.cc-autobahn.metainfo.xml"
+        }
+      },
+      "rpm": {
+        "depends": [
+          "webkit2gtk4.1",
+          "libappindicator-gtk3",
+          "gtk3",
+          "bash",
+          "curl",
+          "unzip"
+        ],
+        "desktopTemplate": "./templates/cc-autobahn.desktop",
+        "files": {
+          "/usr/share/metainfo/com.jmtrs.cc-autobahn.metainfo.xml": "./templates/com.jmtrs.cc-autobahn.metainfo.xml"
+        }
+      }
+    }
   }
 }

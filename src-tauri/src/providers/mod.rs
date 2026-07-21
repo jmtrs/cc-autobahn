@@ -329,12 +329,13 @@ pub async fn provider_diagnostics_snapshot(app: AppHandle) -> Vec<ProviderDiagno
         codex.permission_hook.as_ref(),
         activity.as_ref(),
     );
+    let path = crate::path_state::get(&app.state::<crate::path_state::PathState>());
     tauri::async_runtime::spawn_blocking(move || {
         diagnostics::build_provider_diagnostics(
             &health,
             codex,
             hook_active,
-            diagnostics::related_codex_runtimes(),
+            diagnostics::related_codex_runtimes(path.as_deref()),
         )
     })
     .await

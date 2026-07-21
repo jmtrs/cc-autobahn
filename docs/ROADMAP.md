@@ -98,12 +98,13 @@ Implementation order, one layer at a time, verifying before moving forward.
       `TrayIconEvent::rect`, clamped against screen edges).
 - [x] Hide-on-blur (`WindowEvent::Focused(false)`) + 300 ms anti-race guard
       (closing by clicking the icon doesn't reopen it).
-- [x] Context menu (right click) with "Quit cc-autobahn".
+- [x] Tray menu with "Show / hide", "Reset position", and "Quit CC Autobahn".
 - [x] `data-tauri-drag-region` removed and capabilities initially trimmed to
       `core:default`/`core:event:default`. D41 later restored controlled
       dragging and `core:window:allow-start-dragging` in Phase 7.
-- [ ] (Future) Windows/Linux — the API is cross-platform except for
-      `set_activation_policy` (macOS only), still to be tested on those OSes.
+- [x] (Linux done, D54–D61) Linux port — cfg-gated tray RGB fork, Linux
+      `pathfix`/codex diagnostics, `.deb`/`.rpm`/`.AppImage` packaging, dual CI.
+      Windows remains untested/future.
 
 ## Phase 5 — Integration and polish
 
@@ -171,8 +172,9 @@ Implementation order, one layer at a time, verifying before moving forward.
       correlation metadata and include provider in future routing keys.
 - [x] Prefer Claude-native `permission_suggestions`/`updatedPermissions`
       over extending the current local Always Allow emulation.
-- [ ] Optional Bun sidecar and Windows/Linux validation remain open from
-      earlier phases; the current PermissionRequest socket is Unix-only.
+- [x] Linux validation landed (D54–D61): compiles/tests clean on Ubuntu CI,
+      `.deb`/`.rpm`/`.AppImage` shipped. The PermissionRequest socket is
+      Unix-only (works on Linux). Windows + aarch64-linux remain open (D61).
 
 ## Verification per phase
 

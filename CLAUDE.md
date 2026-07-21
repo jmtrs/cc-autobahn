@@ -4,11 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What it is
 
-cc-autobahn is an **instrument cluster** (Tauri v2) styled after the amber VFD display of the Mercedes W203, showing Claude Code and Codex token consumption. It lives as an icon in the macOS menu bar (D24): left click shows/hides a frameless, transparent, always-on-top panel; no Dock, no Cmd+Tab. It opens anchored under the icon by default, but D41 restored drag-to-move from the header/model-selector zones with a persisted manual override. Settings and the tray menu can reset it to the tray anchor.
+cc-autobahn is an **instrument cluster** (Tauri v2) styled after the amber VFD display of the Mercedes W203, showing Claude Code and Codex token consumption. It runs on **macOS and Linux** as a menu-bar/tray icon (D24): macOS toggles the frameless, transparent, always-on-top panel directly; Linux uses an explicit show/hide action in the right-click tray menu because Tauri emits no tray events and does not support menu-on-left-click there. On macOS it has no Dock and no Cmd+Tab (`ActivationPolicy::Accessory`); on Linux `skipTaskbar` keeps the panel itself out of task switchers while the visible desktop entry provides a recovery launch path. The official single-instance plugin is registered first, so relaunching only shows the existing process. X11 supports tray anchoring and persisted drag placement; native Wayland delegates placement to the compositor.
 
 **Guiding principle: don't reimplement usage accounting.** Log parsing, pricing, and billing windows are delegated to [`ccusage`](https://ccusage.com), run as a child process via its `--json` output. It is not forked or reimplemented (see `docs/DECISIONS.md` D1–D3). The usage-specific calculation done in-house is `tok/s` **per response** (`Δoutput / Δt_turn` over the JSONL tail), which ccusage doesn't offer. This is not token-stream telemetry: intermediate JSONL writes can produce partial ticks (D27), final closure produces the completed tick, and the needle decays between writes.
 
-**Current state: Phases 0–7 done, plus Codex dual-provider follow-up work through Phase 6** (real checklist in `docs/ROADMAP.md`, rationale in `docs/DECISIONS.md` D1–D53). The three continuous Claude sensors (`engine`, `burn`, `sensor`) run on dedicated threads and feed the speedometer, estimated/official segment bar, model selector, PACE/AUTO footer, redline state, and dynamic tray ring; Codex has its own adapters (`providers/codex/`) supplying the same shapes from a rollout JSONL tail and an owned App Server account sensor. The display is a 4-page MFD: trip, daily history, weekly limits/model cost, and Settings. Settings owns default/page order, theme, permission sound/hook consent, and position reset. Missing Bun/ccusage is handled by the background installer flow (D9/D36). The same executable has three dispatch modes: GUI, Claude Code `statusline`, and opt-in `permission-hook`. The permission gate queues concurrent requests FIFO, is provider-namespaced (Claude + Codex, D49), and exposes Approve, Deny, and supported Always Allow actions over a Unix socket; if the GUI is unavailable it fails open to the native terminal prompt. Current verified baseline: `cargo test` **145/145**, `npm run test:frontend` **58/58**, **45** visual regression baselines, Rustfmt, strict Clippy, and the Vite production build all pass.
+**Current state: Phases 0–7 done, plus Codex dual-provider follow-up work through Phase 6, and the Linux port (D54–D61)** (real checklist in `docs/ROADMAP.md`, rationale in `docs/DECISIONS.md` D1–D61). The three continuous Claude sensors (`engine`, `burn`, `sensor`) run on dedicated threads and feed the speedometer, estimated/official segment bar, model selector, PACE/AUTO footer, redline state, and dynamic tray ring; Codex has its own adapters (`providers/codex/`) supplying the same shapes from a rollout JSONL tail and an owned App Server account sensor. The display is a 4-page MFD: trip, daily history, weekly limits/model cost, and Settings. Settings owns default/page order, theme, permission sound/hook consent, and position reset. Missing Bun/ccusage is handled by the background installer flow (D9/D36). The same executable has three dispatch modes: GUI, Claude Code `statusline`, and opt-in `permission-hook`. The permission gate queues concurrent requests FIFO, is provider-namespaced (Claude + Codex, D49), and exposes Approve, Deny, and supported Always Allow actions over a Unix socket; if the GUI is unavailable it fails open to the native terminal prompt. Current verified baseline: `cargo test` **147/147**, `npm run test:frontend` **58/58**, **45** visual regression baselines, Rustfmt, strict Clippy, and the Vite production build all pass.
 
 ## Commands
 
@@ -22,9 +22,15 @@ npm run dev          # frontend only, Vite (port 1420, strictPort)
 Regenerate icons:
 
 ```bash
-node scripts/make-icon.mjs                        # zero-dep amber icon
+node scripts/make-icon.mjs                        # amber speedometer source PNG (@resvg/resvg-js, devDep)
 npx @tauri-apps/cli icon scripts/source-icon.png  # derives all sizes
+node scripts/make-tray-icon.mjs                   # macOS template tray PNG
+node scripts/make-tray-icon-linux.mjs             # Linux amber tray PNG (D55)
 ```
+
+Linux build deps (Debian/Ubuntu): `build-essential pkg-config libwebkit2gtk-4.1-dev
+libjavascriptcoregtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+libssl-dev`. Fedora/Arch equivalents in `README.md` (D54).
 
 Verification baseline:
 
@@ -32,12 +38,12 @@ Verification baseline:
 npm run build
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -- -D warnings
-cargo test --manifest-path src-tauri/Cargo.toml # 145 tests
+cargo test --manifest-path src-tauri/Cargo.toml # 147 tests
 ```
 
 Frontend: `npm run test:frontend` (58 tests, `node --test`) and `npm run test:visual` (45 pixel-compared Playwright baselines); no linter is configured yet.
 
-Releases: `npm run release -- <patch|minor|major|X.Y.Z>` (scripts/release.mjs) — bumps the version in `package.json`/`tauri.conf.json`/`Cargo.toml`/`Cargo.lock` in sync, runs `cargo test`, commits, tags `vX.Y.Z`, pushes. The tag triggers `.github/workflows/release.yml`: re-gates on tests, builds the **unsigned** universal (arm64+x86_64) dmg on `macos-latest`, **publishes** the GitHub Release (not a draft — the Homebrew cask URL must be live when the tap update lands) and bumps the cask in `jmtrs/homebrew-tap` (`Casks/cc-autobahn.rb`, skipped if the `HOMEBREW_TAP_TOKEN` secret is unset). No signing (D34); process rationale in D35.
+Releases: `npm run release -- <patch|minor|major|X.Y.Z>` (scripts/release.mjs) — bumps package, Cargo, Tauri and AppStream versions in sync, runs `cargo test`, commits, tags `vX.Y.Z`, pushes. The tag triggers `.github/workflows/release.yml`: Linux runs first as the cheaper gate and stores validated `.deb`/Fedora `.rpm`/`.AppImage`; only then does macOS build the unsigned universal dmg into a draft, attach those bundles, verify all four platform assets and publish. Homebrew updates afterward. CI runs macOS and Linux checks in parallel; Linux also builds and inspects every package and validates desktop/AppStream metadata. No visual regression runs on Linux (D58).
 
 ## Architecture (two layers)
 
@@ -66,7 +72,7 @@ Target flow: the backend emits events (`blocks-update`, `burn-tick`, `sensor-upd
 ## Conventions
 
 - **Window config in `tauri.conf.json`; permissions in `capabilities/default.json`** (v2). The window has `label: "cluster"`, starts hidden (`visible:false`), and uses `core:default`, `core:event:default`, and `core:window:allow-start-dragging`. Tray anchoring/persistence live in Rust; the frontend uses the narrow D41 drag/reset bridge. `app.macOSPrivateApi: true` is required for transparency on macOS (D14) — do not remove it.
-- **Tray/menu-bar (D24)**: show/hide/position live in `src-tauri/src/window.rs`; the menu/icon/"Quit"/click-to-toggle live in `src-tauri/src/tray.rs` (`TrayIconBuilder`, `tray-icon` feature of the `tauri` crate itself, no new plugin); `main.rs` just wires the two together in `.setup()`. The **icon itself** is a progress ring redrawn at runtime by `tray_icon.rs` (D30), called from `engine/`/`sensor/` on every new data point — not a static PNG (that PNG, `icons/tray-icon-template.png`, only remains as the initial icon before the first redraw). **Always use `TrayIcon::set_icon_with_as_template()`, never plain `set_icon()`** — `set_icon()` doesn't preserve macOS's "template" flag across calls and the icon gets repainted as fixed black instead of adapting to light/dark mode (real bug, D30). `ActivationPolicy::Accessory` only on macOS (`#[cfg(target_os = "macos")]`); the rest of the tray API is cross-platform. Only macOS tested so far.
+- **Tray/menu-bar (D24)**: show/hide/position live in `src-tauri/src/window.rs`; the menu/icon/"Quit"/click-to-toggle live in `src-tauri/src/tray.rs` (`TrayIconBuilder` and Tauri's `tray-icon` feature); `main.rs` wires them together and registers `tauri-plugin-single-instance` first. The **icon itself** is a progress ring redrawn at runtime by `tray_icon.rs` (D30), called from `engine/`/`sensor/` on every new data point — not a static PNG (the platform PNG only covers cold startup). **On macOS always use `TrayIcon::set_icon_with_as_template()`, never plain `set_icon()`**. On Linux use plain `set_icon()` and paint amber RGB; AppIndicator has no template concept, alpha-only renders black (D55). Linux tray events/menu-on-left-click are unsupported, so recovery uses the right-click menu or visible desktop entry. **Linux preconditions** (D57): requires a tray-supporting desktop (GNOME needs the AppIndicator extension) and a compositing WM for the transparent panel (Mutter/KWin/wlroots/picom).
 - **Exec from Rust with `std::process::Command`, NOT `tauri-plugin-shell`** (D16). The plugin is for exec from the frontend JS; our I/O is trusted backend code. The engine runs on a dedicated `std::thread` (no async framework). Zero new deps.
 - **`macos-private-api` (cargo feature) is coupled to `macOSPrivateApi` (conf)**: if you touch one, touch the other. Tauri's build script fails if they don't match.
 - **CSP already applied (D15)**: the restrictive `security.csp` policy in `tauri.conf.json` has been active since the first IPC command landed — verified against `sensor_status`/`install_sensor`/`set_pinned` in `tauri dev`. Do not revert to `null`.
@@ -74,4 +80,3 @@ Target flow: the backend emits events (`blocks-update`, `burn-tick`, `sensor-upd
 - **Resolved dependencies are locked** by `package-lock.json`/`Cargo.lock`; upgrades are intentional (D10). Do not downgrade Vite/Tauri/serde without cause.
 - **Honest precision** (D11): cost under subscription is **estimated**; the `rate_limits` window is **official** data. Do not present estimates as real billing.
 - **Documentation and comments in English**; the ADRs in `docs/DECISIONS.md` record the rationale behind each decision — consult them before changing architecture, the data engine, or the aesthetics.
-

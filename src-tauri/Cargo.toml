@@ -4,6 +4,9 @@ version = "0.9.0"
 description = "Mercedes W203 instrument cluster for Claude Code and Codex usage"
 authors = ["jmtrs"]
 edition = "2021"
+license = "MIT"
+homepage = "https://github.com/jmtrs/cc-autobahn"
+repository = "https://github.com/jmtrs/cc-autobahn"
 
 [build-dependencies]
 tauri-build = { version = "2.6", features = [] }
@@ -13,6 +16,7 @@ tauri-build = { version = "2.6", features = [] }
 # tray-icon: menu-bar icon + anchored panel, replaces the floating window (D24).
 # image-png: decodes the tray icon PNG at runtime (Image::from_bytes).
 tauri = { version = "2.11", features = ["macos-private-api", "tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
 uuid = { version = "1.18", features = ["v4"] }
