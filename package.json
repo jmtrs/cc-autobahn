@@ -20,6 +20,7 @@
     "@tauri-apps/api": "^2.11.1"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@tauri-apps/cli": "^2.11.4",
     "playwright": "^1.61.1",
     "vite": "^8.1.5"
