@@ -306,8 +306,14 @@ pub fn provider_activity_snapshot(app: AppHandle) -> Vec<ModelActivity> {
     snapshot
 }
 
+/// `related_codex_runtimes()` shells out (`plutil`, `codex --version`) with
+/// up to a 2s timeout per probe — a plain sync command would run that on the
+/// same thread that pumps the webview's event loop, so a pending "loading"
+/// repaint never gets a chance to flush before the whole snapshot is ready
+/// (same class of bug as `install_bun`, D36). `spawn_blocking` moves it off
+/// that thread, same fix shape as `history_daily`/`history_sessions`.
 #[tauri::command]
-pub fn provider_diagnostics_snapshot(app: AppHandle) -> Vec<ProviderDiagnostics> {
+pub async fn provider_diagnostics_snapshot(app: AppHandle) -> Vec<ProviderDiagnostics> {
     let health = app
         .state::<ProviderHealthState>()
         .lock()
@@ -331,7 +337,11 @@ pub fn provider_diagnostics_snapshot(app: AppHandle) -> Vec<ProviderDiagnostics>
         codex.permission_hook.as_ref(),
         activity.as_ref(),
     );
-    build_provider_diagnostics(&health, codex, hook_active, related_codex_runtimes())
+    tauri::async_runtime::spawn_blocking(move || {
+        build_provider_diagnostics(&health, codex, hook_active, related_codex_runtimes())
+    })
+    .await
+    .unwrap_or_default()
 }
 
 fn build_provider_diagnostics(

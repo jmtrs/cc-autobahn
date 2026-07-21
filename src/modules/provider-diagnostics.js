@@ -1,3 +1,5 @@
+import { SPINNER_HTML } from "./history-data.js";
+
 function text(value, fallback = "—") {
   return value == null || value === "" ? fallback : String(value);
 }
@@ -95,7 +97,7 @@ export async function wireProviderDiagnostics() {
   button.onclick = async () => {
     const generation = requests.begin();
     overlay.hidden = false;
-    body.textContent = "loading…";
+    body.innerHTML = SPINNER_HTML;
     if (!("__TAURI_INTERNALS__" in window)) {
       if (requests.isCurrent(generation)) {
         body.textContent = "Diagnostics require the native app runtime.";
