@@ -869,7 +869,7 @@ fn record_permission_activity(app: &AppHandle, request: &HookRequest) {
     if let Some(hook_hash) = verified_hash {
         app.state::<PermissionActivityState>()
             .lock()
-            .unwrap()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(
                 request.provider,
                 PermissionActivity {
