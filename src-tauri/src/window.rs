@@ -16,8 +16,20 @@ fn panel_y_below_tray(tray_y: f64, tray_height: f64, work_top: f64) -> f64 {
     (tray_y + tray_height + PANEL_GAP).max(work_top + PANEL_GAP)
 }
 
-/// PIN button state (frontend): if active, hide-on-blur doesn't hide
-/// the panel when it loses focus.
+/// Clamps a panel's horizontal position so it never lands outside the
+/// monitor's bounds, regardless of where the tray icon was reported to be.
+fn clamp_x_to_monitor(x: f64, win_width: f64, monitor_x: f64, monitor_width: f64) -> f64 {
+    let min_x = monitor_x + PANEL_GAP;
+    let max_x = monitor_x + monitor_width - win_width - PANEL_GAP;
+    x.clamp(min_x, max_x.max(min_x))
+}
+
+/// PIN button state (frontend). On macOS/Windows: if active, hide-on-blur
+/// doesn't hide the panel when it loses focus. On Linux, where the panel
+/// never hides on blur (D64), it instead toggles whether the panel stays
+/// above other windows. Both platforms also check it in
+/// `maybe_close_after_permission` to skip auto-closing after a resolved
+/// permission request.
 pub type PinnedState = Arc<Mutex<bool>>;
 
 /// Settings-page checkbox: whether a NEW permission request should auto-show
@@ -69,9 +81,17 @@ fn display_mode_size(mode: DisplayMode) -> (f64, f64) {
 }
 
 /// `#[tauri::command]` The frontend's PIN button pins/releases the panel.
+/// On Linux (D64) this also flips whether the panel stays above other
+/// windows — see the `set_always_on_top(false)` default in `wire`.
 #[tauri::command]
-pub fn set_pinned(state: tauri::State<'_, PinnedState>, value: bool) {
+pub fn set_pinned(app: AppHandle, state: tauri::State<'_, PinnedState>, value: bool) {
     *lock(&state) = value;
+    #[cfg(target_os = "linux")]
+    if let Some(window) = app.get_webview_window("cluster") {
+        let _ = window.set_always_on_top(value);
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = &app;
 }
 
 #[tauri::command]
@@ -299,8 +319,10 @@ pub fn reset_position(
 /// positioning logic as the tray's left-click show branch (`tray.rs`).
 /// Called from `permission::mod.rs` (D42) when a NEW permission request
 /// arrives: without this, a request that comes in while the panel is
-/// hidden (the common case — hide-on-blur means it's hidden most of the
-/// time unless PINned) would only ever show up as a blinking tray icon,
+/// hidden (the common case on macOS — hide-on-blur means it's hidden most
+/// of the time unless PINned; on Linux it's rarer, since D64 means the
+/// panel only hides when the user explicitly asks via the tray menu, but
+/// still possible) would only ever show up as a blinking tray icon,
 /// defeating the feature's whole point of approving without alt-tabbing.
 /// A no-op if the panel is already visible (doesn't steal focus from an
 /// unrelated, already-open panel), if the auto-show setting is off, or if
@@ -421,11 +443,12 @@ pub(crate) fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, 
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
-/// Applies the native rounded corners and wires hide-on-blur + drag-to-move
-/// persistence (D41) onto `window`. Returns the last-blur-hide timestamp
-/// guard, which `tray.rs` needs to debounce the tray-icon click that
-/// immediately follows a hide-by-blur (D24), and the auto-reposition guard,
-/// which `tray.rs` passes to `position_under_tray`/`position_at`.
+/// Applies the native rounded corners and wires hide-on-blur (macOS/Windows
+/// only, D64) + drag-to-move persistence (D41) onto `window`. Returns the
+/// last-blur-hide timestamp guard, which `tray.rs` needs to debounce the
+/// tray-icon click that immediately follows a hide-by-blur (D24, also
+/// macOS-only in practice — D57/D58), and the auto-reposition guard, which
+/// `tray.rs` passes to `position_under_tray`/`position_at`.
 pub fn wire(
     app: &tauri::App,
     window: &WebviewWindow,
@@ -449,10 +472,23 @@ pub fn wire(
         }
     }
 
+    // D64 follow-up: `alwaysOnTop` in tauri.conf.json is a static default
+    // used at window creation on every platform. On Linux the panel no
+    // longer hides on blur (D64), so a permanently-on-top panel would float
+    // over everything forever regardless of PIN — backwards from what PIN
+    // is supposed to mean. There, PIN instead controls whether the panel
+    // stays above other windows at all: it starts OFF here, and `set_pinned`
+    // below flips it live. macOS is untouched — its own native window level
+    // (`configure_fullscreen_panel`, D43) already governs stacking there,
+    // and hide-on-blur remains its "get out of the way" mechanism.
+    #[cfg(target_os = "linux")]
+    let _ = window.set_always_on_top(false);
+
     let last_blur_hide: Arc<Mutex<Option<Instant>>> = Arc::new(Mutex::new(None));
     let auto_reposition_guard: AutoRepositionGuard = Arc::new(Mutex::new(Instant::now()));
 
     let blur_flag = last_blur_hide.clone();
+    #[cfg(not(target_os = "linux"))]
     let hide_window = window.clone();
     let pinned_for_blur = app.state::<PinnedState>().inner().clone();
     let auto_guard_for_move = auto_reposition_guard.clone();
@@ -468,11 +504,23 @@ pub fn wire(
             *lock(&blur_flag) = Some(Instant::now());
             // Flush the drag override so the final position survives even if
             // the last few Moved events were skipped by the write throttle.
+            // Runs on every platform: dragging is still supported/persisted
+            // on Linux under X11/XWayland (D64) even though the panel no
+            // longer hides there.
             if platform_positioning_supported() {
                 if let Some((x, y)) = *lock(&position_for_move) {
                     save_position(&app_handle, x, y);
                 }
             }
+            // Linux has no reliable native tray-click toggle (D57/D58):
+            // unlike macOS's menu-bar dropdown, there's no left-click-to-close
+            // gesture, so importing macOS's hide-on-blur here doesn't match
+            // how the panel is actually opened/closed on Linux (right-click
+            // tray menu). It behaves like a persistent desktop widget there
+            // instead: only hidden when the user asks (tray menu). PIN still
+            // has a real effect on Linux — `maybe_close_after_permission`
+            // checks the same `PinnedState` independently of this arm.
+            #[cfg(not(target_os = "linux"))]
             let _ = hide_window.hide();
         }
         WindowEvent::Moved(pos) => {
@@ -577,8 +625,11 @@ fn configure_fullscreen_panel(window: &WebviewWindow) -> tauri::Result<()> {
 }
 
 /// Anchors the panel right below the tray icon, centered horizontally and
-/// clamped to the monitor that contains the icon so it doesn't go off-screen.
-/// Default behavior (D24), used when no drag override is saved (D41).
+/// clamped to the monitor that contains the icon — or, if the icon's
+/// reported position doesn't fall inside any known monitor (unreliable
+/// `IconGeometry` on some Linux AppIndicator backends), to a fallback
+/// monitor — so it never lands off-screen. Default behavior (D24), used
+/// when no drag override is saved (D41).
 pub fn position_under_tray(
     window: &WebviewWindow,
     tray_rect: &Rect,
@@ -625,7 +676,13 @@ pub fn position_under_tray(
     // Second pass: if the monitor has its own scale, that one is used for
     // the final calculation (matches the window's in the common case of
     // a single monitor or uniform DPI).
-    let host = find_host(guess_scale);
+    // Fallback mirrors `position_at`: an icon rect whose center falls
+    // outside every known monitor (seen with unreliable `IconGeometry` on
+    // some Linux AppIndicator backends) must still resolve to a real
+    // monitor, otherwise the clamp below is skipped entirely and the panel
+    // is placed at raw, unclamped coordinates — off-screen on a monitor
+    // narrower than the reported tray position.
+    let host = find_host(guess_scale).or_else(|| monitors.first().cloned());
     let scale = host
         .as_ref()
         .map(|m| m.scale_factor())
@@ -642,9 +699,7 @@ pub fn position_under_tray(
         let work_area = m.work_area();
         let work_top = work_area.position.y as f64;
         let work_bottom = work_top + work_area.size.height as f64;
-        let min_x = mp.x as f64 + PANEL_GAP;
-        let max_x = mp.x as f64 + ms.width as f64 - win_size.width as f64 - PANEL_GAP;
-        x = x.clamp(min_x, max_x.max(min_x));
+        x = clamp_x_to_monitor(x, win_size.width as f64, mp.x as f64, ms.width as f64);
         // Some macOS versions report a zero-height tray rect. The work area
         // still gives the exact first visible row below the menu bar.
         y = panel_y_below_tray(tray_pos.y, tray_size.height, work_top);
@@ -886,5 +941,22 @@ mod display_mode_tests {
     fn zero_height_tray_uses_visible_work_area() {
         assert_eq!(panel_y_below_tray(0.0, 0.0, 68.0), 72.0);
         assert_eq!(panel_y_below_tray(10.0, 58.0, 68.0), 72.0);
+    }
+
+    #[test]
+    fn icon_reported_outside_every_monitor_still_clamps_into_the_only_one() {
+        // Reproduces the reported bug: a 1366px-wide single monitor at
+        // x=0, but the tray icon's reported center (unreliable
+        // `IconGeometry` on some Linux AppIndicator backends) is at
+        // x=1632 — past the monitor's right edge.
+        let win_width = 550.0;
+        let monitor_x = 0.0;
+        let monitor_width = 1366.0;
+        let raw_x = 1632.0 - win_width / 2.0;
+
+        let x = clamp_x_to_monitor(raw_x, win_width, monitor_x, monitor_width);
+
+        assert!(x >= monitor_x + PANEL_GAP);
+        assert!(x <= monitor_x + monitor_width - win_width - PANEL_GAP);
     }
 }

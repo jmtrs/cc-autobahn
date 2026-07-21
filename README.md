@@ -89,6 +89,29 @@ Unlike macOS, the Linux panel does **not** follow you across virtual desktops or
 float over fullscreen apps (X11/Wayland have no equivalent of the macOS
 non-activating panel — D57).
 
+**Linux panel behavior is intentionally different from macOS (D64):** there's
+no native left-click-to-toggle on the Linux tray icon (only the right-click
+"Show/hide" menu item), so the panel never auto-hides when it loses focus —
+it stays open like a persistent desktop widget until you hide it yourself.
+`PIN` is repurposed there too: instead of preventing hide-on-blur (there's
+none to prevent), it toggles whether the panel stays above every other
+window. That only has a visible effect under X11/XWayland, same as drag
+persistence above — native Wayland has no always-on-top mechanism a regular
+client can request.
+
+**Old GPU/driver troubleshooting (D63):** on old Intel iGPUs with an
+outdated Mesa driver (e.g. Ivy Bridge / HD 4000), WebKitGTK can fail to
+create a DMA-BUF-backed EGL context and the transparent panel never paints
+anything — it looks identical to "not running" even though the process and
+window both exist. cc-autobahn already sets `WEBKIT_DISABLE_DMABUF_RENDERER=1`
+automatically on Linux startup (unless you've already exported a value) to
+work around the common case. If the panel is still blank after that, force
+full software rendering yourself before launching:
+
+```bash
+WEBKIT_DISABLE_COMPOSITING_MODE=1 cc-autobahn
+```
+
 ## What it is
 
 cc-autobahn **does not reimplement a token meter: it's an instrument-cluster
