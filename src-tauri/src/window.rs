@@ -107,6 +107,11 @@ pub fn set_display_mode(
 /// the default behavior applies: anchored under the tray icon on every open.
 pub type PositionState = Arc<Mutex<Option<(f64, f64)>>>;
 
+/// Last physical cursor position observed over the tray icon. Kept separate
+/// from [`PositionState`]: this is an automatic anchor, not a user drag
+/// override, and may be replaced on every tray click.
+pub struct TrayAnchorState(pub Arc<Mutex<Option<(f64, f64)>>>);
+
 /// Timestamp of the last *programmatic* reposition (`position_under_tray` /
 /// `position_at`). The `WindowEvent::Moved` handler in [`wire`] uses it to
 /// tell those from a real user drag — same idiom as `tray.rs`'s
@@ -132,6 +137,13 @@ fn position_file(app: &AppHandle) -> Option<std::path::PathBuf> {
         .map(|dir| dir.join("window-position.json"))
 }
 
+fn tray_anchor_file(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|dir| dir.join("tray-anchor.json"))
+}
+
 /// Reads the saved override, if any, at startup.
 pub fn load_position(app: &AppHandle) -> Option<(f64, f64)> {
     let path = position_file(app)?;
@@ -150,6 +162,56 @@ fn save_position(app: &AppHandle, x: f64, y: f64) {
     if let Ok(json) = serde_json::to_string(&StoredPosition { x, y }) {
         let _ = fs::write(path, json);
     }
+}
+
+pub fn load_tray_anchor(app: &AppHandle) -> TrayAnchorState {
+    let anchor = tray_anchor_file(app)
+        .and_then(|path| fs::read_to_string(path).ok())
+        .and_then(|data| serde_json::from_str::<StoredPosition>(&data).ok())
+        .map(|stored| (stored.x, stored.y));
+    TrayAnchorState(Arc::new(Mutex::new(anchor)))
+}
+
+pub fn record_tray_anchor(app: &AppHandle, state: &TrayAnchorState, x: f64, y: f64) {
+    *lock(&state.0) = Some((x, y));
+    let Some(path) = tray_anchor_file(app) else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    if let Ok(json) = serde_json::to_string(&StoredPosition { x, y }) {
+        let _ = fs::write(path, json);
+    }
+}
+
+/// Converts the last observed tray cursor into a zero-size physical anchor.
+/// Stale coordinates from a removed/rearranged monitor are discarded.
+pub fn observed_tray_rect(
+    app: &AppHandle,
+    window: &WebviewWindow,
+    state: &TrayAnchorState,
+) -> Option<Rect> {
+    let (x, y) = (*lock(&state.0))?;
+    let on_screen = window.available_monitors().ok()?.iter().any(|monitor| {
+        let position = monitor.position();
+        let size = monitor.size();
+        f64::from(position.x) <= x
+            && x <= f64::from(position.x) + f64::from(size.width)
+            && f64::from(position.y) <= y
+            && y <= f64::from(position.y) + f64::from(size.height)
+    });
+    if !on_screen {
+        *lock(&state.0) = None;
+        if let Some(path) = tray_anchor_file(app) {
+            let _ = fs::remove_file(path);
+        }
+        return None;
+    }
+    Some(Rect {
+        position: tauri::PhysicalPosition::new(x, y).into(),
+        size: tauri::PhysicalSize::new(0.0, 0.0).into(),
+    })
 }
 
 /// Clears the override (in memory and on disk) so the panel goes back to
@@ -181,9 +243,11 @@ pub fn reset_position_now(
     let Some(tray) = app.try_state::<TrayIcon>() else {
         return;
     };
-    if let Ok(Some(rect)) = tray.rect() {
-        position_under_tray(&window, &rect, auto_guard);
-    }
+    let tray_rect = valid_tray_rect(&tray).or_else(|| {
+        app.try_state::<TrayAnchorState>()
+            .and_then(|state| observed_tray_rect(app, &window, &state))
+    });
+    position_saved_or_under_tray(app, &window, None, tray_rect.as_ref(), state, auto_guard);
 }
 
 /// `#[tauri::command]` The Settings page's "Reset position" button.
@@ -224,7 +288,11 @@ pub fn show_for_permission(app: &AppHandle) {
     let saved = *lock(&position_state);
     let tray_rect = app
         .try_state::<TrayIcon>()
-        .and_then(|tray| tray.rect().ok().flatten());
+        .and_then(|tray| valid_tray_rect(&tray))
+        .or_else(|| {
+            app.try_state::<TrayAnchorState>()
+                .and_then(|state| observed_tray_rect(app, &window, &state))
+        });
     position_saved_or_under_tray(
         app,
         &window,

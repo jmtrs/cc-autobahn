@@ -71,6 +71,10 @@ pub fn build(
                 return;
             };
 
+            if let Some(anchor) = app.try_state::<crate::window::TrayAnchorState>() {
+                crate::window::record_tray_anchor(app, &anchor, position.x, position.y);
+            }
+
             if button == MouseButton::Right && button_state == MouseButtonState::Down {
                 // This callback runs before tray-icon's own click handling
                 // decides whether to pop the native "Reset position"/"Quit"

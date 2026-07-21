@@ -119,6 +119,7 @@ fn main() {
             let position_state: window::PositionState =
                 Arc::new(Mutex::new(window::load_position(&app.handle().clone())));
             app.manage(position_state.clone());
+            app.manage(window::load_tray_anchor(app.handle()));
 
             let (last_blur_hide, auto_reposition_guard) =
                 window::wire(app, &win, position_state.clone())?;
@@ -146,7 +147,10 @@ fn main() {
             // fallback until the first click provides a real cursor anchor.
             let saved_position = *window::lock(&position_state);
             let tray = app.state::<tauri::tray::TrayIcon>();
-            let tray_rect = window::valid_tray_rect(&tray);
+            let tray_rect = window::valid_tray_rect(&tray).or_else(|| {
+                let anchor = app.state::<window::TrayAnchorState>();
+                window::observed_tray_rect(app.handle(), &win, &anchor)
+            });
             window::position_saved_or_under_tray(
                 app.handle(),
                 &win,
