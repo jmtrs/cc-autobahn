@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 
 use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
-use tauri::Manager;
+use tauri::{Manager, PhysicalSize, Rect};
 
 use crate::window::{
     position_saved_or_under_tray, show_panel, valid_tray_rect, AutoRepositionGuard, PositionState,
@@ -60,6 +60,7 @@ pub fn build(
             let TrayIconEvent::Click {
                 button,
                 button_state,
+                position,
                 ..
             } = event
             else {
@@ -100,12 +101,20 @@ pub fn build(
                 // the live frame once and reject it if AppKit still reports an
                 // empty size. Retrying here only blocks AppKit's event loop and
                 // cannot make layout advance.
-                let fresh_rect = valid_tray_rect(tray);
+                let fresh_rect = valid_tray_rect(tray).unwrap_or_else(|| Rect {
+                    // The click cursor is the only screen coordinate AppKit
+                    // reports correctly when NSStatusBarWindow.frame stays at
+                    // its degenerate bootstrap value. A zero-size anchor centers
+                    // the panel on the actual click and lets the monitor work
+                    // area supply the menu-bar bottom edge.
+                    position: position.into(),
+                    size: PhysicalSize::new(0.0, 0.0).into(),
+                });
                 position_saved_or_under_tray(
                     app,
                     &window,
                     saved,
-                    fresh_rect.as_ref(),
+                    Some(&fresh_rect),
                     &position_state,
                     &auto_reposition_guard,
                 );

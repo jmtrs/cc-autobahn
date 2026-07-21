@@ -566,14 +566,14 @@ pub fn position_at(
 /// frame. Polling from a tray/main-thread callback cannot help: sleeping there
 /// prevents the event loop from performing the layout that would change it.
 pub fn valid_tray_rect(tray: &TrayIcon) -> Option<Rect> {
-    let rect = tray.rect().ok().flatten()?;
-    let size = rect.size.to_logical::<f64>(1.0);
-    if size.width > 0.0 && size.height > 0.0 {
-        Some(rect)
-    } else {
-        eprintln!("cc-autobahn: ignoring invalid tray rect: {rect:?}");
-        None
+    if let Some(rect) = tray.rect().ok().flatten() {
+        let size = rect.size.to_logical::<f64>(1.0);
+        if size.width > 0.0 && size.height > 0.0 {
+            return Some(rect);
+        }
     }
+
+    None
 }
 
 /// Restores the saved drag override if it's still valid for a currently
@@ -601,7 +601,32 @@ pub fn position_saved_or_under_tray(
     }
     if let Some(rect) = tray_rect {
         position_under_tray(window, rect, auto_guard);
+    } else {
+        position_at_menu_bar_fallback(window, auto_guard);
     }
+}
+
+/// Keeps cold-launch feedback visible when macOS exposes no usable tray frame.
+/// A later tray click reanchors exactly from the click's cursor position.
+fn position_at_menu_bar_fallback(window: &WebviewWindow, auto_guard: &AutoRepositionGuard) {
+    let Ok(win_size) = window.outer_size() else {
+        return;
+    };
+    let monitor = window
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.available_monitors().ok()?.into_iter().next());
+    let Some(monitor) = monitor else {
+        return;
+    };
+    let work = monitor.work_area();
+    let x = f64::from(work.position.x) + f64::from(work.size.width)
+        - f64::from(win_size.width)
+        - PANEL_GAP;
+    let y = f64::from(work.position.y) + PANEL_GAP;
+    *lock(auto_guard) = Instant::now();
+    let _ = set_top_left(window, x, y, monitor.scale_factor());
 }
 
 /// Places the window's top-left corner at physical (x, y).
