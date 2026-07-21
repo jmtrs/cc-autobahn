@@ -72,10 +72,8 @@ test("normalized Codex turn rates feed only their provider buffer", () => {
 
   assert.equal(codex.state.recentTicks.length, 1);
   assert.equal(codex.state.recentTicks[0].tokens, 75);
-  assert.equal(codex.state.turnRateSourceQuality, "local");
   assert.equal(codex.state.activeSessionOrThreadId, "thread-1");
   assert.equal(codex.state.sessionStartedAtMs, 1_000);
-  assert.equal(codex.element("burn-unit").textContent, "LOCAL tok/s");
   assert.deepEqual(claude.state.recentTicks, []);
 });
 
@@ -100,10 +98,4 @@ test("older Codex turn rates cannot roll the live thread timer backwards", () =>
 
   assert.equal(codex.state.activeSessionOrThreadId, "newer");
   assert.equal(codex.state.sessionStartedAtMs, 2_000);
-});
-
-test("legacy Claude rate keeps the unqualified unit", () => {
-  const claude = fakeView("claude");
-  onBurnTick({ tokPerS: 10, turnOutputTokens: 5, isPartial: false }, claude);
-  assert.equal(claude.element("burn-unit").textContent, "tok/s");
 });

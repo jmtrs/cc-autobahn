@@ -124,7 +124,13 @@ body {
 .chassis-display > .header {
   flex-shrink: 0;
   height: 16px;
-  margin: 8px 40px 0 12px;
+  /* .header and .provider-stack (which owns .gear) are sibling rows in
+     .display's column layout — .gear never shares this row's height, so
+     there's nothing here for a wide right margin to clear. Symmetric
+     with the 12px left margin, matching .provider-display's own 12px
+     right padding below (D-review: this shipped as an unexplained 40px,
+     leaving a dead gap before PIN with no element to justify it). */
+  margin: 8px 12px 0 12px;
 }
 
 .provider-stack {
@@ -188,7 +194,10 @@ body {
   display: none;
   flex: 1;
   min-height: 0;
-  margin: 4px 40px 8px 12px;
+  /* Same symmetric margin as .chassis-display > .header (D-review) — no
+     .gear column to clear here either; Settings replaces the provider
+     stack entirely while it's the active page. */
+  margin: 4px 12px 8px 12px;
 }
 
 [data-current-page="3"] .provider-stack {
@@ -1048,7 +1057,8 @@ body {
    loadHistory() is in flight (history-data.js, SPINNER_HTML) — centered
    here instead of pinned left like the CHECK ENGINE row. */
 .history-bars .engine-spinner,
-.breakdown-list .engine-spinner {
+.breakdown-list .engine-spinner,
+.diagnostics-body .engine-spinner {
   margin: auto;
 }
 

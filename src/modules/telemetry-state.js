@@ -34,7 +34,6 @@ export function createProviderState(provider) {
     secondaryWindowDurationMinutes: null,
     hasSecondaryLimit: false,
     recentTicks: [],
-    turnRateSourceQuality: null,
     activeSessionOrThreadId: null,
     sessionStartedAtMs: 0,
     lastTurnRateObservedAtMs: 0,

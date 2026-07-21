@@ -551,13 +551,13 @@ export function wireTripComputerHints(view = claudeView) {
   hintOnHover(
     view.element("avg"),
     view.provider === "codex"
-      ? "account average tokens per calendar day, current 7-day period"
+      ? "average tokens per, current 7-day period"
       : "estimated cost, not official",
   );
   hintOnHover(
     view.element("odo"),
     view.provider === "codex"
-      ? "account lifetime tokens; STALE marks last known data"
+      ? "account lifetime tokens"
       : "total tokens in the active interval",
   );
   hintOnHover(

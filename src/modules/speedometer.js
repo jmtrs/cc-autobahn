@@ -75,7 +75,6 @@ export function onBurnTick(payload, view = claudeView) {
   const state = view.state;
   // payload = { tokPerS, turnOutputTokens, turnDurationMs, messageId, timestamp, isPartial }
   const tps = Number(payload?.tokensPerSecond ?? payload?.tokPerS) || 0;
-  state.turnRateSourceQuality = payload?.sourceQuality ?? null;
   if (
     view.provider === "codex" &&
     typeof payload?.sessionOrThreadId === "string" &&
@@ -87,8 +86,6 @@ export function onBurnTick(payload, view = claudeView) {
     state.sessionStartedAtMs = payload.sessionStartedAtMs;
     state.lastTurnRateObservedAtMs = payload.observedAtMs;
   }
-  const unit = view.element("burn-unit");
-  if (unit) unit.textContent = state.turnRateSourceQuality === "local" ? "LOCAL tok/s" : "tok/s";
   burn.target = tps;
   burn.lastTickAt = performance.now();
   // Sliding buffer for the footer's PACE metric (see footer-metric.js).
