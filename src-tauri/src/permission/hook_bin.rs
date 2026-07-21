@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
-use super::{socket_path, Decision, DecisionMsg, HookRequest};
+use super::{socket_path_candidates, Decision, DecisionMsg, HookRequest};
 use crate::providers::ProviderId;
 
 /// Just under Claude Code's own 600s hook timeout, so this always loses the
@@ -94,14 +94,25 @@ pub fn run_permission_hook(provider: ProviderId) {
 /// silence is the fail-open behavior.
 #[cfg(unix)]
 fn ask_gui(request: &HookRequest) -> Option<DecisionMsg> {
-    ask_gui_socket(request).or_else(|| ask_gui_files(request))
+    let candidates = socket_path_candidates();
+    // Fast pass first: a socket connect fails near-instantly, so probing every
+    // candidate root for a live socket costs microseconds even when most
+    // guesses are wrong. Only fall back to the slow, polling file bridge
+    // (Codex/OWL sandboxes that deny socket connects outright) against the
+    // first (highest-priority) candidate, matching the historical behavior.
+    for path in &candidates {
+        if let Some(decision) = ask_gui_socket(request, path) {
+            return Some(decision);
+        }
+    }
+    let root = candidates.into_iter().next()?;
+    ask_gui_files(request, &root)
 }
 
 #[cfg(unix)]
-fn ask_gui_socket(request: &HookRequest) -> Option<DecisionMsg> {
+fn ask_gui_socket(request: &HookRequest, path: &std::path::Path) -> Option<DecisionMsg> {
     use std::os::unix::net::UnixStream;
 
-    let path = socket_path()?;
     // AF_UNIX `connect()` against a missing path, or a stale path with no
     // listener, fails near-instantly (ENOENT/ECONNREFUSED) — there's no
     // slow-handshake failure mode to guard against here, unlike a network
@@ -134,13 +145,13 @@ fn ask_gui_socket(request: &HookRequest) -> Option<DecisionMsg> {
 /// their writable temporary directory. Fall back to an atomic request file
 /// and wait for the GUI to publish the matching response file.
 #[cfg(unix)]
-fn ask_gui_files(request: &HookRequest) -> Option<DecisionMsg> {
+fn ask_gui_files(request: &HookRequest, socket_path: &std::path::Path) -> Option<DecisionMsg> {
     use std::os::unix::fs::OpenOptionsExt;
 
     if !super::safe_request_id(&request.request_id) {
         return None;
     }
-    let (requests, responses) = super::file_bridge_dirs()?;
+    let (requests, responses) = super::file_bridge_dirs_at(socket_path)?;
     for dir in [&requests, &responses] {
         std::fs::create_dir_all(dir).ok()?;
         super::set_directory_private(dir).ok()?;

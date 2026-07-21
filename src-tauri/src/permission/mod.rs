@@ -103,6 +103,37 @@ pub(crate) fn socket_path() -> Option<PathBuf> {
     )
 }
 
+/// Every socket location the running GUI could plausibly have bound, in the
+/// same priority order [`socket_path`] would pick — TMPDIR first, HOME as
+/// fallback. A single hook invocation and the long-running GUI process can
+/// see different environments (e.g. one launched from a terminal, the other
+/// from Finder/a login item), so a hook computing only [`socket_path`] can
+/// silently talk to an empty directory while the GUI listens on the other
+/// one. The hook client probes both instead of trusting a single guess; the
+/// GUI itself still binds exactly one (no ambiguity on the server side).
+pub(crate) fn socket_path_candidates() -> Vec<PathBuf> {
+    socket_path_candidates_from(
+        crate::env_lock::var_os("TMPDIR"),
+        crate::env_lock::var_os("HOME"),
+    )
+}
+
+fn socket_path_candidates_from(
+    tmpdir: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(path) = socket_path_from(tmpdir, None) {
+        candidates.push(path);
+    }
+    if let Some(path) = socket_path_from(None, home) {
+        if !candidates.contains(&path) {
+            candidates.push(path);
+        }
+    }
+    candidates
+}
+
 fn socket_path_from(
     tmpdir: Option<std::ffi::OsString>,
     home: Option<std::ffi::OsString>,
@@ -115,7 +146,11 @@ fn socket_path_from(
 }
 
 fn file_bridge_dirs() -> Option<(PathBuf, PathBuf)> {
-    let root = socket_path()?.parent()?.to_path_buf();
+    file_bridge_dirs_at(&socket_path()?)
+}
+
+pub(crate) fn file_bridge_dirs_at(socket_path: &std::path::Path) -> Option<(PathBuf, PathBuf)> {
+    let root = socket_path.parent()?.to_path_buf();
     Some((root.join("requests"), root.join("responses")))
 }
 
@@ -1360,6 +1395,31 @@ mod tests {
         assert_eq!(
             path,
             Some(PathBuf::from("/Users/test/.cc-autobahn/permission.sock"))
+        );
+    }
+
+    #[test]
+    fn socket_candidates_include_both_tmpdir_and_home_when_they_differ() {
+        let candidates = socket_path_candidates_from(
+            Some(std::ffi::OsString::from("/private/user-tmp")),
+            Some(std::ffi::OsString::from("/Users/test")),
+        );
+        assert_eq!(
+            candidates,
+            vec![
+                PathBuf::from("/private/user-tmp/.cc-autobahn/permission.sock"),
+                PathBuf::from("/Users/test/.cc-autobahn/permission.sock"),
+            ]
+        );
+    }
+
+    #[test]
+    fn socket_candidates_dedupe_when_tmpdir_is_unset() {
+        let candidates =
+            socket_path_candidates_from(None, Some(std::ffi::OsString::from("/Users/test")));
+        assert_eq!(
+            candidates,
+            vec![PathBuf::from("/Users/test/.cc-autobahn/permission.sock")]
         );
     }
 
