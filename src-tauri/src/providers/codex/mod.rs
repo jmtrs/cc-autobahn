@@ -5,6 +5,7 @@
 
 pub mod app_server;
 mod rollout;
+mod scanner;
 
 use std::thread;
 use std::time::Duration;
