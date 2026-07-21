@@ -43,7 +43,7 @@ cargo test --manifest-path src-tauri/Cargo.toml # 147 tests
 
 Frontend: `npm run test:frontend` (58 tests, `node --test`) and `npm run test:visual` (45 pixel-compared Playwright baselines); no linter is configured yet.
 
-Releases: `npm run release -- <patch|minor|major|X.Y.Z>` (scripts/release.mjs) — bumps package, Cargo, Tauri and AppStream versions in sync, runs `cargo test`, commits, tags `vX.Y.Z`, pushes. The tag triggers `.github/workflows/release.yml`: Linux runs first as the cheaper gate and stores validated `.deb`/Fedora `.rpm`/`.AppImage`; only then does macOS build the unsigned universal dmg into a draft, attach those bundles, verify all four platform assets and publish. Homebrew updates afterward. CI runs macOS and Linux checks in parallel; Linux also builds and inspects every package and validates desktop/AppStream metadata. No visual regression runs on Linux (D58).
+Releases: `npm run release -- <patch|minor|major|X.Y.Z>` (scripts/release.mjs) — bumps package, Cargo, Tauri and AppStream versions in sync, runs `cargo test`, commits, tags `vX.Y.Z`, pushes. The tag triggers `.github/workflows/release.yml`: Linux runs first as the cheaper gate and stores validated `.deb`/Fedora `.rpm`/`.AppImage`; only then does macOS build the unsigned universal dmg into a draft, attach those bundles, verify all four platform assets and publish. Homebrew updates afterward. CI runs macOS and Linux checks in parallel once per PR targeting `develop`/`main` (plus manual dispatch); branch protection makes both required and avoids rerunning the same tree after merge. Linux also builds and inspects every package and validates desktop/AppStream metadata. No visual regression runs on Linux (D58).
 
 ## Architecture (two layers)
 

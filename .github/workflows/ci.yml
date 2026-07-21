@@ -1,6 +1,9 @@
 name: CI
 
-# Runs on every push to main/develop and every PR. Two parallel jobs:
+# Runs once per pull request targeting main/develop (or by manual dispatch).
+# Branch protection requires both jobs before merge; post-merge pushes do not
+# rerun the exact same tree. Superseded commits in one PR cancel their old run.
+# Two parallel jobs:
 #  - check-macos: backend tests, clippy (-D warnings), fmt --check, frontend
 #    + visual regression (Playwright baselines are pixel-compared against
 #    macOS WebKit — see D58 for why visual stays macOS-only on CI).
@@ -10,9 +13,13 @@ name: CI
 #    This job is the proof the macOS cfg gating compiles clean on Linux (D54).
 
 on:
-  push:
-    branches: [main, develop]
   pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check-macos:

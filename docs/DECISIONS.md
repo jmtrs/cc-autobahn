@@ -1394,7 +1394,8 @@ events use explicit `app-engine-*` names and are not provider events.
 
 **Testing and CI**: Node's built-in runner covers isolated buffers, strict
 routing, health hydration, replay/equal-timestamp rejection and global chassis
-updates. CI runs it on direct pushes to `main`/`develop` and on pull requests.
+updates. CI runs it on pull requests targeting `main`/`develop`; both native
+jobs are required by branch protection before merge.
 
 **Verification**: 77/77 Rust tests and 9/9 frontend tests pass, plus Vite
 production build, Rustfmt, strict Clippy and `git diff --check`. A fresh
@@ -1794,3 +1795,22 @@ release and tracked here:
 - **Autostart**: a `~/.config/autostart/` `.desktop` entry is not generated yet.
 - **Linux visual baselines**: see D58.
 - **aarch64-apple-darwin native**: out of scope here (macOS universal already).
+
+## D62 — CI gates integration once; release rebuilds the published tag
+
+**Problem**: CI ran the full macOS/Linux matrix for a pull request and then ran
+the identical matrix again when GitHub pushed the merge result to `develop` or
+`main`. The second run added cost and latency without a new review boundary.
+
+**Decision**: CI runs automatically only for pull requests targeting
+`develop` or `main`, with one cancellable run per PR; `workflow_dispatch`
+remains available for explicit diagnostics. Both branches are protected and
+require `check-macos` plus `check-linux` before merge, so removing post-merge
+push runs does not permit unverified integration. The tag-triggered release
+workflow remains separate: rebuilding there is intentional because it creates
+and validates the exact `.deb`, `.rpm`, `.AppImage`, and `.dmg` artifacts that
+will be published.
+
+**Consequence**: a feature or promotion pays for the native matrix once at its
+PR gate. Updating a PR cancels its stale run. A release still rebuilds the tag
+because release artifacts cannot be reused safely from a different ref/run.
