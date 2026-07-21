@@ -90,6 +90,13 @@ fn prepend_path(app: &AppHandle, dir: &Path) {
 /// the bare launchd PATH it'd otherwise inherit.
 #[cfg(unix)]
 fn run_bun_installer(path: Option<&str>) -> Result<(), String> {
+    for dependency in ["bash", "curl", "unzip"] {
+        if !command_available(dependency, path) {
+            return Err(format!(
+                "Bun installation requires `{dependency}`. Install bash, curl and unzip with your package manager, then retry."
+            ));
+        }
+    }
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
         .arg("curl -fsSL https://bun.sh/install | bash");
@@ -104,6 +111,16 @@ fn run_bun_installer(path: Option<&str>) -> Result<(), String> {
     } else {
         Err(format!("the Bun installer exited with {status}"))
     }
+}
+
+#[cfg(unix)]
+fn command_available(command: &str, path: Option<&str>) -> bool {
+    let mut probe = Command::new("sh");
+    probe.args(["-c", &format!("command -v -- {command} >/dev/null 2>&1")]);
+    if let Some(path) = path {
+        probe.env("PATH", path);
+    }
+    probe.status().is_ok_and(|status| status.success())
 }
 
 #[cfg(not(unix))]

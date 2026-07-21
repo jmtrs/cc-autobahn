@@ -1,7 +1,8 @@
 # CC Autobahn
 
 > A **Mercedes W203 instrument cluster** for Claude Code and Codex usage.
-> It lives as a menu-bar icon on macOS: left click shows/hides a frameless,
+> It lives as a menu-bar/tray icon on **macOS and Linux**: a click toggles it on macOS;
+> Linux exposes an explicit show/hide action in the right-click tray menu. The panel is frameless,
 > transparent, *always-on-top* panel anchored under the icon by default, with the amber
 > dot-matrix VFD display: `tok/s` per response, remaining 5h window autonomy,
 > cost, and active model.
@@ -50,6 +51,44 @@ First run: click the new menu-bar icon (no Dock, no Cmd+Tab) to show the
 cluster. With no engine detected, the **CHECK ENGINE** overlay has an
 *Install engine* button that wires everything up on its own.
 
+### Install on Linux
+
+Download the package for your distro from the
+[latest release](https://github.com/jmtrs/cc-autobahn/releases/latest):
+
+```sh
+# Debian/Ubuntu (.deb)
+sudo apt install ./cc-autobahn_<version>_amd64.deb
+# Fedora (.rpm)
+sudo dnf install cc-autobahn-<version>.x86_64.rpm
+# openSUSE: use the AppImage until a native SUSE RPM is built and tested
+# Portable fallback (.AppImage, x86_64, no install)
+chmod +x cc-autobahn_<version>_amd64.AppImage && ./cc-autobahn_<version>_amd64.AppImage
+```
+
+Runtime dependencies and the `bash`/`curl`/`unzip` tools used by automatic Bun
+installation are declared on the `.deb`/`.rpm` and installed automatically.
+The AppImage bundles application libraries; automatic Bun installation still
+requires `bash`, `curl` and `unzip` on the host.
+Launching the desktop entry again reopens the existing tray process; it does
+not start duplicate sensors or create a second icon.
+
+**Linux requirements (declared preconditions, not bugs — D57):**
+
+- A **tray-supporting desktop**. GNOME ships **no** system tray by default —
+  install the *AppIndicator and KStatusNotifierItem Support* extension, or use
+  KDE/Cinnamon/MATE/XFCE/i3-with-tray. Without a tray the cluster has no icon.
+- A **compositing window manager** for the transparent panel (Mutter/KWin/wlroots,
+  or `picom`/`compton` on bare WMs like i3/openbox). Without a compositor the
+  panel renders with a black background — still functional, no longer floating.
+- Under native **Wayland**, the compositor owns window placement: manual drag
+  coordinates and tray anchoring are intentionally not persisted. X11/XWayland
+  sessions retain anchoring, reset and drag-position persistence.
+
+Unlike macOS, the Linux panel does **not** follow you across virtual desktops or
+float over fullscreen apps (X11/Wayland have no equivalent of the macOS
+non-activating panel — D57).
+
 ## What it is
 
 cc-autobahn **does not reimplement a token meter: it's an instrument-cluster
@@ -90,8 +129,8 @@ behavior and optional provider-native permission bridges.
 - **Zero setup** — no ccusage or Bun on the machine? one button installs
   both and starts polling, no terminal required.
 
-Current verified baseline: `cargo test` **143/143**, `npm run test:frontend`
-**59/59**, 45 pixel-compared Playwright baselines across Claude, Codex and
+Current verified baseline: `cargo test` **147/147**, `npm run test:frontend`
+**58/58**, 45 pixel-compared Playwright baselines across Claude, Codex and
 Both in amber, emerald and magenta at **550×150 / 550×290**, `cargo fmt --check`,
 `cargo clippy --all-targets --all-features -- -D warnings`, and
 `npm run build` all pass.
@@ -138,7 +177,18 @@ Both in amber, emerald and magenta at **550×150 / 550×290**, `cargo fmt --chec
 ## Development
 
 Requirements: [Node.js](https://nodejs.org/), [Rust](https://rustup.rs/), and
-the [Tauri v2 dependencies](https://v2.tauri.app/start/prerequisites/).
+the [Tauri v2 dependencies](https://v2.tauri.app/start/prerequisites/). On
+Linux, also install the Tauri system packages — Debian/Ubuntu:
+
+```sh
+sudo apt install -y build-essential pkg-config \
+  libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+  libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev
+```
+
+Fedora: `webkit2gtk4.1-devel libjavascriptcoregtk4.1-devel gtk3-devel
+libappindicator-gtk3-devel librsvg2-devel openssl-devel`. Arch:
+`webkit2gtk-4.1 javascriptcoregtk-4.1 gtk3 libappindicator-gtk3 librsvg openssl`.
 
 ```bash
 npm install          # Vite + Tauri CLI

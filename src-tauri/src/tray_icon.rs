@@ -35,6 +35,18 @@ const EXCLAMATION_STEM_BOTTOM_FRAC: f64 = 0.05; // * INNER_R below center
 const EXCLAMATION_DOT_R: f64 = S as f64 * 0.055;
 const EXCLAMATION_DOT_CENTER_FRAC: f64 = 0.6; // * INNER_R below center
 
+/// W203 VFD amber for the Linux tray. macOS uses alpha-only template
+/// masking (no RGB — AppKit supplies the tint), so these are Linux-only.
+/// AppIndicator has no template concept, so a 0-RGB pixel would be solid
+/// black; the ring is painted this fixed amber instead — same color as
+/// the rest of the VFD skin and `scripts/make-tray-icon-linux.mjs` (D55).
+#[cfg(not(target_os = "macos"))]
+const AMBER_R: u8 = 0xff;
+#[cfg(not(target_os = "macos"))]
+const AMBER_G: u8 = 0xb0;
+#[cfg(not(target_os = "macos"))]
+const AMBER_B: u8 = 0x00;
+
 /// 5h billing window in minutes — same as WINDOW_MIN in main.js.
 pub const WINDOW_MIN: f64 = 300.0;
 
@@ -306,11 +318,22 @@ fn paint(app: &AppHandle, buf: Vec<u8>) {
         return;
     };
     let image = tauri::image::Image::new_owned(buf, S, S);
-    // set_icon() alone does NOT preserve macOS's "template" flag (the icon
-    // gets repainted as a normal image, fixed black, without adapting to
-    // light/dark mode — bug found during visual review). set_icon_with_as_template()
-    // sets both atomically on every redraw.
+    paint_tray_icon(&tray, image);
+}
+
+// Platform fork kept in one place: macOS preserves the template flag on
+// every redraw (set_icon() alone repaints fixed black without adapting to
+// light/dark — real bug, D30); Linux/AppIndicator has no template concept,
+// and set_icon_with_as_template has been reported to drop the icon on some
+// libayatana versions, so Linux uses the plain setter (D55).
+#[cfg(target_os = "macos")]
+fn paint_tray_icon(tray: &TrayIcon<Wry>, image: tauri::image::Image) {
     let _ = tray.set_icon_with_as_template(Some(image), true);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn paint_tray_icon(tray: &TrayIcon<Wry>, image: tauri::image::Image) {
+    let _ = tray.set_icon(Some(image));
 }
 
 fn paint_summary(app: &AppHandle, candidates: &ProgressCandidates) {
@@ -374,10 +397,30 @@ fn draw_exclamation(buf: &mut [u8], alpha: u8) {
             let in_dot = (dx * dx + dy * dy).sqrt() <= EXCLAMATION_DOT_R;
             if in_stem || in_dot {
                 let i = ((y * S + x) * 4) as usize;
-                buf[i + 3] = alpha;
+                write_pixel(buf, i, alpha);
             }
         }
     }
+}
+
+/// Writes one RGBA pixel into `buf` at byte offset `i`. macOS paints alpha
+/// only (the icon is a template mask; AppKit supplies the tint, so RGB stays
+/// 0). Linux paints the amber VFD color — AppIndicator has no template
+/// concept, so a 0-RGB pixel would render solid black (D55). Geometry stays
+/// shared; only this write forks.
+#[cfg(target_os = "macos")]
+#[inline]
+fn write_pixel(buf: &mut [u8], i: usize, alpha: u8) {
+    buf[i + 3] = alpha;
+}
+
+#[cfg(not(target_os = "macos"))]
+#[inline]
+fn write_pixel(buf: &mut [u8], i: usize, alpha: u8) {
+    buf[i] = AMBER_R;
+    buf[i + 1] = AMBER_G;
+    buf[i + 2] = AMBER_B;
+    buf[i + 3] = alpha;
 }
 
 /// Shared ring geometry: in template mode (D24) macOS ignores RGB and uses
@@ -400,7 +443,7 @@ fn render_ring(alpha_at: impl Fn(f64) -> u8) -> Vec<u8> {
                 angle += TAU;
             }
             let i = ((y * S + x) * 4) as usize;
-            buf[i + 3] = alpha_at(angle);
+            write_pixel(&mut buf, i, alpha_at(angle));
         }
     }
     buf
@@ -520,5 +563,95 @@ mod tests {
             render_uniform(ARC_ALPHA),
             render_uniform_with_exclamation(ARC_ALPHA)
         );
+    }
+
+    fn pixel_rgb(buf: &[u8], x: u32, y: u32) -> (u8, u8, u8) {
+        let i = ((y * S + x) * 4) as usize;
+        (buf[i], buf[i + 1], buf[i + 2])
+    }
+
+    // The D55 fork locks both sides of the contract: macOS keeps RGB at 0 so
+    // AppKit's template tint adapts to light/dark; Linux paints amber so the
+    // ring is visible under AppIndicator (no template concept). A future
+    // refactor must not silently break either.
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_ring_keeps_rgb_zero_for_template_tinting() {
+        let buf = render(50.0);
+        let mut any_ring_pixel = false;
+        for y in 0..S {
+            for x in 0..S {
+                if (INNER_R..=OUTER_R).contains(&distance_from_center(x, y)) {
+                    any_ring_pixel = true;
+                    assert_eq!(
+                        pixel_rgb(&buf, x, y),
+                        (0, 0, 0),
+                        "macOS template ring must keep RGB 0 at ({x},{y})"
+                    );
+                }
+            }
+        }
+        assert!(any_ring_pixel);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_exclamation_keeps_rgb_zero() {
+        let mut buf = vec![0u8; (S * S * 4) as usize];
+        draw_exclamation(&mut buf, ARC_ALPHA);
+        for y in 0..S {
+            for x in 0..S {
+                if pixel_alpha(&buf, x, y) > 0 {
+                    assert_eq!(
+                        pixel_rgb(&buf, x, y),
+                        (0, 0, 0),
+                        "macOS exclamation must keep RGB 0 at ({x},{y})"
+                    );
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn linux_ring_paints_amber_vfd_rgb() {
+        let buf = render(50.0);
+        let mut any_ring_pixel = false;
+        for y in 0..S {
+            for x in 0..S {
+                if (INNER_R..=OUTER_R).contains(&distance_from_center(x, y)) {
+                    any_ring_pixel = true;
+                    assert_eq!(
+                        pixel_rgb(&buf, x, y),
+                        (AMBER_R, AMBER_G, AMBER_B),
+                        "Linux ring must be amber VFD at ({x},{y})"
+                    );
+                }
+            }
+        }
+        assert!(any_ring_pixel);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn linux_exclamation_is_amber_vfd_rgb() {
+        let buf = render_uniform_with_exclamation(ARC_ALPHA);
+        let mut painted_amber = false;
+        for y in 0..S {
+            for x in 0..S {
+                // Glyph lives in the ring's hole; the annulus is already
+                // covered by linux_ring_paints_amber_vfd_rgb.
+                if pixel_alpha(&buf, x, y) > 0 && distance_from_center(x, y) < INNER_R {
+                    assert_eq!(
+                        pixel_rgb(&buf, x, y),
+                        (AMBER_R, AMBER_G, AMBER_B),
+                        "Linux exclamation must be amber at ({x},{y})"
+                    );
+                    painted_amber = true;
+                }
+            }
+        }
+        assert!(painted_amber, "exclamation did not paint amber in the hole");
     }
 }

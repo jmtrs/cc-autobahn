@@ -1075,12 +1075,24 @@ fn resolve_executable(binary: &str, path: Option<&str>) -> Option<PathBuf> {
     for directory in std::env::split_paths(path) {
         for extension in extensions {
             let candidate = directory.join(format!("{binary}{extension}"));
-            if candidate.is_file() {
+            if is_executable_file(&candidate) {
                 return Some(candidate);
             }
         }
     }
     None
+}
+
+#[cfg(unix)]
+fn is_executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+#[cfg(not(unix))]
+fn is_executable_file(path: &Path) -> bool {
+    path.is_file()
 }
 
 #[cfg(test)]

@@ -14,15 +14,34 @@ use std::path::PathBuf;
 use tauri::Manager;
 
 /// Directories prepended when they exist on disk, in priority order.
+///
+/// `is_dir()` in `hardened()` filters absent entries, so it is safe to list
+/// both macOS and Linux locations: each platform only sees its own present
+/// dirs. Linux-specific entries (`~/.cargo/bin`, `/snap/bin`, flatpak,
+/// Linuxbrew, Nix) were added for the Linux port (D36/D54).
 fn candidates() -> Vec<PathBuf> {
     let mut dirs = vec![
-        PathBuf::from("/opt/homebrew/bin"), // Homebrew, Apple Silicon
-        PathBuf::from("/usr/local/bin"),    // Homebrew, Intel / node .pkg
+        PathBuf::from("/opt/homebrew/bin"), // Homebrew, Apple Silicon (macOS)
+        PathBuf::from("/usr/local/bin"),    // Homebrew Intel / node .pkg (macOS+Linux)
     ];
     if let Some(home) = crate::env_lock::var_os("HOME") {
         let home = PathBuf::from(home);
-        dirs.push(home.join(".bun/bin")); // official Bun installer (D9)
-        dirs.push(home.join(".local/bin"));
+        dirs.push(home.join(".bun/bin")); // official Bun installer (D9, macOS+Linux)
+        dirs.push(home.join(".local/bin")); // pipx/cargo user installs (Linux)
+        dirs.push(home.join(".cargo/bin")); // rustup (Linux)
+        dirs.push(home.join(".local/share/flatpak/exports/bin")); // Flatpak shims
+        dirs.push(home.join(".nix-profile/bin")); // Nix single-user
+    }
+    // System-wide locations (filtered out when absent on the host).
+    dirs.push(PathBuf::from("/snap/bin")); // Snap (Ubuntu/Fedora)
+    dirs.push(PathBuf::from("/home/linuxbrew/.linuxbrew/bin")); // Linuxbrew
+
+    // Nix multi-user profile, resolved from $USER (no libc/getpwuid dep).
+    if let Some(user) = crate::env_lock::var_os("USER") {
+        let mut p = PathBuf::from("/etc/profiles/per-user");
+        p.push(user);
+        p.push("bin");
+        dirs.push(p);
     }
     dirs
 }

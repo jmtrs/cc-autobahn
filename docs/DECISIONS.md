@@ -4,7 +4,7 @@ Decisions made during design, with their reasoning. Lightweight format.
 
 > Test counts inside individual decisions are point-in-time verification
 > records for that change, not the current repository total. The current
-> automated baseline is 143 Rust and 59 frontend tests; see `README.md` and `docs/ROADMAP.md`.
+> automated baseline is 147 Rust and 58 frontend tests; see `README.md` and `docs/ROADMAP.md`.
 
 ## D1 — Don't reinvent the data engine
 
@@ -713,12 +713,12 @@ and its binary checked out as a real universal fat file (`x86_64 arm64`).
 
 **Decision**: releasing is `npm run release -- <patch|minor|major|X.Y.Z>`
 (`scripts/release.mjs`). It refuses a dirty tree / non-main branch / existing
-tag, runs `cargo test` as a local gate, bumps the version in the four files
-that carry it (`package.json`, `tauri.conf.json`, `Cargo.toml`, `Cargo.lock`)
-so they can't drift, then commits, tags and pushes. From the tag,
-`release.yml` re-gates on tests, builds the unsigned universal dmg,
-**publishes** the GitHub Release (no longer a draft — the cask's download URL
-must be live when the tap update lands, unlike D34's original draft flow) and
+tag, runs `cargo test` as a local gate, bumps both npm manifests plus the
+Tauri/Cargo versions, and prepends a dated AppStream release entry so they
+cannot drift, then commits, tags and pushes. From the tag,
+`release.yml` re-gates on tests, builds and validates Linux first as the cheaper
+failure gate, then builds the unsigned universal dmg into a draft, attaches the
+stored Linux bundles, publishes the complete release, and
 updates the cask in the **existing** `jmtrs/homebrew-tap` repo
 (`Casks/cc-autobahn.rb`, same tap as `no-coauthor`) via the
 `HOMEBREW_TAP_TOKEN` secret — the same PAT pattern no-coAuthor's workflow
@@ -734,7 +734,7 @@ stanza (Homebrew ≥ 5 quarantines all casks; `--no-quarantine` is gone).
 
 **Verified**: `brew fetch --cask jmtrs/tap/cc-autobahn` green on v0.1.0
 (downloads the dmg and validates the sha256); `scripts/release.mjs` syntax
-checked and its four version-bump regexes matched against the real files. The
+checked and its version/AppStream regexes matched against the real files. The
 cask-update step itself first runs on the next tag.
 
 ## D36 — Finder-launch PATH hardening, non-blocking Bun install, self-healing statusline copy
@@ -1394,7 +1394,8 @@ events use explicit `app-engine-*` names and are not provider events.
 
 **Testing and CI**: Node's built-in runner covers isolated buffers, strict
 routing, health hydration, replay/equal-timestamp rejection and global chassis
-updates. CI runs it on direct pushes to `main`/`develop` and on pull requests.
+updates. CI runs it on pull requests targeting `main`/`develop`; both native
+jobs are required by branch protection before merge.
 
 **Verification**: 77/77 Rust tests and 9/9 frontend tests pass, plus Vite
 production build, Rustfmt, strict Clippy and `git diff --check`. A fresh
@@ -1625,3 +1626,191 @@ read clearly at the actual 44px render size. 143 Rust tests (3 new: hole
 stays empty for a plain alert, exclamation glyph stays inside the hole and
 paints something, the two frames differ), 59 frontend tests, 45 visual
 baselines, Rustfmt, strict Clippy and the Vite production build pass.
+
+## D54 — Port the cluster to Linux (baseline + no-regression contract)
+
+**Problem**: the cluster was macOS-only. The goal is a professional Linux port
+usable on any distro, latest stable versions, every decision recorded.
+
+**Decision**: the port is **additive**. The macOS-specific code was already
+cleanly `#[cfg(target_os = "macos")]`-gated with `not(macos)` fallbacks in
+almost every site (`window.rs`, `main.rs`, `diagnostics.rs`, `tray_icon.rs`), and
+`Cargo.lock` already resolved `libappindicator`/`webkit2gtk` as transitive deps
+of `tauri`/`wry`/`tray-icon` that compile in only on Linux. So the Linux port
+adds new cfg-gated branches and new cfg-gated tests rather than rewriting shared
+code. The `macos-private-api` cargo feature and `macOSPrivateApi: true` conf flag
+stay untouched — they are no-ops off macOS (D14 coupling preserved).
+
+**No-regression contract**: the macOS baseline is frozen before any change
+(145 Rust tests, 58 frontend tests, 45 visual baselines, Rustfmt, strict Clippy,
+Vite build) and re-run after every phase. The first concrete change is a
+`check-linux` CI job that must pass **without a single source edit** — proving
+the cfg gating compiles clean on Linux. If it fails, fix the gate before
+proceeding. Linux CI runs fmt + clippy (`-D warnings`) + `cargo test` + Vite
+build only; visual/frontend regression stays macOS-only (D58).
+
+## D55 — Tray icon: amber RGB fork for Linux (no template concept)
+
+**Problem**: `render_ring`/`draw_exclamation` (`tray_icon.rs`) write alpha only,
+leaving RGB at 0 — correct on macOS where `set_icon_with_as_template` makes
+AppKit use alpha as a luminance mask and re-tint per light/dark mode (D30).
+Linux/AppIndicator (`libayatana-appindicator`) has **no template concept**: the
+icon is written to `$XDG_RUNTIME_DIR` as a regular PNG, so a 0-RGB pixel renders
+solid black and the ring is invisible. `icon_as_template(true)` and
+`set_icon_with_as_template` are documented macOS-only no-ops on Linux.
+
+**Decision**: fork at the single innermost pixel write, not at the geometry. A
+`write_pixel` helper has two `cfg` bodies — macOS writes alpha only (RGB stays
+0, template contract preserved), Linux writes the W203 VFD amber
+`(0xff, 0xb0, 0x00)` (same color as the rest of the skin and
+`scripts/make-tray-icon-linux.mjs`) plus the same alpha. `render_ring`'s geometry
+(the load-bearing part) stays shared, so the existing alpha-only geometry tests
+hold on both platforms. `paint` dispatches to `set_icon_with_as_template` on
+macOS and plain `set_icon` on Linux (`set_icon_with_as_template` has been
+reported to drop the icon on some `libayatana` versions). The cold-launch
+initial icon is cfg-gated: `tray-icon-template.png` on macOS,
+`tray-icon-linux.png` (amber disc) on Linux, so there is no black-square flash
+before the first redraw.
+
+**Verification**: two `#[cfg(target_os = "macos")]` tests lock the RGB-stays-0
+template contract; two `#[cfg(not(target_os = "macos"))]` tests lock amber RGB
+on the ring and the exclamation glyph. macOS baseline unchanged (the new macOS
+tests assert the prior behavior byte-for-byte).
+
+## D56 — Activation policy on Linux: no Dock/Workspace equivalent
+
+**Problem**: `app.set_activation_policy(Accessory)` (`main.rs`) removes the app
+from the macOS Dock/Cmd+Tab so it lives only in the menu bar (D24). It is a
+macOS-only AppKit concept.
+
+**Decision**: leave the call `#[cfg(target_os = "macos")]`-gated (no Linux
+branch). On Linux the "no taskbar entry" outcome comes from the already-set
+`skipTaskbar: true` in `tauri.conf.json`. The generated `.desktop` remains
+visible as a recovery launch path when the desktop has no usable tray (D59).
+The official single-instance plugin is registered first; a relaunch asks the
+existing process to show its panel instead of duplicating tray/provider state.
+
+## D57 — Panel positioning and feature-parity gaps on Linux
+
+**Problem**: `configure_fullscreen_panel` (`window.rs`) makes the macOS panel a
+non-activating `NSPanel` that joins all Spaces, floats over fullscreen apps, and
+sits at screen-saver window level (D43). None of these concepts exist on
+X11/Wayland. AppIndicator also does not expose tray-icon screen geometry back to
+the app, so `tray.rect()` returns `None` on Linux and the panel cannot anchor
+exactly under the tray icon.
+
+**Decision**: `show_panel`'s `not(macos)` branch uses `window.show()` +
+`set_focus()`. X11 uses tao's `set_position`; when `valid_tray_rect` returns
+`None`, it falls back to the last observed click then the primary work area's
+top-right. Native Wayland forbids application-controlled placement, so runtime
+detection skips anchoring and drag-coordinate persistence instead of pretending
+the operation succeeded. `configure_fullscreen_panel` compiles out entirely.
+
+**Consequence — declared parity gaps, not bugs**: on Linux the panel does **not**
+follow the user across virtual desktops and does **not** float over fullscreen
+apps. This is a fundamental difference between AppKit panels and X11/Wayland
+windows; it is documented in the README, not worked around.
+
+**Compositor precondition**: `transparent: true` only composites correctly under
+a compositing WM (Mutter/KWin/wlroots, or `picom`/`compton`). On a bare WM
+without a compositor the panel renders with a black background — still
+functional, no longer "floating." Tauri does not expose `gdk_screen_is_composited`
+to detect this at runtime, and a brittle detection would be worse than the
+problem, so the precondition is stated in the README and the `.desktop` comment
+rather than detected.
+
+## D58 — Visual/frontend regression stays macOS-only on CI
+
+**Problem**: the `check-linux` CI job (D54) cannot run `npm run test:visual`
+meaningfully.
+
+**Decision**: keep visual regression macOS-only on CI. The Playwright baselines
+are pixel-compared against macOS WebKit/Safari; WebKitGTK anti-aliasing and
+sub-pixel rendering differ enough that running the same baselines on Linux would
+mass-fail without catching real regressions. The frontend **logic** tests
+(`npm run test:frontend`, plain `node --test` — no DOM/WebKit) DO run on
+`check-linux`, since they are cross-platform; `npm run build` (Vite) runs on
+both too. Only the pixel-compared visual baselines stay macOS-only.
+
+**Consequence / follow-up**: a separate Linux baseline set could be added later
+if the project ever ships Linux-specific UI variants.
+
+## D59 — Linux packaging: .deb + .rpm + .AppImage, .desktop, AppStream
+
+**Problem**: ship a professional, distro-spanning Linux distribution from the
+existing tag-triggered release pipeline.
+
+**Decision**: `bundle.linux` in `tauri.conf.json` declares runtime deps so the
+package managers enforce them — `deb.depends` (`libwebkit2gtk-4.1-0`,
+`libayatana-appindicator3-1`, `libgtk-3-0`), `rpm.depends` (`webkit2gtk4.1`,
+`libappindicator-gtk3`, `gtk3`), plus `bash`/`curl`/`unzip` for Bun installation. Three
+formats cover the supported paths: `.deb` (Debian/Ubuntu), `.rpm` (Fedora), and
+`.AppImage` (portable fallback, including openSUSE until a native RPM is tested).
+A Handlebars `desktopTemplate` keeps `Terminal=false` and adds Claude/Codex/tokens
+keywords. The entry remains visible so users can recover if the tray is absent.
+AppStream metadata (`com.jmtrs.cc-autobahn.metainfo.xml`) is installed to
+`/usr/share/metainfo/` in all three bundles so software centers and AppImage
+integration tools can present the app.
+
+**Release pipeline**: `release-linux` (Ubuntu 22.04) runs first, builds all three
+formats, validates dependencies, contents, desktop entry and AppStream metadata,
+then stores them with `actions/upload-artifact`. Only after that cheaper gate
+passes does `release-macos` build the dmg, create a draft, attach the validated
+Linux files with `gh release upload`, verify all four assets and publish. This
+avoids partial releases and the upload path in `tauri-apps/tauri-action#973`.
+
+**Verification**: Linux CI now builds all three bundles, inspects package
+contents/dependencies, and validates both the desktop entry and AppStream XML.
+
+## D60 — Verification matrix: sign off per distro, not "should work"
+
+**Problem**: CI has no display, so it cannot verify tray/panel UX on a real
+desktop. "Compiles and tests pass" is not "works."
+
+**Decision**: automated per-PR checks (fmt/clippy/test/build) run on both macOS
+and Ubuntu. UX verification is a documented, per-release smoke matrix performed
+manually (or via an Xvfb container for liveness only): Ubuntu 24.04 GNOME 46 with
+and without the AppIndicator extension, Fedora 43 KDE/KWin (SNI tray, a different
+code path than AppIndicator), Arch i3 with and without `picom`, Debian 12 GNOME,
+openSUSE Tumbleweed KDE. Each row verifies the tray icon renders amber, the ring
+redraws, the alert/permission blinks, panel show/hide, drag persistence,
+hide-on-blur, PIN, the permission gate over the Unix socket, and the native
+package install and visible launcher recovery. The AppImage is run on top of every row. Linux
+support is not announced until each row is signed off.
+
+## D61 — Deferred (open follow-ups, recorded so they are not forgotten)
+
+**Decision**: the following are explicitly out of scope for the first Linux
+release and tracked here:
+
+- **aarch64 Linux**: only `x86_64-unknown-linux-gnu` builds in CI. That AppImage
+  does not run natively on ARM; a native build needs an ARM runner because
+  linuxdeploy does not support cross-compiling AppImages.
+- **libnotify desktop notifications**: permission requests are visual-only (the
+  tray blink + the gate panel) on both platforms. A `libnotify` path on Linux is
+  possible later.
+- **Flatpak**: sandboxing challenges with the Unix socket at
+  `~/.claude/cc-autobahn/permission.sock` and the tray-under-Flatpak bug
+  (`tauri-apps/tauri#13599`) make Flatpak a larger follow-up than .deb/.rpm.
+- **Autostart**: a `~/.config/autostart/` `.desktop` entry is not generated yet.
+- **Linux visual baselines**: see D58.
+- **aarch64-apple-darwin native**: out of scope here (macOS universal already).
+
+## D62 — CI gates integration once; release rebuilds the published tag
+
+**Problem**: CI ran the full macOS/Linux matrix for a pull request and then ran
+the identical matrix again when GitHub pushed the merge result to `develop` or
+`main`. The second run added cost and latency without a new review boundary.
+
+**Decision**: CI runs automatically only for pull requests targeting
+`develop` or `main`, with one cancellable run per PR; `workflow_dispatch`
+remains available for explicit diagnostics. Both branches are protected and
+require `check-macos` plus `check-linux` before merge, so removing post-merge
+push runs does not permit unverified integration. The tag-triggered release
+workflow remains separate: rebuilding there is intentional because it creates
+and validates the exact `.deb`, `.rpm`, `.AppImage`, and `.dmg` artifacts that
+will be published.
+
+**Consequence**: a feature or promotion pays for the native matrix once at its
+PR gate. Updating a PR cancels its stale run. A release still rebuilds the tag
+because release artifacts cannot be reused safely from a different ref/run.

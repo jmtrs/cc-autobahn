@@ -52,6 +52,15 @@ fn main() {
     }
 
     tauri::Builder::default()
+        // Must be the first registered plugin. A desktop-entry launch while
+        // the tray app is already running reuses that process instead of
+        // creating a second tray, provider set and permission listener.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            window::clear_auto_opened_by_permission(app);
+            if let Some(window) = app.get_webview_window("cluster") {
+                let _ = window::show_panel(&window);
+            }
+        }))
         .invoke_handler(tauri::generate_handler![
             engine::engine_status,
             engine::install::install_bun,
