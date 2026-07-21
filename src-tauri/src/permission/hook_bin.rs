@@ -25,7 +25,7 @@ const HOOK_READ_TIMEOUT_SECS: u64 = 580;
 /// Native permission suggestions can be almost as large as the incoming hook
 /// payload because the GUI echoes one unchanged as `updatedPermissions`.
 /// Preserve the same hard cap plus small JSON-envelope headroom.
-const MAX_RESPONSE_BYTES: u64 = super::MAX_REQUEST_BYTES + 4 * 1024;
+const MAX_RESPONSE_BYTES: u64 = super::transport::MAX_REQUEST_BYTES + 4 * 1024;
 
 /// Claude Code's own stdin contract for tool-event hooks (snake_case) —
 /// distinct from [`HookRequest`], which is this app's own (camelCase) wire
@@ -154,7 +154,7 @@ fn ask_gui_files(request: &HookRequest, socket_path: &std::path::Path) -> Option
     let (requests, responses) = super::file_bridge_dirs_at(socket_path)?;
     for dir in [&requests, &responses] {
         std::fs::create_dir_all(dir).ok()?;
-        super::set_directory_private(dir).ok()?;
+        super::transport::set_directory_private(dir).ok()?;
     }
 
     let request_path = requests.join(format!("{}.json", request.request_id));
@@ -174,7 +174,7 @@ fn ask_gui_files(request: &HookRequest, socket_path: &std::path::Path) -> Option
         return None;
     }
 
-    let deadline = Instant::now() + Duration::from_secs(super::QUEUE_TIMEOUT_SECS + 5);
+    let deadline = Instant::now() + Duration::from_secs(super::transport::QUEUE_TIMEOUT_SECS + 5);
     while Instant::now() < deadline {
         match std::fs::read(&response_path) {
             Ok(bytes) => {
@@ -184,7 +184,7 @@ fn ask_gui_files(request: &HookRequest, socket_path: &std::path::Path) -> Option
                 return decision;
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                std::thread::sleep(Duration::from_millis(super::FILE_BRIDGE_POLL_MS));
+                std::thread::sleep(Duration::from_millis(super::transport::FILE_BRIDGE_POLL_MS));
             }
             Err(_) => break,
         }
