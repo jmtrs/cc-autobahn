@@ -11,7 +11,15 @@ use crate::window::{
     position_saved_or_under_tray, show_panel, valid_tray_rect, AutoRepositionGuard, PositionState,
 };
 
+// macOS uses the alpha-only "template" PNG so AppKit tints it per light/dark
+// mode (D24). Linux/AppIndicator has no template concept — that PNG renders
+// solid black — so Linux embeds an amber VFD disc instead (D55). The first
+// `tray_icon::set_progress` call overwrites this within milliseconds either
+// way; this only avoids a black-square flash at cold launch.
+#[cfg(target_os = "macos")]
 const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon-template.png");
+#[cfg(not(target_os = "macos"))]
+const TRAY_ICON_BYTES: &[u8] = include_bytes!("../icons/tray-icon-linux.png");
 // Clicking the icon to *close* the panel first triggers the blur (which
 // hides it) and then the tray click event (which would reopen it). If the
 // click arrives right after a hide-by-blur, it's ignored (D24).

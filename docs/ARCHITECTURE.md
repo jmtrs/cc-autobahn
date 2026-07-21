@@ -186,9 +186,10 @@ IPC/events.
 - OS webview → ~5 MB binary vs ~150 MB for Electron.
 - Native Rust backend for exec/tail with no overhead.
 - `always-on-top` + frameless + transparent + native tray/menu-bar (D24).
-- Cross-platform foundation. Current release/support is macOS; native panel
-  behavior is macOS-specific, the permission transport is Unix-only, and
-  Windows/Linux remain unvalidated.
+- Cross-platform foundation. Current release/support is **macOS and Linux**
+  (D54–D61); native panel behavior is macOS-specific (`configure_fullscreen_panel`
+  compiles out on Linux — D57), the permission transport is Unix-only (works on
+  Linux), and Windows remains unvalidated.
 
 ## Current status
 
@@ -210,5 +211,5 @@ Codex provider foundation and the complete dual-provider chassis are implemented
 local rollout speed/model/thread telemetry and local estimated history are
 implemented; official App Server account data, provider-native permission
 hooks, model presentation and conservative dual-provider tray summary are
-implemented. Bun sidecar, Windows/Linux validation, and trusted cross-surface
-release soak remain.
+implemented. Bun sidecar, the Linux port (D54–D61), and trusted cross-surface
+release soak remain; Windows stays unvalidated.

@@ -8,14 +8,11 @@
 //! stays in the parent module.
 
 use std::collections::HashMap;
-
-#[cfg(target_os = "macos")]
 use std::io::Read;
-#[cfg(target_os = "macos")]
 use std::path::Path;
-#[cfg(target_os = "macos")]
+#[cfg(not(target_os = "macos"))]
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
-#[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
 use super::codex;
@@ -343,9 +340,63 @@ pub(super) fn related_codex_runtimes() -> Vec<RuntimeDiagnostic> {
     .collect()
 }
 
+/// Linux: probe `$PATH` plus the common install locations for a `codex`
+/// executable and report each unique one with its `--version`. No `.app`
+/// bundles or `plutil` on Linux — the CLI is the only surface (D54).
 #[cfg(not(target_os = "macos"))]
 pub(super) fn related_codex_runtimes() -> Vec<RuntimeDiagnostic> {
-    Vec::new()
+    probe_codex_in(&codex_search_dirs())
+}
+
+/// Builds the search directory list from `$PATH` plus common Linux install
+/// locations. Separate from the probe so the probe stays pure and testable.
+#[cfg(not(target_os = "macos"))]
+fn codex_search_dirs() -> Vec<PathBuf> {
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(path) = crate::env_lock::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path));
+    }
+    if let Some(home) = crate::env_lock::var_os("HOME") {
+        let home = PathBuf::from(home);
+        dirs.push(home.join(".local/bin"));
+        dirs.push(home.join(".cargo/bin"));
+        dirs.push(home.join(".local/share/flatpak/exports/bin"));
+    }
+    dirs.push(PathBuf::from("/usr/local/bin"));
+    dirs.push(PathBuf::from("/usr/bin"));
+    dirs.push(PathBuf::from("/snap/bin"));
+    dirs
+}
+
+/// One diagnostic per unique `codex` executable across `search_dirs`, deduped
+/// by canonical path so symlinks/shims don't double-count the same binary.
+/// Not pure — it shells out to `codex --version` (bounded by `command_version`)
+/// and reads the filesystem — but its inputs are explicit (the dir list is a
+/// parameter, not env I/O), so the discovery logic is unit-testable with a
+/// temp dir holding a fake `codex`.
+#[cfg(not(target_os = "macos"))]
+fn probe_codex_in(search_dirs: &[PathBuf]) -> Vec<RuntimeDiagnostic> {
+    use std::collections::HashSet;
+
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut out: Vec<RuntimeDiagnostic> = Vec::new();
+    for dir in search_dirs {
+        let candidate = dir.join("codex");
+        if !candidate.is_file() {
+            continue;
+        }
+        let canonical = std::fs::canonicalize(&candidate).unwrap_or_else(|_| candidate.clone());
+        if !seen.insert(canonical.clone()) {
+            continue;
+        }
+        out.push(RuntimeDiagnostic {
+            surface: "Codex CLI".into(),
+            product_version: None,
+            runtime_executable: Some(canonical.to_string_lossy().into_owned()),
+            runtime_version: command_version(&canonical),
+        });
+    }
+    out
 }
 
 #[cfg(target_os = "macos")]
@@ -358,14 +409,12 @@ fn bundle_product_version(bundle: &Path) -> Option<String> {
     bounded_stdout(&mut command, Duration::from_secs(2)).and_then(|bytes| output_text(&bytes))
 }
 
-#[cfg(target_os = "macos")]
 fn command_version(executable: &Path) -> Option<String> {
     let mut command = Command::new(executable);
     command.arg("--version");
     bounded_stdout(&mut command, Duration::from_secs(2)).and_then(|bytes| output_text(&bytes))
 }
 
-#[cfg(target_os = "macos")]
 fn bounded_stdout(command: &mut Command, timeout: Duration) -> Option<Vec<u8>> {
     let mut child = command
         .stdout(Stdio::piped())
@@ -394,7 +443,6 @@ fn bounded_stdout(command: &mut Command, timeout: Duration) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-#[cfg(target_os = "macos")]
 fn output_text(bytes: &[u8]) -> Option<String> {
     let value = String::from_utf8_lossy(bytes).trim().to_string();
     (!value.is_empty()).then_some(value)
@@ -526,5 +574,29 @@ mod tests {
         let started = Instant::now();
         assert!(bounded_stdout(&mut command, Duration::from_millis(20)).is_none());
         assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn linux_codex_probe_finds_and_versions_a_codex_binary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("ccab-codex-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let codex = dir.join("codex");
+        std::fs::write(&codex, "#!/bin/sh\necho 'codex 0.0.0-test'\n").unwrap();
+        let mut perms = std::fs::metadata(&codex).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&codex, perms).unwrap();
+
+        let found = probe_codex_in(&[dir.clone()]);
+        assert_eq!(found.len(), 1, "exactly one codex diagnostic expected");
+        assert_eq!(found[0].surface, "Codex CLI");
+        assert_eq!(
+            found[0].runtime_version.as_deref(),
+            Some("codex 0.0.0-test"),
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
