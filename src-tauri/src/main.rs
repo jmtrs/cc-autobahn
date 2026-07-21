@@ -32,6 +32,27 @@ use tauri::Manager;
 use path_state::PathState;
 use window::PinnedState;
 
+/// Old/broken Mesa+EGL combos (e.g. Intel HD 4000 / Ivy Bridge) fail to
+/// create a DMA-BUF backed EGL context (`EGL_BAD_PARAMETER`) and leave the
+/// frameless/transparent panel painted with nothing — a different failure
+/// mode than D57's no-compositor/black-background case. Disabling WebKit's
+/// DMA-BUF compositing path falls back to plain GL texture upload: still
+/// GPU-accelerated, so modern Linux systems shouldn't take a real hit. Only
+/// sets the value if the user/distro hasn't already exported one, so power
+/// users keep control (e.g. forcing full software rendering via
+/// `WEBKIT_DISABLE_COMPOSITING_MODE` themselves on more broken setups).
+///
+/// Safety: called before `tauri::Builder::default()`, before any thread in
+/// this process is spawned — no concurrent `getenv`/`setenv` race is
+/// possible yet (see `env_lock.rs`/`path_state.rs` for why this crate
+/// otherwise avoids mutating real process env post-startup).
+#[cfg(target_os = "linux")]
+fn harden_webkit_render_env() {
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        unsafe { std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1") };
+    }
+}
+
 fn main() {
     // Statusline mode: decided before touching Tauri (no webview, no window).
     let mut args = std::env::args().skip(1);
@@ -50,6 +71,9 @@ fn main() {
         }
         _ => {}
     }
+
+    #[cfg(target_os = "linux")]
+    harden_webkit_render_env();
 
     tauri::Builder::default()
         // Must be the first registered plugin. A desktop-entry launch while

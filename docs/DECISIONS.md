@@ -1814,3 +1814,124 @@ will be published.
 **Consequence**: a feature or promotion pays for the native matrix once at its
 PR gate. Updating a PR cancels its stale run. A release still rebuilds the tag
 because release artifacts cannot be reused safely from a different ref/run.
+
+## D63 — Off-screen panel fallback and WebKit DMA-BUF hardening on Linux
+
+**Problem 1**: on a single, low-resolution monitor (1366px-wide laptop panel),
+the cluster window could be positioned entirely off-screen at startup.
+`position_under_tray` (`window.rs`) computes `x`/`y` from the tray icon's
+reported rect, then clamps them to the monitor that contains the icon's
+center — but only *if* that monitor is found. Some Linux AppIndicator
+backends report a stale/inconsistent `IconGeometry` (the property is
+deprecated in the StatusNotifierItem spec), so the icon's reported center can
+fall outside every monitor `available_monitors()` returns. When that
+happened, the clamp block was skipped entirely and the raw, unclamped
+coordinates were used verbatim — landing the panel off-screen. `position_at`
+(used for saved drag overrides) already guarded against the equivalent case
+with `exact_host.or_else(|| monitors.first())`; `position_under_tray` lacked
+that fallback.
+
+**Decision 1**: `position_under_tray` now falls back to the first available
+monitor when the icon's reported center matches none, mirroring `position_at`.
+The clamp always runs against a real monitor when at least one exists, so the
+panel can no longer be placed at fully unclamped coordinates. The `x`-clamp
+math was extracted into a pure `clamp_x_to_monitor` helper (same shape as the
+pre-existing `panel_y_below_tray`) specifically so this regression is
+covered by a unit test without needing a live `tauri::Monitor`.
+
+**Problem 2**: on old Intel iGPUs with an outdated Mesa driver (seen on Ivy
+Bridge / HD 4000), WebKitGTK's DMA-BUF-backed EGL context creation fails with
+`EGL_BAD_PARAMETER`. Because the panel is frameless and transparent by design
+(D14/D57), a WebKit that never paints looks identical to a working-but-hidden
+window — the process is running, the window exists and is frontmost, but
+nothing is ever drawn. This is a different failure mode than D57's
+no-compositor case (which paints an opaque black background, not nothing),
+and neither this repo nor `docs/DECISIONS.md` previously accounted for it.
+
+**Decision 2**: on Linux only, before `tauri::Builder::default()` is called
+(i.e. before Tauri creates the declared window/webview during `.build()`),
+`main.rs` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless the variable is
+already present in the environment. This disables WebKit's DMA-BUF
+compositing path specifically — not full software rendering
+(`WEBKIT_DISABLE_COMPOSITING_MODE`, a heavier hammer with a real
+CPU/quality cost on capable hardware) — so it falls back to plain GL texture
+upload and stays GPU-accelerated on systems where DMA-BUF works fine. Setting
+it unconditionally (gated only on the variable being unset) is a deliberate
+trade: there's no reliable, dependency-free way from this codebase to detect
+in advance whether a given Mesa/EGL combination will fail, and this specific
+variable's downside on a working setup is negligible. `WEBKIT_DISABLE_COMPOSITING_MODE`
+remains a documented manual escape hatch (README) for the rarer case where
+disabling DMA-BUF alone isn't enough.
+
+`std::env::set_var` is normally avoided in this crate post-startup
+(`env_lock.rs`, `path_state.rs`: unsynchronized POSIX `setenv` racing
+`getenv` calls from Tauri/objc2/libc internals running on other threads).
+That reasoning doesn't apply here: the call happens at the very top of
+`fn main()`, strictly before `tauri::Builder::default()` and before any
+thread in the process is spawned, so no concurrent `getenv` can race it.
+
+**Consequence**: a narrow single monitor no longer produces an off-screen
+panel regardless of what the tray backend reports. Linux panels get a
+best-effort, low-risk render fix out of the box; users on more severely
+broken drivers still have `WEBKIT_DISABLE_COMPOSITING_MODE` as a manual
+override, and setting it themselves is respected (not overridden) by the
+new startup check.
+
+## D64 — Linux panel never hides on blur (diverges from macOS by design)
+
+**Problem**: `wire`'s hide-on-blur (D24) was written for macOS's menu-bar
+dropdown model — click the tray icon or click away, the panel hides,
+because a fresh click on the tray icon is always available to bring it
+back. Linux has no equivalent left-click-to-toggle (D57/D58: Tauri emits no
+`TrayIconEvent` and doesn't support menu-on-left-click there), so opening
+the panel again means going through the right-click "Show/hide" menu item
+every time. Importing macOS's hide-on-blur as-is made the Linux panel
+disappear the instant it lost focus — including from the user's own click
+inside it, since some Linux compositors (confirmed on GNOME/Mutter, both
+native Wayland and XWayland) don't reliably grant the programmatically
+`show()` + `set_focus()`'d panel real, lasting input focus. A 200ms
+debounce (checking `window.is_focused()` before committing to hide) was
+tried first; it didn't help, because the loss of focus after a click
+turned out to be real and persistent, not a transient churn that
+self-heals a moment later.
+
+**Decision**: on Linux, the panel simply never hides on blur, but losing
+focus still flushes the pending drag-position override to disk — those are
+split into two independent effects of the same `Focused(false)` arm now.
+Only the actual `.hide()` call is `#[cfg(not(target_os = "linux"))]`-gated;
+the pinned-check, the `blur_flag` timestamp, and the position flush all run
+unconditionally, because dragging is still supported and persisted on
+Linux under X11/XWayland (`platform_positioning_supported`) even though the
+panel no longer hides there — without the flush, a drag's last position
+could be silently dropped if its final `Moved` event landed inside
+`POSITION_WRITE_THROTTLE`'s window with no later event or blur-hide to
+catch it up. The panel behaves like a persistent desktop widget on Linux:
+visible until the user hides it via the tray's "Show/hide" menu item,
+matching how it's actually opened there. `PIN` still has a real effect on
+Linux despite the hide being gone — `maybe_close_after_permission` (the
+auto-close-after-a-resolved-permission-request path) checks the same
+`PinnedState` independently of this arm, so pinning still prevents that
+auto-close.
+
+**Consequence**: Linux and macOS intentionally diverge on hide-on-blur —
+D54's no-regression contract is about not breaking macOS, not about
+identical UX everywhere. Only `hide_window` is
+`#[cfg(not(target_os = "linux"))]`-gated in `wire`; `blur_flag` and
+`pinned_for_blur` stay cross-platform since the flush and the
+permission-auto-close path both still need them on Linux.
+
+**Follow-up — PIN repurposed as "stay on top" on Linux**: `alwaysOnTop` in
+`tauri.conf.json` is a static default applied at window creation on every
+platform. Combined with never hiding on blur, that made the Linux panel a
+permanent floating overlay from the moment it opens, whether or not it was
+pinned — backwards from what PIN is supposed to mean (unpinned should be
+the *less* intrusive state, pinned the *more* persistent one), and reported
+as confusing in testing on real hardware. `wire` now calls
+`window.set_always_on_top(false)` once at startup on Linux to override that
+static default, and `set_pinned` (the same command the PIN button already
+calls) additionally calls `window.set_always_on_top(value)` there — pinning
+now means "stay above everything," unpinning means "behave like a normal
+window, can be covered." macOS is untouched: its stacking comes from
+`configure_fullscreen_panel`'s native `NSScreenSaverWindowLevel` (D43), not
+from `alwaysOnTop`, and hide-on-blur remains its own "get out of the way"
+mechanism, so PIN keeps its original meaning there.
