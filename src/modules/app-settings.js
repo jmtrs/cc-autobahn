@@ -16,6 +16,7 @@ const DEFAULTS = Object.freeze({
     mfd: { defaultPage: 0, showHistory: true, showLimits: true, screenOrder: [1, 2] },
     theme: { themeId: "amber", customAccent: "#ff9a1f" },
     permissionSound: { soundId: "chime", customDataUrl: null },
+    autoShowOnPermission: true,
     footerMetric: "pace",
     nameplates: {},
   },
@@ -55,6 +56,10 @@ function normalize(candidate) {
         ...DEFAULTS.global.permissionSound,
         ...object(global.permissionSound),
       },
+      autoShowOnPermission:
+        typeof global.autoShowOnPermission === "boolean"
+          ? global.autoShowOnPermission
+          : DEFAULTS.global.autoShowOnPermission,
       footerMetric: global.footerMetric === "autonomy" ? "autonomy" : "pace",
       nameplates: { ...object(global.nameplates) },
     },

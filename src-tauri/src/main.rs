@@ -80,11 +80,18 @@ fn main() {
             permission::codex_install::install_codex_permission_hook,
             permission::codex_install::uninstall_codex_permission_hook,
             window::set_pinned,
+            window::set_auto_show_on_permission,
             window::set_display_mode,
             window::reset_position,
             tray_icon::set_tray_alert,
         ])
         .manage::<PinnedState>(Arc::new(Mutex::new(false)))
+        .manage(window::AutoShowOnPermissionState(Arc::new(Mutex::new(
+            true,
+        ))))
+        .manage(window::AutoOpenedByPermissionState(Arc::new(Mutex::new(
+            false,
+        ))))
         .manage::<window::DisplayModeTransition>(Arc::new(Mutex::new(())))
         .manage::<PathState>(Arc::new(Mutex::new(None)))
         .manage::<providers::ProviderHealthState>(providers::new_health_state())

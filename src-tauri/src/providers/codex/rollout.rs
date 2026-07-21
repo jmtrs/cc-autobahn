@@ -693,6 +693,15 @@ fn resolve_desktop_permission(app: &AppHandle, resolution: DesktopPermissionReso
             .remove(&resolution.id);
     }
     let _ = app.emit("desktop-permission-resolved", resolution);
+    // Only auto-close once NOTHING permission-related is pending — the hook
+    // FIFO queue (permission::mod.rs) is a separate source from this map.
+    let desktop_pending = app
+        .try_state::<DesktopPermissionState>()
+        .map(|state| !desktop_permission_snapshot(&state).is_empty())
+        .unwrap_or(false);
+    if !desktop_pending && !crate::permission::has_pending(app) {
+        crate::window::maybe_close_after_permission(app);
+    }
 }
 
 impl TailSet {

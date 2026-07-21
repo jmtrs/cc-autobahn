@@ -471,8 +471,29 @@ fn emit_state(app: &AppHandle, queue: &PendingQueue) {
                     provider: crate::providers::ProviderId::Claude,
                 },
             );
+            // Only auto-close once NOTHING permission-related is pending —
+            // the Codex desktop mirror (rollout.rs) is a separate map, not
+            // part of this FIFO queue.
+            if !crate::providers::codex::has_pending_desktop_permission(app) {
+                crate::window::maybe_close_after_permission(app);
+            }
         }
     }
+}
+
+/// Whether the FIFO queue currently holds any request — checked by the Codex
+/// desktop-permission mirror (`providers::codex::rollout`) before it decides
+/// it's safe to auto-close the panel on its own resolution, since that path
+/// is a separate map from this queue.
+pub(crate) fn has_pending(app: &AppHandle) -> bool {
+    app.try_state::<PendingQueue>()
+        .map(|queue| {
+            !queue
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_empty()
+        })
+        .unwrap_or(false)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@
 // those would need a mutable Rust poll-settings state shared with the
 // continuous blocks poll — not justified for a first pass).
 
+import { loadGlobalSetting, saveGlobalSetting } from "./app-settings.js";
 import { hintOnHover } from "./header-hint.js";
 import { state } from "./telemetry-state.js";
 import { loadMfdSettings, saveMfdSettings } from "./mfd-settings.js";
@@ -342,10 +343,38 @@ function wirePermissionSoundSection() {
   if (settings.soundId === "custom" && settings.customDataUrl) filenameEl.textContent = "custom sound";
 }
 
+/** Settings-page checkbox mirroring `window::AutoShowOnPermissionState`
+ *  (Rust): whether a new permission request auto-opens the hidden panel at
+ *  all. The backend defaults to the same `true` this checkbox starts
+ *  checked at, so the push here on load is a no-op in the common case —
+ *  it only matters after a restart with the setting previously turned off. */
+async function wireAutoShowOnPermissionSection() {
+  const checkbox = document.getElementById("toggle-auto-show-permission");
+  hintOnHover(
+    checkbox.closest("label"),
+    "Automatically open the panel when a permission request arrives",
+  );
+  const enabled = loadGlobalSetting("autoShowOnPermission");
+  checkbox.checked = enabled;
+
+  if (!("__TAURI_INTERNALS__" in window)) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  const push = (value) =>
+    invoke("set_auto_show_on_permission", { value }).catch((e) =>
+      console.error("[settings] set_auto_show_on_permission:", e),
+    );
+  push(enabled);
+  checkbox.onchange = () => {
+    saveGlobalSetting("autoShowOnPermission", checkbox.checked);
+    push(checkbox.checked);
+  };
+}
+
 export function wireSettingsPage({ onDisplayModeChange } = {}) {
   wireDefaultPageDropdown();
   renderScreenList();
   wireThemeSection();
   wirePermissionSoundSection();
+  wireAutoShowOnPermissionSection();
   wireDisplayModeSection(onDisplayModeChange);
 }

@@ -20,6 +20,33 @@ fn panel_y_below_tray(tray_y: f64, tray_height: f64, work_top: f64) -> f64 {
 /// the panel when it loses focus.
 pub type PinnedState = Arc<Mutex<bool>>;
 
+/// Settings-page checkbox: whether a NEW permission request should auto-show
+/// the hidden panel at all. Default `true` — matches the pre-existing D42
+/// behavior; this is an opt-out, not a new default. A newtype, not a plain
+/// `Arc<Mutex<bool>>` alias (same reasoning as `TrayAnchorState`): Tauri's
+/// state map is keyed by concrete type, and `PinnedState` is already
+/// `Arc<Mutex<bool>>` — two `.manage()` calls with the same underlying type
+/// panic at runtime ("state ... is already being managed").
+pub struct AutoShowOnPermissionState(pub Arc<Mutex<bool>>);
+
+/// True only for the span between `show_for_permission` actually transitioning
+/// the panel hidden→visible and that visibility being resolved one way or
+/// another (queue empties, or the user grabs manual control via the tray
+/// icon). Lets the resolve path (`maybe_close_after_permission`) tell "I
+/// opened myself for this notification" apart from "the panel was already
+/// open for some other reason" without a second source of truth for
+/// visibility itself. Newtype for the same reason as `AutoShowOnPermissionState`.
+pub struct AutoOpenedByPermissionState(pub Arc<Mutex<bool>>);
+
+/// `#[tauri::command]` The Settings page's "auto-open on request" checkbox.
+#[tauri::command]
+pub fn set_auto_show_on_permission(
+    state: tauri::State<'_, AutoShowOnPermissionState>,
+    value: bool,
+) {
+    *lock(&state.0) = value;
+}
+
 /// Serializes display-mode resize and clamp as one native transition.
 pub type DisplayModeTransition = Arc<Mutex<()>>;
 
@@ -268,10 +295,16 @@ pub fn reset_position(
 /// time unless PINned) would only ever show up as a blinking tray icon,
 /// defeating the feature's whole point of approving without alt-tabbing.
 /// A no-op if the panel is already visible (doesn't steal focus from an
-/// unrelated, already-open panel) or if `PositionState`/`AutoRepositionGuard`
-/// aren't managed yet (only reachable in the ~impossible case of a hook
-/// connecting within milliseconds of app startup, before `.setup()` finishes).
+/// unrelated, already-open panel), if the auto-show setting is off, or if
+/// `PositionState`/`AutoRepositionGuard` aren't managed yet (only reachable
+/// in the ~impossible case of a hook connecting within milliseconds of app
+/// startup, before `.setup()` finishes).
 pub fn show_for_permission(app: &AppHandle) {
+    if let Some(auto_show) = app.try_state::<AutoShowOnPermissionState>() {
+        if !*lock(&auto_show.0) {
+            return;
+        }
+    }
     let Some(window) = app.get_webview_window("cluster") else {
         return;
     };
@@ -302,6 +335,50 @@ pub fn show_for_permission(app: &AppHandle) {
         &auto_guard,
     );
     let _ = show_panel(&window);
+    if let Some(auto_opened) = app.try_state::<AutoOpenedByPermissionState>() {
+        *lock(&auto_opened.0) = true;
+    }
+}
+
+/// Clears the auto-opened marker — called wherever the user takes explicit,
+/// manual control of the panel's visibility (currently: any tray-icon click)
+/// so a later permission resolution no longer assumes it's safe to hide a
+/// window the user, not the notification, is now driving.
+pub fn clear_auto_opened_by_permission(app: &AppHandle) {
+    if let Some(state) = app.try_state::<AutoOpenedByPermissionState>() {
+        *lock(&state.0) = false;
+    }
+}
+
+/// Hides the panel once every permission notification has finished resolving
+/// — queue emptied by a click, an Always Allow, or the backend's own
+/// give-up timeout — but only when every guard holds: the panel's current
+/// visibility is solely because THIS notification auto-opened it (not
+/// because the user already had it open, or has since grabbed manual
+/// control via the tray), the auto-show setting is still on, and PIN isn't
+/// active. Consumes the auto-opened marker unconditionally so a later
+/// PIN/setting change can't retroactively trigger a surprise close.
+pub fn maybe_close_after_permission(app: &AppHandle) {
+    let Some(auto_opened) = app.try_state::<AutoOpenedByPermissionState>() else {
+        return;
+    };
+    let was_auto_opened = std::mem::replace(&mut *lock(&auto_opened.0), false);
+    if !was_auto_opened {
+        return;
+    }
+    if let Some(auto_show) = app.try_state::<AutoShowOnPermissionState>() {
+        if !*lock(&auto_show.0) {
+            return;
+        }
+    }
+    if let Some(pinned) = app.try_state::<PinnedState>() {
+        if *lock(&pinned) {
+            return;
+        }
+    }
+    if let Some(window) = app.get_webview_window("cluster") {
+        let _ = window.hide();
+    }
 }
 
 /// Shows the cluster and, on macOS, orders its non-activating utility window in

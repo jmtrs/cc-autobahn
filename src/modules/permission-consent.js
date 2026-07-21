@@ -89,7 +89,13 @@ function openOverlay(provider) {
   connect.hidden = installed;
   connect.textContent = "Connect";
   connect.onclick = onConnectClick;
-  document.getElementById("permission-consent-cancel").hidden = false;
+  const cancel = document.getElementById("permission-consent-cancel");
+  cancel.hidden = false;
+  // Already connected: there's nothing pending to back out of, this button
+  // only dismisses the overlay — "Cancel" reads like it undoes the
+  // connection, so it's mislabeled here. Only the disconnected/confirm-install
+  // flows below are actually cancelable.
+  cancel.textContent = installed ? "Close" : "Cancel";
   setBody(installed ? installedBody(provider, status) : disconnectedBody(provider));
 }
 

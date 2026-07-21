@@ -96,6 +96,11 @@ pub fn build(
                 return;
             }
 
+            // From here the user is explicitly driving visibility — a later
+            // permission resolution must not assume it's still safe to
+            // auto-close a window the user, not a notification, now owns.
+            crate::window::clear_auto_opened_by_permission(app);
+
             if window.is_visible().unwrap_or(false) {
                 let _ = window.hide();
             } else {

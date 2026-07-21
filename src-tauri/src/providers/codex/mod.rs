@@ -9,7 +9,7 @@ mod rollout;
 use std::thread;
 use std::time::Duration;
 
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 use super::{emit_health, HealthStatus, ProviderComponent, ProviderId};
 
@@ -25,6 +25,16 @@ pub(crate) fn codex_desktop_permission_snapshot(
     state: State<'_, DesktopPermissionState>,
 ) -> Vec<rollout::DesktopPermissionNotice> {
     rollout::desktop_permission_snapshot(&state)
+}
+
+/// Whether the ChatGPT Desktop mirror currently holds any (non-expired)
+/// notice — checked by `permission::mod.rs` before it decides it's safe to
+/// auto-close the panel on its own queue emptying, since that FIFO queue is
+/// a separate source from this map.
+pub(crate) fn has_pending_desktop_permission(app: &AppHandle) -> bool {
+    app.try_state::<DesktopPermissionState>()
+        .map(|state| !rollout::desktop_permission_snapshot(&state).is_empty())
+        .unwrap_or(false)
 }
 pub const COMPONENTS: [ProviderComponent; 3] = [
     ProviderComponent::Transcript,
