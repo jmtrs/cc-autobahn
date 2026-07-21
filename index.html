@@ -189,6 +189,11 @@
                   <!-- Rows built by settings-page.js (renderScreenList), ordered
                        per screenOrder — up/down buttons reorder the MFD cycle. -->
                   <div id="screen-order-list"></div>
+
+                  <!-- Opens #keybindings-overlay: configurable Approve/Deny/
+                       Always Allow shortcuts for the permission gate. -->
+                  <div class="row header-sub"><span class="label">SHORTCUTS</span></div>
+                  <button type="button" class="sensor-btn ghost" id="keybindings-settings-btn">Edit&hellip;</button>
                 </div>
 
                 <div class="settings-col">
@@ -313,6 +318,26 @@
                 <button class="sensor-btn ghost" id="permission-consent-cancel" hidden>Cancel</button>
                 <button class="sensor-btn ghost" id="permission-consent-disconnect" hidden>Disconnect</button>
                 <button class="sensor-btn" id="permission-consent-connect">Connect</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Configurable permission-gate shortcuts (Approve/Deny/Always
+               Allow), rows rendered by settings-page.js. -->
+          <div class="sensor-overlay" id="keybindings-overlay" hidden>
+            <div class="sensor-card">
+              <div class="sensor-title">KEYBOARD SHORTCUTS</div>
+              <div class="sensor-body keybindings-body">
+                <div class="row">
+                  <label class="vfd-check">
+                    <input type="checkbox" id="toggle-keybindings-enabled" /> ENABLE SHORTCUTS
+                  </label>
+                </div>
+                <div id="keybindings-body"></div>
+              </div>
+              <div class="sensor-actions">
+                <button class="sensor-btn ghost" id="keybindings-reset">Reset to defaults</button>
+                <button class="sensor-btn" id="keybindings-close">Close</button>
               </div>
             </div>
           </div>

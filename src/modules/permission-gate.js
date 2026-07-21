@@ -9,6 +9,7 @@
 
 import { playPermissionSound } from "./permission-sound.js";
 import { setPermissionHead } from "./telemetry-state.js";
+import { loadKeybindingSettings, matchAction } from "./keybindings.js";
 
 let gateInvoke = null;
 let currentId = null;
@@ -91,6 +92,31 @@ export async function wirePermissionGate() {
   document.addEventListener("click", (e) => {
     if (!root.contains(e.target)) closeAlwaysMenu();
   });
+
+  document.addEventListener("keydown", handleShortcutKeydown);
+}
+
+const COMMAND_BY_ACTION = {
+  approve: "permission_approve",
+  deny: "permission_deny",
+  approveAlways: "permission_approve_always",
+};
+
+/** Configurable-shortcut equivalent of clicking Approve/Deny/Always Allow
+ *  (keybindings.js, Settings page). Only acts on the actionable head of the
+ *  queue — desktop-mirror rows (currentId null) have no decision to make. */
+function handleShortcutKeydown(e) {
+  if (!currentId || !currentProvider) return;
+  if (e.target?.closest?.("input, textarea, [contenteditable]")) return;
+  if (e.repeat) return;
+  const bindings = loadKeybindingSettings();
+  if (!bindings.enabled) return;
+  const action = matchAction(e, bindings);
+  if (!action) return;
+  if (action === "approveAlways" && document.getElementById("permission-chevron").hidden) return;
+  e.preventDefault();
+  closeAlwaysMenu();
+  resolve(COMMAND_BY_ACTION[action]);
 }
 
 function closeAlwaysMenu() {

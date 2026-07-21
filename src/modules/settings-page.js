@@ -16,6 +16,14 @@ import {
   savePermissionSoundSettings,
 } from "./permission-sound.js";
 import { applyTheme, initTheme, loadThemeSettings, PRESETS, saveThemeSettings } from "./theme.js";
+import {
+  ACTIONS,
+  comboLabel,
+  DEFAULTS as KEYBINDING_DEFAULTS,
+  loadKeybindingSettings,
+  normalizeCombo,
+  saveKeybindingSettings,
+} from "./keybindings.js";
 
 const PAGE_OPTIONS = [
   { value: 0, label: "SINCE START" },
@@ -370,6 +378,98 @@ async function wireAutoShowOnPermissionSection() {
   };
 }
 
+/** Configurable Approve/Deny/Always Allow shortcuts for the permission gate
+ *  (keybindings.js). Recording is scoped to this overlay: a capture-phase
+ *  keydown listener is only attached while a row is actively "listening",
+ *  and always torn down before the overlay closes or a new row starts. */
+function wireKeybindingsSection() {
+  const overlay = document.getElementById("keybindings-overlay");
+  const openBtn = document.getElementById("keybindings-settings-btn");
+  const closeBtn = document.getElementById("keybindings-close");
+  const resetBtn = document.getElementById("keybindings-reset");
+  const body = document.getElementById("keybindings-body");
+  const enabledCheckbox = document.getElementById("toggle-keybindings-enabled");
+  hintOnHover(openBtn, "Configure Approve/Deny/Always Allow shortcuts");
+  hintOnHover(enabledCheckbox.closest("label"), "Approve/Deny/Always Allow with a keypress on the permission gate");
+
+  enabledCheckbox.onchange = () => saveKeybindingSettings({ enabled: enabledCheckbox.checked });
+
+  body.innerHTML =
+    ACTIONS.map(
+      (action) => `
+      <div class="keybinding-row">
+        <span class="label">${action.label}</span>
+        <button type="button" class="sensor-btn ghost" data-action="${action.id}"></button>
+      </div>`,
+    ).join("") + `<div class="keybindings-error" id="keybindings-error" hidden></div>`;
+
+  const errorEl = document.getElementById("keybindings-error");
+  let stopRecording = null;
+
+  function paint() {
+    stopRecording?.();
+    const bindings = loadKeybindingSettings();
+    enabledCheckbox.checked = bindings.enabled;
+    body.querySelectorAll("[data-action]").forEach((rowBtn) => {
+      rowBtn.textContent = comboLabel(bindings[rowBtn.dataset.action]);
+      rowBtn.classList.remove("recording");
+      rowBtn.disabled = false;
+    });
+    errorEl.hidden = true;
+  }
+
+  function startRecording(actionId, rowBtn) {
+    stopRecording?.();
+    errorEl.hidden = true;
+    body.querySelectorAll("[data-action]").forEach((b) => {
+      b.disabled = b !== rowBtn;
+    });
+    rowBtn.textContent = "PRESS KEY…";
+    rowBtn.classList.add("recording");
+
+    const onKeydown = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        paint();
+        return;
+      }
+      const combo = normalizeCombo(e);
+      if (!combo) return; // bare modifier keydown — keep listening
+      e.preventDefault();
+      const bindings = loadKeybindingSettings();
+      const collision = ACTIONS.find((a) => a.id !== actionId && bindings[a.id] === combo);
+      if (collision) {
+        errorEl.textContent = `${comboLabel(combo)} already used by ${collision.label}`;
+        errorEl.hidden = false;
+        return;
+      }
+      saveKeybindingSettings({ [actionId]: combo });
+      paint();
+    };
+    document.addEventListener("keydown", onKeydown, true);
+    stopRecording = () => document.removeEventListener("keydown", onKeydown, true);
+  }
+
+  body.querySelectorAll("[data-action]").forEach((rowBtn) => {
+    rowBtn.onclick = () => startRecording(rowBtn.dataset.action, rowBtn);
+  });
+
+  openBtn.onclick = () => {
+    paint();
+    overlay.hidden = false;
+  };
+  closeBtn.onclick = () => {
+    stopRecording?.();
+    overlay.hidden = true;
+  };
+  resetBtn.onclick = () => {
+    saveKeybindingSettings({ ...KEYBINDING_DEFAULTS });
+    paint();
+  };
+
+  paint();
+}
+
 export function wireSettingsPage({ onDisplayModeChange } = {}) {
   wireDefaultPageDropdown();
   renderScreenList();
@@ -377,4 +477,5 @@ export function wireSettingsPage({ onDisplayModeChange } = {}) {
   wirePermissionSoundSection();
   wireAutoShowOnPermissionSection();
   wireDisplayModeSection(onDisplayModeChange);
+  wireKeybindingsSection();
 }

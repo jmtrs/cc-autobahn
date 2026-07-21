@@ -1423,6 +1423,51 @@ body {
   opacity: 0.3;
 }
 
+/* Keyboard-shortcuts overlay (settings-page.js/keybindings.js) — one row per
+   permission-gate action, same label+control language as .vfd-reorder-row.
+   Overrides .sensor-body's default pre-wrap text layout with a flex column. */
+.keybindings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  white-space: normal;
+}
+
+.keybinding-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.keybinding-row .sensor-btn {
+  min-width: 64px;
+  text-align: center;
+}
+
+/* "Listening for a keypress" state — same amber-pulse language as
+   .permission-gate-enter, but sustained (not one-shot) while capture is active. */
+.sensor-btn.recording {
+  animation: recording-pulse 1s ease-in-out infinite;
+}
+
+@keyframes recording-pulse {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 1px var(--amber-dim);
+  }
+  50% {
+    box-shadow:
+      inset 0 0 0 1px var(--amber),
+      0 0 8px rgba(var(--amber-rgb), 0.8);
+  }
+}
+
+.keybindings-error {
+  font-size: 9px;
+  color: var(--amber);
+  opacity: 0.85;
+}
+
 /* Page 3 (Settings) column layout — same trick as Page 2's .limits-cols:
    the window is 550x150, wide and short, so a single vertical stack ran out
    of height. Split by topic: screens/navigation, appearance, permissions. */

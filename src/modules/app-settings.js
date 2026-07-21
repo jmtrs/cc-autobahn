@@ -19,6 +19,7 @@ const DEFAULTS = Object.freeze({
     autoShowOnPermission: true,
     footerMetric: "pace",
     nameplates: {},
+    keybindings: { enabled: true, approve: "A", deny: "D", approveAlways: "W" },
   },
   providers: { claude: {}, codex: {} },
 });
@@ -37,6 +38,17 @@ function readJson(key) {
 
 function object(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
+function normalizeKeybindings(candidate) {
+  const source = object(candidate);
+  const result = { ...DEFAULTS.global.keybindings };
+  if (typeof source.enabled === "boolean") result.enabled = source.enabled;
+  for (const key of Object.keys(result)) {
+    if (key === "enabled") continue;
+    if (typeof source[key] === "string" && source[key].length > 0) result[key] = source[key];
+  }
+  return result;
 }
 
 function normalize(candidate) {
@@ -62,6 +74,7 @@ function normalize(candidate) {
           : DEFAULTS.global.autoShowOnPermission,
       footerMetric: global.footerMetric === "autonomy" ? "autonomy" : "pace",
       nameplates: { ...object(global.nameplates) },
+      keybindings: normalizeKeybindings(global.keybindings),
     },
     providers: {
       claude: { ...object(providers.claude) },
