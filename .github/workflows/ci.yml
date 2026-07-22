@@ -54,7 +54,11 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
   check-linux:
-    runs-on: ubuntu-22.04
+    # noble (24.04), not jammy (D65): jammy-updates' libwebkit2gtk-4.1 is
+    # 2.50.4, which hits an upstream EGL_BAD_PARAMETER regression on some
+    # older Intel/Mesa combos (WebKit bug #280239). noble ships 2.52.3,
+    # confirmed working on the same hardware that reproduced the crash.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 

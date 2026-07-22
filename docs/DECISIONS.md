@@ -1935,3 +1935,48 @@ window, can be covered." macOS is untouched: its stacking comes from
 `configure_fullscreen_panel`'s native `NSScreenSaverWindowLevel` (D43), not
 from `alwaysOnTop`, and hide-on-blur remains its own "get out of the way"
 mechanism, so PIN keeps its original meaning there.
+
+## D65 — Linux CI/release runner bumped to ubuntu-24.04 (webkit2gtk EGL crash)
+
+**Problem**: the published v0.10.1 AppImage aborted on startup on the same
+old-Intel-iGPU hardware D63 was fixed against: `Could not create default EGL
+display: EGL_BAD_PARAMETER. Aborting...`, printed by WebKit itself before it
+even reaches the point where D63's `WEBKIT_DISABLE_DMABUF_RENDERER` (or
+manually trying `WEBKIT_DISABLE_COMPOSITING_MODE`, `LIBGL_ALWAYS_SOFTWARE`,
+or `EGL_PLATFORM=x11`) could matter — none of them avoided the abort. The
+system's own `webkit2gtk` (2.52.3, confirmed via the working `cargo tauri
+dev` build used throughout D63/D64's testing) did not hit this; only the
+AppImage's *bundled* `libwebkit2gtk-4.1.so.0` did. The AppImage doesn't
+bundle Mesa/EGL/GTK/epoxy — only WebKit's own libs — so the bundled WebKit
+build itself was the one variable. This matches a known, actively-tracked
+upstream WebKitGTK regression on some Intel/Mesa combinations (WebKit bug
+#280239) that several unrelated Tauri/Electron-adjacent projects have hit.
+
+**Investigation**: `release-linux`/`check-linux` build on `ubuntu-22.04`,
+whose `libwebkit2gtk-4.1-dev` resolves to `2.50.4-0ubuntu0.22.04.1`
+(confirmed via `apt-cache policy` inside an actual `ubuntu:22.04` container,
+not just docs). `ubuntu:24.04` resolves to `2.52.3-0ubuntu0.24.04.1` —
+byte-for-byte the same upstream version as the system `webkit2gtk` already
+proven to work on the affected hardware. A local swap of the AppImage's
+bundled WebKit libs for the system's copies reproduced a *different* crash
+(`undefined symbol: gst_debug_log_id`, a GStreamer ABI mismatch from
+skipping WebKit's whole matched dependency chain) — inconclusive as a full
+local repro, but it didn't contradict the version theory, and an external
+report in the same web search independently described the identical swap
+technique fixing the identical error for someone else.
+
+**Decision**: `check-linux` (`ci.yml`) and `release-linux` (`release.yml`)
+now run on `ubuntu-24.04` instead of `ubuntu-22.04`. No package name changes
+were needed — every dependency in "Install Linux build dependencies" exists
+under the same names on noble.
+
+**Trade-off**: bundles built on noble link against noble's (newer) glibc,
+raising the effective minimum glibc for anyone installing the `.deb`/`.rpm`
+or running the `.AppImage` — a real, if usually small in practice, floor
+bump for users on older Debian/Ubuntu bases. Traded deliberately: the
+alternative (staying on jammy) leaves the exact hardware D63/D64 were
+fixed for still unable to launch the app at all.
+
+**Consequence**: not verified end-to-end on real hardware as of this
+writing — the next release cut from this change needs to be tested on the
+same machine that reproduced the original crash before calling D65 closed.

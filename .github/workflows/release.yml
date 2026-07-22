@@ -120,7 +120,14 @@ jobs:
     # validates them, and stores them as a workflow artifact. macOS only starts
     # after this cheaper gate succeeds, then creates and publishes the release.
     # Native x86_64 only for v1; aarch64 cross-build is deferred (D61).
-    runs-on: ubuntu-22.04
+    # noble (24.04), not jammy (D65): jammy-updates' libwebkit2gtk-4.1 is
+    # 2.50.4, which hits an upstream EGL_BAD_PARAMETER regression on some
+    # older Intel/Mesa combos (WebKit bug #280239) — confirmed via the
+    # bundled AppImage aborting on real hardware where the system's 2.52.3
+    # (matching noble's candidate) works. Trade-off: bundles built on noble
+    # need noble's (newer) glibc — a real, if usually small, floor bump for
+    # end users on older distros.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
