@@ -1,6 +1,6 @@
 [package]
 name = "cc-autobahn"
-version = "0.10.3"
+version = "0.10.4"
 description = "Mercedes W203 instrument cluster for Claude Code and Codex usage"
 authors = ["jmtrs"]
 edition = "2021"
