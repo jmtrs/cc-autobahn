@@ -45,4 +45,10 @@ APPIMAGE_META="$EXTRACTED/appimage/squashfs-root/usr/share/metainfo/com.jmtrs.cc
 test -f "$APPIMAGE_META"
 appstreamcli validate --no-net "$APPIMAGE_META"
 
+# The AppRun must prefer a host WebKitGTK (D66): assert the patch step ran, so a
+# future Tauri/bundler change that regenerates a plain AppRun fails CI loudly.
+APPIMAGE_APPRUN="$EXTRACTED/appimage/squashfs-root/AppRun"
+grep -qF 'ldconfig -p' "$APPIMAGE_APPRUN"
+grep -qF 'scripts/appimage-prefer-system-webkit.sh' "$APPIMAGE_APPRUN"
+
 printf 'Validated: %s\nValidated: %s\nValidated: %s\n' "$DEB" "$RPM" "$APPIMAGE"

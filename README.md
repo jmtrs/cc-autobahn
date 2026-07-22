@@ -69,7 +69,12 @@ chmod +x cc-autobahn_<version>_amd64.AppImage && ./cc-autobahn_<version>_amd64.A
 Runtime dependencies and the `bash`/`curl`/`unzip` tools used by automatic Bun
 installation are declared on the `.deb`/`.rpm` and installed automatically.
 The AppImage bundles application libraries; automatic Bun installation still
-requires `bash`, `curl` and `unzip` on the host.
+requires `bash`, `curl` and `unzip` on the host. The AppImage **prefers a host
+`webkit2gtk-4.1` when one is installed** (falling back to its bundled copy
+otherwise) — this keeps WebKit in step with the host's graphics driver and
+avoids a frozen WebKit crashing on newer Mesa (D66). On a rolling distro,
+installing `webkit2gtk-4.1` (or your distro's equivalent) is recommended if the
+AppImage ever shows a blank panel.
 Launching the desktop entry again reopens the existing tray process; it does
 not start duplicate sensors or create a second icon.
 
@@ -99,14 +104,17 @@ window. That only has a visible effect under X11/XWayland, same as drag
 persistence above — native Wayland has no always-on-top mechanism a regular
 client can request.
 
-**Old GPU/driver troubleshooting (D63):** on old Intel iGPUs with an
-outdated Mesa driver (e.g. Ivy Bridge / HD 4000), WebKitGTK can fail to
-create a DMA-BUF-backed EGL context and the transparent panel never paints
-anything — it looks identical to "not running" even though the process and
-window both exist. cc-autobahn already sets `WEBKIT_DISABLE_DMABUF_RENDERER=1`
-automatically on Linux startup (unless you've already exported a value) to
-work around the common case. If the panel is still blank after that, force
-full software rendering yourself before launching:
+**Old GPU/driver troubleshooting (D63/D66):** on old Intel iGPUs with a newer
+Mesa driver (e.g. Ivy Bridge / HD 4000 + Mesa ≥26 / crocus), a *frozen* WebKit
+can abort at startup with `Could not create default EGL display:
+EGL_BAD_PARAMETER` (upstream WebKit bug #280239, fixed in 2.52). The transparent
+panel then never paints — it looks identical to "not running" even though the
+process and window both exist. The AppImage now sidesteps this by preferring the
+host `webkit2gtk-4.1` (D66); if your panel is blank, first make sure a host
+`webkit2gtk-4.1` is installed. cc-autobahn also sets
+`WEBKIT_DISABLE_DMABUF_RENDERER=1` automatically on Linux startup to work around
+the narrower DMA-BUF-compositing failure. As a last resort on a genuinely broken
+host WebKit, force full software rendering yourself:
 
 ```bash
 WEBKIT_DISABLE_COMPOSITING_MODE=1 cc-autobahn

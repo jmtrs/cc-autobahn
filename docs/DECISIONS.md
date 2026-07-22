@@ -1877,6 +1877,13 @@ broken drivers still have `WEBKIT_DISABLE_COMPOSITING_MODE` as a manual
 override, and setting it themselves is respected (not overridden) by the
 new startup check.
 
+**Correction (see D65/D66)**: the DMA-BUF disable above is genuine but narrow —
+it does **not** fix the `EGL_BAD_PARAMETER` *display-creation* abort that the
+bundled AppImage's frozen WebKit hits on HD 4000 / Ivy Bridge + Mesa 26. That
+abort precedes renderer selection, so no WebKit env var (including
+`WEBKIT_DISABLE_COMPOSITING_MODE`) avoids it; it is a bundled-WebKit version
+problem fixed at packaging level by preferring the host WebKitGTK (D66).
+
 ## D64 — Linux panel never hides on blur (diverges from macOS by design)
 
 **Problem**: `wire`'s hide-on-blur (D24) was written for macOS's menu-bar
@@ -1980,3 +1987,78 @@ fixed for still unable to launch the app at all.
 **Consequence**: not verified end-to-end on real hardware as of this
 writing — the next release cut from this change needs to be tested on the
 same machine that reproduced the original crash before calling D65 closed.
+
+**Superseded by D66**: the end-to-end test D65 asked for was finally run and
+**failed** — the v0.10.2 AppImage (built on noble, after this change) still
+aborts with `EGL_BAD_PARAMETER` on the same HD 4000 / Ivy Bridge + Mesa 26
+machine. D65's premise (that noble bundles the same 2.52.3 proven to work on
+the system) did not hold in practice for the shipped bundle; the `apt-cache
+policy` candidate is not what actually ended up frozen into the AppImage.
+Bumping the build base is therefore not a reliable fix. D66 stops relying on
+the bundled WebKit version at all.
+
+## D66 — AppImage prefers the host WebKitGTK (frozen bundle is the defect)
+
+**Problem**: bundling a WebKit into the AppImage freezes it at build time
+against whatever `libwebkit2gtk-4.1` the CI base happened to resolve. On a
+maintained host the OS keeps WebKitGTK and Mesa in sync; a frozen bundle does
+not, so it eventually breaks against a newer host driver. Concretely, the
+v0.10.2 AppImage aborts at startup on Intel HD 4000 / Ivy Bridge + Mesa 26
+(crocus) with `Could not create default EGL display: EGL_BAD_PARAMETER.
+Aborting...` (upstream WebKit bug #280239, fixed in 2.52), while the host's own
+`webkit2gtk` 2.52.3 renders the panel fine on the exact same GPU/Mesa/Wayland.
+Because the panel is frameless/transparent (D14/D57), that abort is
+indistinguishable from a working-but-hidden window — nothing is ever drawn.
+D63's `WEBKIT_DISABLE_DMABUF_RENDERER` and D65's build-base bump both target
+symptoms; neither fixes it. The abort is in EGL *display* creation, before any
+renderer or compositing mode is selected, so no WebKit env var avoids it —
+verified on real hardware: `WEBKIT_DISABLE_COMPOSITING_MODE`,
+`LIBGL_ALWAYS_SOFTWARE`, `GALLIUM_DRIVER=llvmpipe`, `GDK_BACKEND=x11` all still
+abort.
+
+**Evidence (same machine, only WebKit differs)**: the locally built binary
+linked against the host `/usr/lib/libwebkit2gtk-4.1.so.0` (2.52.3) launches and
+paints; the bundled AppImage's `libwebkit2gtk-4.1.so.0` aborts. The AppImage
+does not bundle Mesa/EGL/GTK — only WebKit's own libs — so the bundled WebKit
+build is the single variable.
+
+**Decision**: the AppImage prefers a *host* WebKitGTK when the loader knows one,
+falling back to the bundled stack only where the host has none. This is a
+runtime `AppRun` change, not a rebuild against a different WebKit:
+`scripts/appimage-prefer-system-webkit.sh` (a `release-linux` step, before
+validation) extracts the built AppImage, replaces linuxdeploy's `AppRun`, and
+repacks with `appimagetool`. The new `AppRun`:
+
+- bypasses linuxdeploy's `AppRun.wrapped` C shim, which forces the bundled
+  `$APPDIR/usr/lib` *first* in `LD_LIBRARY_PATH` and cannot be reordered from
+  outside;
+- still sources `apprun-hooks/linuxdeploy-plugin-gtk.sh` for
+  `GDK_BACKEND=x11`/theme/schema setup;
+- resolves the host WebKit via `ldconfig -p` and, when found, puts its lib dir
+  first in `LD_LIBRARY_PATH`. The inner binary uses `DT_RUNPATH`
+  (`$ORIGIN/../lib`), which the loader searches *after* `LD_LIBRARY_PATH`, so a
+  host lib dir shadows the bundled WebKit; the bundled dirs stay on the path as
+  a fallback. The host WebKit resolves its own matching
+  `WebKitWebProcess`/`NetworkProcess` via its compiled-in libexecdir.
+
+`scripts/validate-linux-bundles.sh` asserts the shipped `AppRun` carries this
+patch (greps for the `ldconfig` probe and the script name), so a future
+Tauri/bundler change that regenerates a plain `AppRun` fails CI loudly.
+
+**Verified end-to-end** on the HD 4000 / Ivy Bridge / Mesa 26 / GNOME-Wayland
+machine that reproduced the crash: the patched AppImage no longer aborts and the
+amber VFD panel paints. Fallback branch (no host WebKitGTK) keeps the previous
+bundled behavior.
+
+**Trade-off**: the AppImage is no longer fully self-contained on hosts without a
+WebKitGTK — the same practical contract the `.deb`/`.rpm` already have via their
+`depends`. On rolling distros without WebKit installed, `webkit2gtk-4.1` (or the
+distro's equivalent) is now effectively required for the AppImage; documented in
+`README.md` and the release notes. This is the correct trade: a frozen WebKit
+that silently paints nothing is worse than a runtime dependency that self-heals
+with the host graphics stack.
+
+**Not done here (follow-up)**: a startup EGL pre-flight that logs loudly instead
+of presenting an invisible panel where *even* the host WebKit is broken. The
+host-preference fix removes the abort on every host with a maintained WebKit, so
+this is deferred, not blocking.

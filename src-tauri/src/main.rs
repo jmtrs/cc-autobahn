@@ -32,15 +32,21 @@ use tauri::Manager;
 use path_state::PathState;
 use window::PinnedState;
 
-/// Old/broken Mesa+EGL combos (e.g. Intel HD 4000 / Ivy Bridge) fail to
-/// create a DMA-BUF backed EGL context (`EGL_BAD_PARAMETER`) and leave the
-/// frameless/transparent panel painted with nothing — a different failure
-/// mode than D57's no-compositor/black-background case. Disabling WebKit's
-/// DMA-BUF compositing path falls back to plain GL texture upload: still
-/// GPU-accelerated, so modern Linux systems shouldn't take a real hit. Only
-/// sets the value if the user/distro hasn't already exported one, so power
-/// users keep control (e.g. forcing full software rendering via
-/// `WEBKIT_DISABLE_COMPOSITING_MODE` themselves on more broken setups).
+/// Cheap, harmless hardening for WebKit's DMA-BUF *compositing* path on
+/// old/broken Mesa+EGL combos: disabling it falls back to plain GL texture
+/// upload, still GPU-accelerated, so modern systems shouldn't take a real hit.
+/// Only sets the value if the user/distro hasn't already exported one.
+///
+/// This does NOT fix the harder failure seen on Intel HD 4000 / Ivy Bridge +
+/// Mesa >=26 (crocus), where the bundled AppImage's frozen WebKit aborts at
+/// startup with `Could not create default EGL display: EGL_BAD_PARAMETER` —
+/// that abort is in EGL *display* creation, before any renderer/compositing
+/// mode is chosen, so no WebKit env var avoids it (all tested:
+/// `WEBKIT_DISABLE_COMPOSITING_MODE`, `LIBGL_ALWAYS_SOFTWARE`,
+/// `GALLIUM_DRIVER=llvmpipe`, `GDK_BACKEND=x11`). That is a bundled-WebKit
+/// *version* problem (upstream bug #280239, fixed in 2.52) and is addressed at
+/// packaging level by preferring the host WebKitGTK in the AppImage (D66), not
+/// here.
 ///
 /// Safety: called before `tauri::Builder::default()`, before any thread in
 /// this process is spawned — no concurrent `getenv`/`setenv` race is

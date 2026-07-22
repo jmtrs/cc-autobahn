@@ -83,8 +83,11 @@ jobs:
 
             Runtime deps, plus `bash`, `curl` and `unzip` for automatic Bun installation,
             are declared on the `.deb`/`.rpm`; AppImage users need those three
-            host tools only for automatic Bun installation. Tray
-            requires a tray-supporting desktop (AppIndicator extension on GNOME);
+            host tools only for automatic Bun installation. The AppImage prefers a
+            host `webkit2gtk-4.1` when installed (bundled copy is the fallback), so it
+            tracks the host graphics driver instead of freezing a WebKit that can crash
+            on newer Mesa — install `webkit2gtk-4.1` if the AppImage shows a blank panel.
+            Tray requires a tray-supporting desktop (AppIndicator extension on GNOME);
             the transparent panel requires a compositing WM (Mutter/KWin/wlroots/picom).
           # Must match an existing release. New/partial releases stay drafts;
           # a full workflow re-run after publication remains idempotent.
@@ -120,13 +123,16 @@ jobs:
     # validates them, and stores them as a workflow artifact. macOS only starts
     # after this cheaper gate succeeds, then creates and publishes the release.
     # Native x86_64 only for v1; aarch64 cross-build is deferred (D61).
-    # noble (24.04), not jammy (D65): jammy-updates' libwebkit2gtk-4.1 is
-    # 2.50.4, which hits an upstream EGL_BAD_PARAMETER regression on some
-    # older Intel/Mesa combos (WebKit bug #280239) — confirmed via the
-    # bundled AppImage aborting on real hardware where the system's 2.52.3
-    # (matching noble's candidate) works. Trade-off: bundles built on noble
-    # need noble's (newer) glibc — a real, if usually small, floor bump for
-    # end users on older distros.
+    # noble (24.04), not jammy (D65): a newer build base for a newer glibc/GTK
+    # floor. NOTE (D66): moving jammy->noble did NOT fix the bundled-WebKit
+    # EGL_BAD_PARAMETER abort on older Intel/Mesa (WebKit bug #280239) — v0.10.2
+    # was built on noble and still aborted on real HD 4000 / Ivy Bridge + Mesa
+    # 26 hardware, because noble does not ship the >=2.52 WebKit that carries the
+    # fix. Bundling any frozen WebKit is the real defect; the AppImage now
+    # prefers the *host* WebKitGTK at runtime instead (see the AppRun-patch step
+    # below and scripts/appimage-prefer-system-webkit.sh). Trade-off of noble:
+    # bundles need noble's (newer) glibc — a real, if usually small, floor bump
+    # for end users on older distros.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -156,6 +162,11 @@ jobs:
 
       - name: Build Linux bundles
         run: npm run tauri build -- --bundles deb,rpm,appimage
+
+      # Rewrite the AppImage's AppRun to prefer a host WebKitGTK over the frozen
+      # bundled copy (D66). Must run before validation, which asserts the patch.
+      - name: Prefer host WebKitGTK in the AppImage
+        run: bash scripts/appimage-prefer-system-webkit.sh
 
       - name: Validate Linux bundles and metadata
         run: bash scripts/validate-linux-bundles.sh
