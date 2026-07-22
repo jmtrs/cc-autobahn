@@ -1,7 +1,7 @@
 {
   "name": "cc-autobahn",
   "private": true,
-  "version": "0.10.1",
+  "version": "0.10.2",
   "license": "MIT",
   "homepage": "https://github.com/jmtrs/cc-autobahn",
   "repository": "https://github.com/jmtrs/cc-autobahn",
