@@ -23,6 +23,11 @@ const MAX_DORMANT_BYTES: usize = 8 * 1024 * 1024;
 const MAX_IDENTIFIER_BYTES: usize = 1024;
 const MAX_PENDING_DESKTOP_PERMISSIONS: usize = 64;
 const DESKTOP_PERMISSION_TTL_MS: i64 = 120_000;
+// Codex Desktop now reaches the actionable permission hook. Publishing the
+// rollout-log mirror as well shows the same request twice and can reopen the
+// panel after the hook decision. Keep decoding in place for compatibility,
+// but leave the passive mirror disabled while the hook remains authoritative.
+const DESKTOP_PERMISSION_MIRROR_ENABLED: bool = false;
 const MAX_PERMISSION_SUMMARY_BYTES: usize = 1024;
 const MAX_READ_BYTES: u64 = 1024 * 1024;
 const MAX_LINE_BYTES: usize = 1024 * 1024;
@@ -537,6 +542,9 @@ pub(crate) fn desktop_permission_snapshot(
 }
 
 fn publish_desktop_permission(app: &AppHandle, notice: DesktopPermissionNotice) {
+    if !DESKTOP_PERMISSION_MIRROR_ENABLED {
+        return;
+    }
     let Some(state) = app.try_state::<DesktopPermissionState>() else {
         return;
     };
